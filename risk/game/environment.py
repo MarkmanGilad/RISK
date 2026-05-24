@@ -1,0 +1,510 @@
+"""The Risk rule engine.
+
+`Environment` owns *all* legality and resolution. Agents and the game
+loop only call: `reset`, `current_state`, `legal_actions`, `step`,
+`is_terminal`, `winner`.
+
+Deterministic given a seed in `GameSettings` (territory deal, starting-
+army placement, dice, card draw).
+"""
+from __future__ import annotations
+
+import random
+from collections import Counter
+from dataclasses import dataclass
+from typing import Iterable, Optional, Sequence
+
+from risk.game.actions import (
+    Action,
+    AttackAction,
+    FortifyAction,
+    OccupyAction,
+    ReinforcementAction,
+    StopAttackAction,
+)
+from risk.game.board_topology import BoardTopology
+from risk.game.card import Card, find_valid_set, is_valid_set
+from risk.game.constants import (
+    CARD_SYMBOLS,
+    DIE_SIDES,
+    MAX_ATTACK_DICE,
+    MAX_CARDS_IN_HAND,
+    MAX_DEFEND_DICE,
+    MIN_REINFORCEMENT,
+    TERRITORIES_PER_REINFORCEMENT,
+    WILD_SYMBOL,
+    card_set_value,
+    starting_armies_for,
+)
+from risk.game.phase import Phase
+from risk.game.player import Player
+from risk.game.settings import GameSettings
+from risk.game.state import PendingAttack, State
+
+
+# --- result type ----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StepResult:
+    """Outcome of a single `step` call."""
+
+    state: State
+    info: dict
+
+
+# --- environment ----------------------------------------------------------
+
+
+class Environment:
+    def __init__(self, topology: Optional[BoardTopology] = None) -> None:
+        self.topology: BoardTopology = topology or BoardTopology()
+        self._settings: Optional[GameSettings] = None
+        self._state: Optional[State] = None
+        self._rng: random.Random = random.Random()
+        # Card deck: one card per territory + 2 wilds.
+        self._deck: list[Card] = []
+        self._discard: list[Card] = []
+        # Per-turn flags (re-init on each new player's reinforce).
+        self._conquered_this_turn: bool = False
+
+    # --- lifecycle --------------------------------------------------------
+
+    def reset(self, settings: GameSettings) -> State:
+        self._settings = settings
+        self._rng = random.Random(settings.seed)
+        self._conquered_this_turn = False
+        n_players = settings.player_count
+
+        # Build deck deterministically.
+        self._deck = self._build_deck()
+        self._discard = []
+
+        state = State.initial(self.topology, n_players)
+
+        # 1) Random territory distribution.
+        territories = list(self.topology.territories)
+        self._rng.shuffle(territories)
+        for k, t in enumerate(territories):
+            idx = self.topology.index_of(t)
+            state.owners[idx] = k % n_players
+            state.armies[idx] = 1
+
+        # 2) Distribute remaining starting armies round-robin onto owned
+        #    territories (random pick among each player's own).
+        starting = starting_armies_for(n_players)
+        owned_by: list[list[int]] = [[] for _ in range(n_players)]
+        for i, o in enumerate(state.owners):
+            assert o is not None
+            owned_by[o].append(i)
+
+        for p in range(n_players):
+            remaining = starting - len(owned_by[p])
+            assert remaining >= 0, "starting armies must cover every owned territory"
+            for _ in range(remaining):
+                idx = self._rng.choice(owned_by[p])
+                state.armies[idx] += 1
+
+        # 3) Enter player 0's REINFORCE phase.
+        state.current_player_index = 0
+        self._state = state
+        self._enter_reinforce_for(state, 0)
+        return state
+
+    # --- read-only views --------------------------------------------------
+
+    @property
+    def settings(self) -> GameSettings:
+        assert self._settings is not None, "Environment.reset has not been called"
+        return self._settings
+
+    def current_state(self) -> State:
+        assert self._state is not None, "Environment.reset has not been called"
+        return self._state
+
+    def is_terminal(self) -> bool:
+        return self.current_state().phase is Phase.GAME_OVER
+
+    def winner(self) -> Optional[int]:
+        s = self.current_state()
+        alive = [p.id for p in self.settings.players if p.id not in s.eliminated]
+        return alive[0] if len(alive) == 1 else None
+
+    # --- step -------------------------------------------------------------
+
+    def step(self, action: Action) -> StepResult:
+        if self.is_terminal():
+            raise RuntimeError("Cannot step a terminal Environment")
+        s = self.current_state()
+        action.validate_against(self.topology) if hasattr(action, "validate_against") else None
+
+        if isinstance(action, ReinforcementAction):
+            info = self._apply_reinforce(s, action)
+        elif isinstance(action, AttackAction):
+            info = self._apply_attack(s, action)
+        elif isinstance(action, OccupyAction):
+            info = self._apply_occupy(s, action)
+        elif isinstance(action, StopAttackAction):
+            info = self._apply_stop_attack(s)
+        elif isinstance(action, FortifyAction):
+            info = self._apply_fortify(s, action)
+        else:
+            raise ValueError(f"Unsupported action type: {type(action).__name__}")
+
+        # Check for winner.
+        w = self.winner()
+        if w is not None and s.phase is not Phase.GAME_OVER:
+            s.phase = Phase.GAME_OVER
+
+        return StepResult(state=s, info=info)
+
+    # --- legal actions ----------------------------------------------------
+
+    def legal_actions(self) -> list[Action]:
+        """Return a representative list of legal actions for the current phase.
+
+        Note: ReinforcementAction is parameterized; enumerating *all* possible
+        placements is exponential. For attacks/fortify we enumerate exactly.
+        For reinforcement we yield one canonical "place-all-on-first-territory"
+        per owned territory, plus the per-territory free-form is also legal.
+        Tests / agents that want the full continuous space should construct
+        their own ReinforcementAction and let `step` validate it.
+        """
+        s = self.current_state()
+        if s.phase is Phase.REINFORCE:
+            return list(self._legal_reinforce(s))
+        if s.phase is Phase.ATTACK:
+            return list(self._legal_attack(s))
+        if s.phase is Phase.OCCUPY:
+            return list(self._legal_occupy(s))
+        if s.phase is Phase.FORTIFY:
+            return list(self._legal_fortify(s))
+        return []
+
+    # ===== internals =====================================================
+
+    # --- deck ------------------------------------------------------------
+
+    def _build_deck(self) -> list[Card]:
+        deck: list[Card] = []
+        for i, t in enumerate(self.topology.territories):
+            sym = CARD_SYMBOLS[i % len(CARD_SYMBOLS)]
+            deck.append(Card(territory_id=t, symbol=sym))
+        deck.append(Card(territory_id=None, symbol=WILD_SYMBOL))
+        deck.append(Card(territory_id=None, symbol=WILD_SYMBOL))
+        self._rng.shuffle(deck)
+        return deck
+
+    def _draw_card(self) -> Optional[Card]:
+        if not self._deck:
+            if not self._discard:
+                return None
+            self._deck = self._discard
+            self._discard = []
+            self._rng.shuffle(self._deck)
+        return self._deck.pop()
+
+    # --- reinforcement ---------------------------------------------------
+
+    def _compute_reinforcement(self, s: State, player_id: int) -> int:
+        owned = [i for i, o in enumerate(s.owners) if o == player_id]
+        base = max(MIN_REINFORCEMENT, len(owned) // TERRITORIES_PER_REINFORCEMENT)
+        bonus = 0
+        for continent in self.topology.continents:
+            indices = [self.topology.index_of(t) for t in self.topology.territories_in(continent)]
+            if all(s.owners[i] == player_id for i in indices):
+                bonus += self.topology.continent_bonus(continent)
+        return base + bonus
+
+    def _apply_reinforce(self, s: State, action: ReinforcementAction) -> dict:
+        pid = s.current_player_index
+        # Forced trade-ins (classic: hand > MAX_CARDS_IN_HAND, i.e. 6+) are
+        # already resolved on entry to REINFORCE (see _enter_reinforce_for).
+        # Validate territory ownership and shape.
+        for terr, count in action.placements.items():
+            if terr not in self.topology.territories:
+                raise ValueError(f"Unknown territory in placements: {terr}")
+            idx = self.topology.index_of(terr)
+            if s.owners[idx] != pid:
+                raise ValueError(f"Player {pid} does not own {terr}")
+        if action.total != s.reinforcement_budget:
+            raise ValueError(
+                f"Reinforcement total {action.total} != budget {s.reinforcement_budget}"
+            )
+        # Apply.
+        for terr, count in action.placements.items():
+            idx = self.topology.index_of(terr)
+            s.armies[idx] += count
+        s.reinforcement_budget = 0
+        s.phase = Phase.ATTACK
+        self._conquered_this_turn = False
+        return {"placed": dict(action.placements)}
+
+    def _trade_in_set(self, s: State, pid: int, trio: tuple[Card, Card, Card]) -> int:
+        for c in trio:
+            s.hands[pid].remove(c)
+            self._discard.append(c)
+        value = card_set_value(s.cards_traded_in_count)
+        s.cards_traded_in_count += 1
+        return value
+
+    def trade_in_cards(self, cards: Sequence[Card]) -> int:
+        """Optional explicit trade-in (callable during reinforcement)."""
+        s = self.current_state()
+        if s.phase is not Phase.REINFORCE:
+            raise ValueError("Trade-in only allowed during REINFORCE")
+        if not is_valid_set(cards):
+            raise ValueError("Not a valid trade-in set")
+        pid = s.current_player_index
+        hand_counter = Counter(id(c) for c in s.hands[pid])
+        for c in cards:
+            if id(c) not in hand_counter or hand_counter[id(c)] <= 0:
+                raise ValueError("Card not in player's hand")
+            hand_counter[id(c)] -= 1
+        value = self._trade_in_set(s, pid, tuple(cards))  # type: ignore[arg-type]
+        s.reinforcement_budget += value
+        return value
+
+    def _legal_reinforce(self, s: State) -> Iterable[Action]:
+        pid = s.current_player_index
+        owned = [self.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
+        if not owned or s.reinforcement_budget <= 0:
+            return
+        # One canonical action per territory (all on one) — agents may also
+        # construct mixed placements and submit those.
+        for t in owned:
+            yield ReinforcementAction(placements={t: s.reinforcement_budget})
+
+    # --- attack ----------------------------------------------------------
+
+    def _apply_attack(self, s: State, action: AttackAction) -> dict:
+        pid = s.current_player_index
+        fi = self.topology.index_of(action.from_territory)
+        ti = self.topology.index_of(action.to_territory)
+        if s.owners[fi] != pid:
+            raise ValueError(f"Player {pid} does not own attacker {action.from_territory}")
+        if s.owners[ti] == pid:
+            raise ValueError(f"Cannot attack own territory {action.to_territory}")
+        if not self.topology.are_adjacent(action.from_territory, action.to_territory):
+            raise ValueError(f"{action.from_territory} and {action.to_territory} not adjacent")
+        if s.armies[fi] < 2:
+            raise ValueError(f"{action.from_territory} needs >= 2 armies to attack")
+        max_atk = min(MAX_ATTACK_DICE, s.armies[fi] - 1)
+        if action.dice > max_atk:
+            raise ValueError(f"Attack dice {action.dice} exceeds max {max_atk}")
+
+        defender_pid = s.owners[ti]
+        d_dice = min(MAX_DEFEND_DICE, s.armies[ti])
+        atk_rolls = sorted((self._rng.randint(1, DIE_SIDES) for _ in range(action.dice)), reverse=True)
+        def_rolls = sorted((self._rng.randint(1, DIE_SIDES) for _ in range(d_dice)), reverse=True)
+        atk_losses = def_losses = 0
+        for a, d in zip(atk_rolls, def_rolls):
+            if a > d:
+                def_losses += 1
+            else:
+                atk_losses += 1
+        s.armies[fi] -= atk_losses
+        s.armies[ti] -= def_losses
+
+        info = {
+            "attacker_rolls": atk_rolls,
+            "defender_rolls": def_rolls,
+            "attacker_losses": atk_losses,
+            "defender_losses": def_losses,
+            "conquered": False,
+            "eliminated": None,
+            "winner": None,
+        }
+
+        if s.armies[ti] == 0:
+            # Conquest: transfer ownership now, but defer the army move to
+            # a separate OccupyAction. The attacker must move at least
+            # `action.dice` armies in (or whatever is available if the
+            # attacker has fewer), up to `armies_in_from - 1`.
+            s.owners[ti] = pid
+            info["conquered"] = True
+
+            # Card draw on first conquest of the turn.
+            if not self._conquered_this_turn:
+                card = self._draw_card()
+                if card is not None:
+                    s.hands[pid].append(card)
+                self._conquered_this_turn = True
+
+            # Elimination check (done before occupy so cards transfer
+            # correctly and the winner can be detected early).
+            assert defender_pid is not None
+            still_owns_any = any(o == defender_pid for o in s.owners)
+            if not still_owns_any:
+                s.eliminated.add(defender_pid)
+                # Transfer cards.
+                taken = s.hands[defender_pid]
+                s.hands[pid].extend(taken)
+                s.hands[defender_pid] = []
+                info["eliminated"] = defender_pid
+                # Forced trade-ins while hand >= MAX_CARDS_IN_HAND.
+                while len(s.hands[pid]) > MAX_CARDS_IN_HAND:
+                    trio = find_valid_set(s.hands[pid])
+                    if trio is None:
+                        break
+                    value = self._trade_in_set(s, pid, trio)
+                    # Mid-turn forced trade-ins add to current turn's budget
+                    # only if still in REINFORCE; here we're attacking, so
+                    # just discard the cards (classic rule).
+
+            # Park the attack so the next step is an OccupyAction.
+            s.pending_attack = PendingAttack(
+                from_index=fi, to_index=ti, attacker_dice=action.dice
+            )
+            s.phase = Phase.OCCUPY
+
+        # Winner detection.
+        w = self.winner()
+        if w is not None:
+            info["winner"] = w
+        return info
+
+    def _legal_attack(self, s: State) -> Iterable[Action]:
+        pid = s.current_player_index
+        for i, o in enumerate(s.owners):
+            if o != pid or s.armies[i] < 2:
+                continue
+            t = self.topology.territory_at(i)
+            for nb in self.topology.neighbors(t):
+                ni = self.topology.index_of(nb)
+                if s.owners[ni] == pid:
+                    continue
+                max_d = min(MAX_ATTACK_DICE, s.armies[i] - 1)
+                for d in range(1, max_d + 1):
+                    yield AttackAction(from_territory=t, to_territory=nb, dice=d)
+        yield StopAttackAction()
+
+    def _apply_stop_attack(self, s: State) -> dict:
+        s.phase = Phase.FORTIFY
+        return {}
+
+    # --- occupy ----------------------------------------------------------
+
+    def _occupy_bounds(self, s: State) -> tuple[int, int]:
+        """Return ``(min_count, max_count)`` for the pending occupy."""
+        pa = s.pending_attack
+        if pa is None:
+            raise ValueError("No pending conquest to occupy")
+        fi = pa.from_index
+        available = s.armies[fi] - 1
+        if available < 1:
+            # Edge case: only one army remains on the attacker square; the
+            # rules require at least one to move into the conquered region.
+            return (1, 1)
+        lo = max(1, min(pa.attacker_dice, available))
+        hi = available
+        if lo > hi:
+            lo = hi
+        return (lo, hi)
+
+    def _legal_occupy(self, s: State) -> Iterable[Action]:
+        if s.pending_attack is None:
+            return
+        lo, hi = self._occupy_bounds(s)
+        for c in range(lo, hi + 1):
+            yield OccupyAction(count=c)
+
+    def _apply_occupy(self, s: State, action: OccupyAction) -> dict:
+        if s.phase is not Phase.OCCUPY or s.pending_attack is None:
+            raise ValueError("OccupyAction is only legal during Phase.OCCUPY")
+        lo, hi = self._occupy_bounds(s)
+        if not (lo <= action.count <= hi):
+            raise ValueError(
+                f"OccupyAction count {action.count} not in [{lo}, {hi}]"
+            )
+        pa = s.pending_attack
+        s.armies[pa.from_index] -= action.count
+        s.armies[pa.to_index] += action.count
+        s.pending_attack = None
+        s.phase = Phase.ATTACK
+        return {"occupied": action.count}
+
+    # --- fortify ---------------------------------------------------------
+
+    def _connected_through_owned(self, s: State, pid: int, start: str, goal: str) -> bool:
+        start_i = self.topology.index_of(start)
+        goal_i = self.topology.index_of(goal)
+        if s.owners[start_i] != pid or s.owners[goal_i] != pid:
+            return False
+        seen = {start_i}
+        stack = [start_i]
+        while stack:
+            cur = stack.pop()
+            if cur == goal_i:
+                return True
+            for nb in self.topology.neighbors(self.topology.territory_at(cur)):
+                ni = self.topology.index_of(nb)
+                if ni in seen or s.owners[ni] != pid:
+                    continue
+                seen.add(ni)
+                stack.append(ni)
+        return False
+
+    def _apply_fortify(self, s: State, action: FortifyAction) -> dict:
+        pid = s.current_player_index
+        if not action.is_skip:
+            assert action.from_territory is not None and action.to_territory is not None
+            fi = self.topology.index_of(action.from_territory)
+            ti = self.topology.index_of(action.to_territory)
+            if s.owners[fi] != pid or s.owners[ti] != pid:
+                raise ValueError("Fortify between owned territories only")
+            if action.count >= s.armies[fi]:
+                raise ValueError(
+                    f"Must leave >=1 army on source ({action.from_territory})"
+                )
+            if not self._connected_through_owned(s, pid, action.from_territory, action.to_territory):
+                raise ValueError("Fortify endpoints not connected through owned territories")
+            s.armies[fi] -= action.count
+            s.armies[ti] += action.count
+
+        # End of turn -> advance to next non-eliminated player.
+        self._advance_turn(s)
+        return {"moved": 0 if action.is_skip else action.count}
+
+    def _legal_fortify(self, s: State) -> Iterable[Action]:
+        pid = s.current_player_index
+        # Always allow skipping.
+        yield FortifyAction(from_territory=None, to_territory=None, count=0)
+        # Enumerate move endpoints — only count=1..armies-1 for tractability;
+        # agents that want larger counts can submit them directly.
+        for i, o in enumerate(s.owners):
+            if o != pid or s.armies[i] < 2:
+                continue
+            t = self.topology.territory_at(i)
+            # Find all owned territories reachable through owned chain.
+            for j, oj in enumerate(s.owners):
+                if i == j or oj != pid:
+                    continue
+                u = self.topology.territory_at(j)
+                if self._connected_through_owned(s, pid, t, u):
+                    yield FortifyAction(from_territory=t, to_territory=u, count=s.armies[i] - 1)
+
+    def _advance_turn(self, s: State) -> None:
+        n = self.settings.player_count
+        for _ in range(n):
+            s.current_player_index = (s.current_player_index + 1) % n
+            if s.current_player_index not in s.eliminated:
+                break
+        else:
+            return  # only one alive — winner handles termination
+        self._enter_reinforce_for(s, s.current_player_index)
+
+    def _enter_reinforce_for(self, s: State, pid: int) -> None:
+        s.phase = Phase.REINFORCE
+        s.reinforcement_budget = self._compute_reinforcement(s, pid)
+        self._conquered_this_turn = False
+        # Forced trade-ins (hand > MAX_CARDS_IN_HAND): auto-resolve and add
+        # the set value to the reinforcement budget.
+        while len(s.hands[pid]) > MAX_CARDS_IN_HAND:
+            trio = find_valid_set(s.hands[pid])
+            if trio is None:
+                break
+            s.reinforcement_budget += self._trade_in_set(s, pid, trio)
+
+
+__all__ = ["Environment", "StepResult"]

@@ -1,0 +1,44 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Risk: Run game",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "risk.app.main",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Risk: Run game (headless smoke, 50 ticks)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "risk.app.main",
+            "args": ["--max-ticks", "50", "--width", "800", "--height", "500"],
+            "env": { "SDL_VIDEODRIVER": "dummy" },
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Risk: Demo (legacy renderer)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "demos.pygame_risk_map",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Risk: pytest (Temp/tests)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["Temp/tests/", "-v"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}
