@@ -38,9 +38,11 @@ class RiskMapRenderer:
         owners: dict[str, int | tuple[int, int, int]] | None = None,
         armies: dict[str, int] | None = None,
         target_size: tuple[int, int] | None = None,
+        highlights: dict[str, tuple[int, int, int]] | None = None,
     ) -> pygame.Surface:
         owners = owners or {}
         armies = armies or {}
+        highlights = highlights or {}
 
         canvas = pygame.Surface(self.base_map.get_size(), pygame.SRCALPHA)
         canvas.blit(self.base_map, (0, 0))
@@ -55,6 +57,21 @@ class RiskMapRenderer:
                 if len(polygon) >= 3:
                     pygame.draw.polygon(overlay, fill, polygon)
         canvas.blit(overlay, (0, 0))
+
+        # Action markers (drawn over the ownership tint but below labels).
+        if highlights:
+            marker = pygame.Surface(canvas.get_size(), pygame.SRCALPHA)
+            for territory_id, color in highlights.items():
+                polygons = self.territory_polygons.get(territory_id)
+                if not polygons:
+                    continue
+                rgb = tuple(int(c) for c in color[:3])
+                fill = (*rgb, 110)
+                for polygon in polygons:
+                    if len(polygon) >= 3:
+                        pygame.draw.polygon(marker, fill, polygon)
+                        pygame.draw.polygon(marker, (*rgb, 255), polygon, width=6)
+            canvas.blit(marker, (0, 0))
 
         for territory_id in self.territory_ids:
             label_surface = self.label_surfaces[territory_id]

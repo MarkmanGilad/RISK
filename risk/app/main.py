@@ -33,6 +33,13 @@ import pygame
 from risk.agents.human_agent import HumanAgent
 from risk.agents.random_agent import RandomAgent
 from risk.app.game import Game
+from risk.game.actions import (
+    Action,
+    AttackAction,
+    FortifyAction,
+    OccupyAction,
+    ReinforcementAction,
+)
 from risk.game.environment import Environment
 from risk.game.phase import Phase
 from risk.game.player import Player
@@ -46,6 +53,13 @@ from risk.ui.panels import HudPanel
 
 
 HUD_WIDTH = 280
+
+# Default AI action pacing in `play` mode (ms between AI ticks and marker fade).
+DEFAULT_PLAY_AI_DELAY_MS = 600
+DEFAULT_PLAY_MARKER_MS = 900
+
+# Marker color for the last AI action overlay.
+AI_MARKER_RGB = (255, 230, 80)
 
 
 def _default_settings(n: int = 3, seed: Optional[int] = 0) -> GameSettings:
@@ -84,12 +98,81 @@ def _armies_dict(state) -> dict[str, int]:
     return {topo.territory_at(i): a for i, a in enumerate(state.armies)}
 
 
+def _action_territories(action: Action, pre_pending) -> list[str]:
+    """Return the territory ids the marker should highlight for `action`."""
+    from risk.game.board_topology import BoardTopology
+
+    if isinstance(action, ReinforcementAction):
+        return [t for t, n in action.placements.items() if n > 0]
+    if isinstance(action, AttackAction):
+        return [action.from_territory, action.to_territory]
+    if isinstance(action, OccupyAction):
+        if pre_pending is None:
+            return []
+        topo = BoardTopology()
+        return [
+            topo.territory_at(pre_pending.from_index),
+            topo.territory_at(pre_pending.to_index),
+        ]
+    if isinstance(action, FortifyAction):
+        if action.is_skip:
+            return []
+        return [action.from_territory, action.to_territory]
+    return []
+
+
+def _run_headless(env: Environment, agents, max_ticks: Optional[int]) -> int:
+    """Train mode without any rendering — pure simulation."""
+    game = Game(env, agents)
+    cap = max_ticks if max_ticks is not None else 1_000_000
+    ticks = 0
+    while not game.is_terminal() and ticks < cap:
+        r = game.tick()
+        if r.step is None:
+            # Should not happen with all-AI rosters; bail to avoid spinning.
+            break
+        ticks += 1
+    w = game.winner()
+    print(f"[train-no-render] ticks={ticks} winner={'P' + str(w) if w is not None else 'None'}")
+    return 0
+
+
 def run(width: int = 1280, height: int = 800, seed: int = 0, players: int = 3,
-        max_ticks: Optional[int] = None, skip_menu: bool = False) -> int:
+        max_ticks: Optional[int] = None, skip_menu: bool = False,
+        mode: str = "play",
+        ai_delay_ms: Optional[int] = None,
+        marker_ms: Optional[int] = None) -> int:
+    """Run the game.
+
+    Modes:
+        play           — human-friendly: AI ticks are paced so each move is
+                         visible, with a yellow marker on the affected
+                         territories.
+        train          — render normally but never wait between AI ticks.
+        train-no-render — pure simulation, no pygame window.
+    """
+    if mode == "train-no-render":
+        # All-AI default settings unless a menu choice is forced.
+        settings = _default_settings(n=players, seed=seed)
+        env = Environment()
+        env.reset(settings)
+        agents = _build_agents(settings)
+        return _run_headless(env, agents, max_ticks)
+
+    if mode not in ("play", "train"):
+        raise ValueError(f"Unknown mode {mode!r}")
+
+    ai_delay = ai_delay_ms if ai_delay_ms is not None else (
+        DEFAULT_PLAY_AI_DELAY_MS if mode == "play" else 0
+    )
+    marker_dur = marker_ms if marker_ms is not None else (
+        DEFAULT_PLAY_MARKER_MS if mode == "play" else 0
+    )
+
     pygame.init()
     try:
         screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption("Risk")
+        pygame.display.set_caption(f"Risk ({mode})")
 
         # `--max-ticks` is used by smoke tests and implies no menu.
         if skip_menu or max_ticks is not None:
@@ -148,7 +231,11 @@ def run(width: int = 1280, height: int = 800, seed: int = 0, players: int = 3,
         clock = pygame.time.Clock()
         ticks = 0
         running = True
+        last_ai_tick_ms = -ai_delay  # allow immediate first AI tick
+        marker_territories: list[str] = []
+        marker_expires_ms = 0
         while running:
+            now_ms = pygame.time.get_ticks()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -174,17 +261,45 @@ def run(width: int = 1280, height: int = 800, seed: int = 0, players: int = 3,
             # Sync controller with current (player, phase) before tick.
             controller.on_turn_change(env.current_state())
 
-            # Advance game one tick per frame.
+            # Advance game one tick per frame, with AI pacing in `play` mode.
             if not game.is_terminal():
-                game.tick()
+                pre_state = env.current_state()
+                pid = pre_state.current_player_index
+                acting_agent = agents[pid]
+                is_ai = not isinstance(acting_agent, HumanAgent)
+                pre_pending = pre_state.pending_attack
+
+                may_tick = True
+                if is_ai and ai_delay > 0:
+                    may_tick = (now_ms - last_ai_tick_ms) >= ai_delay
+
+                if may_tick:
+                    r = game.tick()
+                    if r.step is not None:
+                        if is_ai:
+                            last_ai_tick_ms = now_ms
+                            last_action = game.history[-1]
+                            terrs = _action_territories(last_action, pre_pending)
+                            if terrs and marker_dur > 0:
+                                marker_territories = terrs
+                                marker_expires_ms = now_ms + marker_dur
 
             controller.on_turn_change(env.current_state())
 
+            # Expire stale markers.
+            if marker_territories and now_ms >= marker_expires_ms:
+                marker_territories = []
+
             # Render.
             screen.fill((10, 10, 14))
+            highlights = (
+                {t: AI_MARKER_RGB for t in marker_territories}
+                if marker_territories else None
+            )
             board_surface = renderer.render(
                 owners=_owners_dict(env.current_state(), settings),
                 armies=_armies_dict(env.current_state()),
+                highlights=highlights,
             )
             scaled = pygame.transform.smoothscale(board_surface, (board_rect.w, board_rect.h))
             screen.blit(scaled, board_rect.topleft)
@@ -228,10 +343,31 @@ def main(argv: list[str] | None = None) -> int:
         "--skip-menu", action="store_true",
         help="Skip the init screen and start a default all-AI game.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("play", "train", "train-no-render"),
+        default="play",
+        help=(
+            "play: AI moves paced + marked for visibility (default). "
+            "train: render but no AI pacing. "
+            "train-no-render: pure simulation, no window."
+        ),
+    )
+    parser.add_argument(
+        "--ai-delay-ms", type=int, default=None,
+        help="Override pacing between AI ticks in `play` mode.",
+    )
+    parser.add_argument(
+        "--marker-ms", type=int, default=None,
+        help="Override AI action marker duration in `play` mode.",
+    )
     args = parser.parse_args(argv)
     return run(
         args.width, args.height, args.seed, args.players, args.max_ticks,
         skip_menu=args.skip_menu,
+        mode=args.mode,
+        ai_delay_ms=args.ai_delay_ms,
+        marker_ms=args.marker_ms,
     )
 
 
