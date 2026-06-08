@@ -1,0 +1,222 @@
+"""Self-play drivers for training — no human seats.
+
+Two ways to run a full game of AI/learning agents against each other, both
+sharing the exact same `agent(events, state) -> action` contract as the
+interactive app:
+
+- `play_headless(...)` — no pygame at all. As fast as the CPU allows. Use
+  this for bulk training rollouts.
+- `play_rendered(...)` — opens a pygame window and draws every move, but
+  never paces the AI, so it runs fast while still letting you *watch* what
+  the agents are doing.
+
+Both accept an optional `on_step` callback that receives every transition
+`(state_before, action, result)`, which is where a trainer collects its
+experience. `state_before` is a snapshot, safe to keep in a replay buffer.
+
+Typical use::
+
+    from risk.app.factory import build_game
+    from risk.app.setup import default_settings
+    from risk.learning.self_play import play_headless, play_rendered
+
+    ctx = build_game(default_settings(n=3, seed=0))
+    # swap in your learning agent for seat 0:
+    # ctx.agents[0] = MyAgent(player_id=0, env=ctx.env)
+
+    winner = play_headless(ctx, max_steps=20_000, on_step=my_collector)
+    # or, to watch it:
+    winner = play_rendered(ctx, on_step=my_collector)
+"""
+from __future__ import annotations
+
+from typing import Callable, Optional
+
+# Support being launched as a plain script (VS Code green Run button / F5).
+# When run via `python -m risk.learning.self_play` this is a no-op; when run as
+# `python risk/learning/self_play.py`, the repo root is not on sys.path, so the
+# absolute `from risk...` imports below would fail without this.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+
+    _REPO_ROOT = Path(__file__).resolve().parents[2]
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+
+from risk.agents.human_agent import HumanAgent
+from risk.app.factory import GameContext
+from risk.game.actions import Action
+from risk.game.environment import StepResult
+from risk.game.state import State
+
+# A trainer hook: (state_before, action, result) -> None.
+StepHook = Callable[[State, Action, StepResult], None]
+
+
+def _reject_humans(ctx: GameContext) -> None:
+    """Self-play is AI-only: a HumanAgent would stall (it never gets events)."""
+    for agent in ctx.agents:
+        if isinstance(agent, HumanAgent):
+            raise ValueError(
+                "play_headless / play_rendered are for AI-only self-play; "
+                f"seat {agent.player_id} is a HumanAgent. Use an all-AI roster "
+                "(e.g. default_settings(...)) or a learning agent instead."
+            )
+
+
+def play_headless(
+    ctx: GameContext,
+    *,
+    max_steps: int = 100_000,
+    on_step: Optional[StepHook] = None,
+) -> Optional[int]:
+    """Play one full game with no rendering. Returns the winner id (or None).
+
+    This is the bare ask -> step loop, the same one the GUI runs, minus the
+    window. `on_step(state_before, action, result)` is called after every
+    applied action for experience collection.
+    """
+    _reject_humans(ctx)
+    env, agents = ctx.env, ctx.agents
+
+    for _ in range(max_steps):
+        if env.is_terminal():
+            break
+        state = env.current_state()
+        player = agents[state.current_player_index]
+        action = player((), state)          # AI agents ignore the events arg
+        if action is None:
+            break                            # nothing to do (shouldn't happen for AI)
+        before = state.snapshot() if on_step else state
+        result = env.step(action)
+        if on_step is not None:
+            on_step(before, action, result)
+    return env.winner()
+
+
+def play_rendered(
+    ctx: GameContext,
+    *,
+    width: int = 1280,
+    height: int = 800,
+    max_steps: int = 100_000,
+    fps: int = 0,
+    caption: str = "Risk (training)",
+    on_step: Optional[StepHook] = None,
+) -> Optional[int]:
+    """Play one full game in a window, drawing every move but never pacing.
+
+    Same loop as `play_headless`, plus a `GameView` render each frame so you
+    can watch training. `fps <= 0` runs as fast as possible; set e.g.
+    `fps=30` to slow it to a watchable speed without adding per-move delays.
+    Closing the window or pressing ESC stops early.
+    """
+    _reject_humans(ctx)
+
+    # Local imports: pygame is only needed for the rendered path.
+    import pygame
+
+    from risk.app.view import GameView
+
+    env, agents = ctx.env, ctx.agents
+
+    pygame.init()
+    try:
+        screen = pygame.display.set_mode((width, height))
+        pygame.display.set_caption(caption)
+        view = GameView(screen, ctx.settings, width, height)
+        clock = pygame.time.Clock()
+        last_action_text = ""
+
+        steps = 0
+        running = True
+        while running and steps < max_steps:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    running = False
+
+            if not env.is_terminal():
+                state = env.current_state()
+                player = agents[state.current_player_index]
+                action = player((), state)
+                if action is not None:
+                    before = state.snapshot() if on_step else state
+                    result = env.step(action)
+                    last_action_text = _describe(action, ctx, state)
+                    if on_step is not None:
+                        on_step(before, action, result)
+                    steps += 1
+
+            view.render(
+                env.current_state(),
+                agents[env.current_state().current_player_index].widgets(
+                    env.current_state()
+                ),
+                None,                       # no action marker in training view
+                _end_message(env),
+                last_action_text,
+            )
+            pygame.display.flip()
+            if fps > 0:
+                clock.tick(fps)
+
+            if env.is_terminal():
+                break
+        return env.winner()
+    finally:
+        pygame.quit()
+
+
+def _describe(action: Action, ctx: GameContext, state: State) -> str:
+    from risk.app.marker import describe_action
+
+    pid = state.current_player_index
+    return describe_action(action, ctx.settings.players[pid].name, state.pending_attack)
+
+
+def _end_message(env) -> str:
+    if not env.is_terminal():
+        return ""
+    w = env.winner()
+    return f"Game over. Winner: P{w}" if w is not None else "Game over."
+
+
+def main() -> None:
+    """Training entry point. Edit this freely — it is your scratch pad.
+
+    Build the context here (player count, seats, seeds, your learning agent),
+    then call `play_headless` (fast, invisible) or `play_rendered` (watchable).
+    Run it with:  python -m risk.learning.self_play
+    """
+    from risk.app.factory import build_game
+    from risk.app.setup import default_settings
+
+    # 1) Roster: an all-AI (RandomAgent) game. Change `n` for player count.
+    ctx = build_game(default_settings(n=3, seed=0))
+
+    # 2) Swap in your own agents per seat (index must equal player_id):
+    #    from risk.agents.random_agent import RandomAgent
+    #    from risk.learning.my_agent import MyAgent
+    #    ctx.agents[0] = MyAgent(player_id=0, env=ctx.env)
+    #    ctx.agents[1] = RandomAgent(player_id=1, env=ctx.env, seed=123)
+
+    # 3) (Optional) collect transitions for training.
+    transitions: list = []
+
+    def collect(state, action, result):
+        transitions.append((state, action, result.info))
+
+    # 4) Run one episode. Use play_rendered(ctx, fps=30) to watch it instead.
+    winner = play_headless(ctx, max_steps=20_000, on_step=collect)
+
+    print(f"winner = {winner}    steps = {len(transitions)}")
+
+
+__all__ = ["play_headless", "play_rendered", "StepHook", "main"]
+
+
+if __name__ == "__main__":
+    main()

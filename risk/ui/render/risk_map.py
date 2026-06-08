@@ -21,7 +21,7 @@ class RiskMapRenderer:
     }
 
     def __init__(self, assets_dir: str | Path | None = None, fill_alpha: int = 102, curve_steps: int = 24) -> None:
-        self.root_dir = Path(__file__).resolve().parent.parent.parent
+        self.root_dir = Path(__file__).resolve().parents[3]
         self.assets_dir = Path(assets_dir or self.root_dir / "Assets" / "RiskMap")
         self.fill_alpha = fill_alpha
         self.curve_steps = curve_steps

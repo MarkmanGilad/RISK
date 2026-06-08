@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 
-from risk.graphics.risk_map import RiskMapRenderer
+from risk.ui.render.risk_map import RiskMapRenderer
 
 
 def build_demo_state(renderer: RiskMapRenderer) -> tuple[dict[str, int], dict[str, int]]:

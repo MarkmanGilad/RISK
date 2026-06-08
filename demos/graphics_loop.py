@@ -3,7 +3,7 @@ from __future__ import annotations
 import pygame
 
 from demos.graphics_state import build_demo_state
-from risk.graphics.risk_map import RiskMapRenderer
+from risk.ui.render.risk_map import RiskMapRenderer
 
 
 _PLAYER_NAMES = {

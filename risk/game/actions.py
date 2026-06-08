@@ -129,6 +129,36 @@ class StopAttackAction(Action):
         return {"type": "stop_attack"}
 
 
+# --- trade in cards -------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class TradeInAction(Action):
+    """Cash in three cards from the current player's hand during REINFORCE.
+
+    `card_indices` are positions into the player's current hand. The
+    environment validates that they form a valid set and adds the set value
+    to the reinforcement budget.
+    """
+
+    card_indices: tuple[int, int, int]
+    phase: ClassVar[Phase] = Phase.REINFORCE
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.card_indices, tuple) or len(self.card_indices) != 3:
+            raise ValueError("card_indices must be a tuple of 3 ints")
+        for i in self.card_indices:
+            if not isinstance(i, int) or isinstance(i, bool):
+                raise ValueError("card index must be int")
+            if i < 0:
+                raise ValueError(f"card index must be >= 0, got {i}")
+        if len(set(self.card_indices)) != 3:
+            raise ValueError("card_indices must be distinct")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "trade_in", "card_indices": list(self.card_indices)}
+
+
 # --- occupy ---------------------------------------------------------------
 
 
@@ -207,6 +237,7 @@ _REGISTRY: dict[str, type[Action]] = {
     "reinforce": ReinforcementAction,
     "attack": AttackAction,
     "stop_attack": StopAttackAction,
+    "trade_in": TradeInAction,
     "occupy": OccupyAction,
     "fortify": FortifyAction,
 }
@@ -224,6 +255,8 @@ def action_from_dict(data: dict[str, Any]) -> Action:
         )
     if t == "stop_attack":
         return StopAttackAction()
+    if t == "trade_in":
+        return TradeInAction(card_indices=tuple(int(i) for i in data["card_indices"]))
     if t == "occupy":
         return OccupyAction(count=int(data["count"]))
     if t == "fortify":
@@ -240,6 +273,7 @@ __all__ = [
     "ReinforcementAction",
     "AttackAction",
     "StopAttackAction",
+    "TradeInAction",
     "OccupyAction",
     "FortifyAction",
     "action_from_dict",

@@ -1,0 +1,58 @@
+"""Build stage: turn a `GameSettings` into a runnable game.
+
+This module is **pygame-free** on purpose. It is the single seam shared by the
+interactive app and headless training: both call `build_game(settings)` and get
+back a `GameContext` they can run.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from risk.agents.base_agent import BaseAgent
+from risk.agents.human_agent import HumanAgent
+from risk.agents.random_agent import RandomAgent
+from risk.app.game import Game
+from risk.game.environment import Environment
+from risk.game.settings import GameSettings
+
+
+@dataclass
+class GameContext:
+    """The runnable game produced from a `GameSettings`."""
+
+    settings: GameSettings
+    env: Environment
+    agents: list[BaseAgent]
+    game: Game
+
+
+def build_agents(settings: GameSettings, env: Environment) -> list[BaseAgent]:
+    """Instantiate one agent per seat from the roster.
+
+    Every agent holds the `env` so it can query `legal_actions()` itself.
+    Human agents also receive the `view` later (injected by the loop) for
+    pixel hit-testing; headless paths leave it unset.
+    """
+    out: list[BaseAgent] = []
+    for p in settings.players:
+        if p.agent_kind == "human":
+            out.append(HumanAgent(player_id=p.id, env=env, settings=settings))
+        else:
+            out.append(
+                RandomAgent(
+                    player_id=p.id, env=env, seed=(settings.seed or 0) + p.id + 1
+                )
+            )
+    return out
+
+
+def build_game(settings: GameSettings) -> GameContext:
+    """Wire Environment + agents + Game. No pygame, no rendering."""
+    env = Environment()
+    env.reset(settings)
+    agents = build_agents(settings, env)
+    game = Game(env, agents)
+    return GameContext(settings=settings, env=env, agents=agents, game=game)
+
+
+__all__ = ["GameContext", "build_agents", "build_game"]

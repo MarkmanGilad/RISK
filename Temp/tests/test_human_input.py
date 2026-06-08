@@ -15,12 +15,14 @@ from risk.game.actions import (
     OccupyAction,
     ReinforcementAction,
     StopAttackAction,
+    TradeInAction,
 )
+from risk.game.card import Card
 from risk.game.environment import Environment
 from risk.game.phase import Phase
 from risk.game.player import Player
 from risk.game.settings import GameSettings
-from risk.ui.human_input import (
+from risk.ui.input.human_input import (
     HudActionPanelModel,
     HumanInputController,
 )
@@ -45,17 +47,22 @@ def _settings(human_ids: set[int], n: int = 3, seed: int = 1) -> GameSettings:
 
 
 def _build(human_ids: set[int], seed: int = 1, n: int = 3):
-    """Build env + agents + controller with the given seats marked human."""
+    """Build env + agents + controller with the given seats marked human.
+
+    The controller is owned by the first human seat (or seat 0 for all-AI
+    tests, where `is_human_turn` is always False).
+    """
     settings = _settings(human_ids, n=n, seed=seed)
     env = Environment()
     env.reset(settings)
     agents = []
     for p in settings.players:
         if p.agent_kind == "human":
-            agents.append(HumanAgent(player_id=p.id))
+            agents.append(HumanAgent(player_id=p.id, env=env, settings=settings))
         else:
-            agents.append(RandomAgent(player_id=p.id, seed=seed + p.id + 1))
-    controller = HumanInputController(env, agents, settings)
+            agents.append(RandomAgent(player_id=p.id, env=env, seed=seed + p.id + 1))
+    owner = next((a for a in agents if isinstance(a, HumanAgent)), agents[0])
+    controller = HumanInputController(env, owner, settings)
     return env, agents, controller
 
 
@@ -139,7 +146,7 @@ def test_widgets_reinforce_shape():
     assert m.is_active is True
     assert m.info_lines[0].endswith(f"/ {s.reinforcement_budget}")
     ids = {b.id for b in m.buttons}
-    assert ids == {"place_armies", "clear_all"}
+    assert ids == {"place_armies", "clear_all", "toggle_cards"}
     place_btn = next(b for b in m.buttons if b.id == "place_armies")
     assert place_btn.enabled is False  # no placements yet
     assert place_btn.primary is True
@@ -431,7 +438,7 @@ def test_widgets_occupy_shape_and_bounds():
     assert m.count == 3  # min(dice, available) = min(3, 49)
     assert m.count_max == s.armies[s.pending_attack.from_index] - 1
     ids = {b.id for b in m.buttons}
-    assert ids == {"occupy"}
+    assert ids == {"occupy", "toggle_cards"}
     btn = m.buttons[0]
     assert btn.enabled is True
     assert btn.primary is True
@@ -478,3 +485,114 @@ def test_after_occupy_selected_from_carries_to_conquered_square():
     assert env.current_state().phase is _Phase.ATTACK
     assert controller.selected_from == ti
     assert controller.selected_to is None
+
+
+# --- card screen / trade-in ----------------------------------------------
+
+
+def _give_set(env, pid: int) -> None:
+    """Replace pid's hand with one tradeable set (one of each symbol)."""
+    s = env.current_state()
+    s.hands[pid] = [
+        Card(territory_id="Alaska", symbol="infantry"),
+        Card(territory_id="Alberta", symbol="cavalry"),
+        Card(territory_id="Ontario", symbol="artillery"),
+    ]
+
+
+def test_cards_button_present_on_human_turn():
+    env, agents, controller = _build(human_ids={0})
+    m = controller.widgets(env.current_state())
+    assert any(b.id == "toggle_cards" for b in m.buttons)
+    toggle = next(b for b in m.buttons if b.id == "toggle_cards")
+    assert toggle.label.startswith("Cards (")
+
+
+def test_toggle_cards_opens_card_screen():
+    env, agents, controller = _build(human_ids={0})
+    _give_set(env, pid=0)
+    assert controller.widgets(env.current_state()).show_cards is False
+    controller.on_hud_button("toggle_cards")
+    m = controller.widgets(env.current_state())
+    assert m.show_cards is True
+    assert len(m.cards) == 3
+    assert all(sel is False for _label, sel in m.cards)
+    # Toggle button now offers to hide.
+    assert any(b.label.startswith("Hide Cards") for b in m.buttons)
+
+
+def test_select_three_valid_cards_enables_trade():
+    env, agents, controller = _build(human_ids={0})
+    _give_set(env, pid=0)
+    controller.on_hud_button("toggle_cards")
+    controller.on_hud_field("card_toggle", "0")
+    controller.on_hud_field("card_toggle", "1")
+    controller.on_hud_field("card_toggle", "2")
+    m = controller.widgets(env.current_state())
+    assert m.trade_value == 4  # first trade-in is worth 4
+    trade_btn = next(b for b in m.buttons if b.id == "trade_cards")
+    assert trade_btn.enabled is True
+
+
+def test_selection_capped_at_three():
+    env, agents, controller = _build(human_ids={0})
+    s = env.current_state()
+    s.hands[0] = [
+        Card(territory_id="Alaska", symbol="infantry"),
+        Card(territory_id="Alberta", symbol="cavalry"),
+        Card(territory_id="Ontario", symbol="artillery"),
+        Card(territory_id="Quebec", symbol="infantry"),
+    ]
+    controller.on_hud_button("toggle_cards")
+    for i in range(4):
+        controller.on_hud_field("card_toggle", str(i))
+    assert len(controller.selected_cards) == 3
+
+
+def test_trade_button_submits_trade_in_action():
+    env, agents, controller = _build(human_ids={0})
+    _give_set(env, pid=0)
+    controller.on_hud_button("toggle_cards")
+    for i in range(3):
+        controller.on_hud_field("card_toggle", str(i))
+    controller.on_hud_button("trade_cards")
+    assert isinstance(agents[0]._pending, TradeInAction)
+    assert agents[0]._pending.card_indices == (0, 1, 2)
+    assert controller.selected_cards == set()
+
+
+def test_trade_in_step_adds_budget_and_removes_cards():
+    env, agents, controller = _build(human_ids={0})
+    _give_set(env, pid=0)
+    budget_before = env.current_state().reinforcement_budget
+    env.step(TradeInAction(card_indices=(0, 1, 2)))
+    s = env.current_state()
+    assert s.reinforcement_budget == budget_before + 4
+    assert len(s.hands[0]) == 0
+
+
+def test_invalid_set_does_not_enable_trade():
+    env, agents, controller = _build(human_ids={0})
+    s = env.current_state()
+    s.hands[0] = [
+        Card(territory_id="Alaska", symbol="infantry"),
+        Card(territory_id="Alberta", symbol="infantry"),
+        Card(territory_id="Ontario", symbol="cavalry"),
+    ]
+    controller.on_hud_button("toggle_cards")
+    for i in range(3):
+        controller.on_hud_field("card_toggle", str(i))
+    m = controller.widgets(env.current_state())
+    assert m.trade_value is None
+    trade_btn = next(b for b in m.buttons if b.id == "trade_cards")
+    assert trade_btn.enabled is False
+
+
+def test_cards_button_absent_when_not_human_turn():
+    # Seat 0 is human, but it's seat 0's turn; check an AI seat yields nothing.
+    env, agents, controller = _build(human_ids={1})
+    # Controller owned by seat 1, but current player is seat 0 (AI).
+    m = controller.widgets(env.current_state())
+    assert m.is_active is False
+    assert m.show_cards is False
+

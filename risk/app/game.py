@@ -42,6 +42,11 @@ class Game:
             )
         self.env = env
         self.agents: list[BaseAgent] = sorted(agents, key=lambda a: a.player_id)
+        # Agents query `env.legal_actions()` themselves; make sure each one
+        # points at this environment (tests may construct agents bare).
+        for agent in self.agents:
+            if getattr(agent, "env", None) is None:
+                agent.env = env
         self.history: list[Action] = []
         self.last_info: dict = {}
 
@@ -66,8 +71,7 @@ class Game:
         state = self.env.current_state()
         pid = state.current_player_index
         agent = self.agents[pid]
-        legal = self.env.legal_actions()
-        chosen = agent.act(state, legal)
+        chosen = agent((), state)
         if chosen is None:
             return TickResult(step=None, waiting_on_player=pid)
         result = self.env.step(chosen)

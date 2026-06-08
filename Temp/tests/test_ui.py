@@ -7,8 +7,8 @@ import pytest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from risk.ui.hit_test import TerritoryHitTester
-from risk.ui.init_screen import DEFAULT_COLORS, InitScreenState
+from risk.ui.input.hit_test import TerritoryHitTester
+from risk.ui.input.init_screen import DEFAULT_COLORS, InitScreenState
 
 
 # --- hit testing ----------------------------------------------------------
@@ -54,7 +54,7 @@ def test_hit_test_rejects_bad_geometry() -> None:
 def test_hit_test_with_real_board_polygons() -> None:
     """Smoke: use the real renderer's polygons via direct JSON parsing,
     pick the centroid of a known territory, and confirm it resolves."""
-    from risk.graphics.risk_map import RiskMapRenderer
+    from risk.ui.render.risk_map import RiskMapRenderer
 
     renderer = RiskMapRenderer()
     polys = renderer.territory_polygons
@@ -163,7 +163,7 @@ def test_renderer_still_produces_a_surface() -> None:
 
     pygame.init()
     try:
-        from risk.graphics.risk_map import RiskMapRenderer
+        from risk.ui.render.risk_map import RiskMapRenderer
 
         r = RiskMapRenderer()
         surface = r.render(owners={"Alaska": 0, "Alberta": 1}, armies={"Alaska": 3})

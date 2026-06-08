@@ -13,7 +13,7 @@ from risk.game.phase import Phase
 from risk.game.player import Player
 from risk.game.settings import GameSettings
 from risk.game.state import State
-from risk.ui.human_input import HudActionPanelModel
+from risk.ui.input.human_input import HudActionPanelModel
 
 
 # Encoded hit-test region id format:
@@ -43,6 +43,8 @@ class HudPanel:
         state: State,
         settings: GameSettings,
         message: str = "",
+        last_action_text: str = "",
+        last_action_lines: tuple[str, ...] = (),
     ) -> None:
         target.fill(self.BG, rect)
         x, y = rect.x + 12, rect.y + 12
@@ -101,6 +103,28 @@ class HudPanel:
             y = rect.bottom - line_h - 12
             msg = self.font.render(message, True, self.ACCENT)
             target.blit(msg, (x, y))
+
+    def render_last_move(
+        self,
+        target: pygame.Surface,
+        rect: pygame.Rect,
+        last_action_text: str = "",
+        last_action_lines: tuple[str, ...] = (),
+    ) -> None:
+        """Draw the 'Last move:' block, anchored to the bottom strip.
+
+        It stays in the pane until the next action replaces it.
+        """
+        lines = last_action_lines or ((last_action_text,) if last_action_text else ())
+        if not lines:
+            return
+        x = rect.x + 12
+        line_h = self.font.get_linesize()
+        target.blit(self.font.render("Last move:", True, self.FG), (x, rect.y))
+        y = rect.y + line_h
+        for ln in lines:
+            target.blit(self.font.render(ln[:48], True, self.LINK_FG), (x, y))
+            y += line_h
 
 
     # --- action panel for human turns ------------------------------------
@@ -195,6 +219,25 @@ class HudPanel:
                 dec_id="field:count_dec", inc_id="field:count_inc",
                 regions=regions,
             )
+
+        # Card screen (toggled by the "Cards" button).
+        if model.show_cards:
+            y += 8
+            target.blit(self.title_font.render("Your Cards", True, self.ACCENT), (x, y))
+            y += self.title_font.get_linesize() + 2
+            if not model.cards:
+                target.blit(self.font.render("(no cards)", True, self.FG), (x, y))
+                y += line_h
+            for i, (label, selected) in enumerate(model.cards):
+                row = pygame.Rect(x, y - 2, width, line_h + 4)
+                if selected:
+                    pygame.draw.rect(target, self.BTN_PRIMARY, row, border_radius=3)
+                mark = "[x]" if selected else "[ ]"
+                s = self.font.render(f"{mark} {label}", True, self.FG)
+                target.blit(s, (x + 4, y))
+                regions.append((row, f"field:card_toggle:{i}"))
+                y += line_h + 4
+            y += 2
 
         # Footer buttons.
         y += 8

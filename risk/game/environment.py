@@ -21,6 +21,7 @@ from risk.game.actions import (
     OccupyAction,
     ReinforcementAction,
     StopAttackAction,
+    TradeInAction,
 )
 from risk.game.board_topology import BoardTopology
 from risk.game.card import Card, find_valid_set, is_valid_set
@@ -140,6 +141,8 @@ class Environment:
 
         if isinstance(action, ReinforcementAction):
             info = self._apply_reinforce(s, action)
+        elif isinstance(action, TradeInAction):
+            info = self._apply_trade_in(s, action)
         elif isinstance(action, AttackAction):
             info = self._apply_attack(s, action)
         elif isinstance(action, OccupyAction):
@@ -172,7 +175,7 @@ class Environment:
         """
         s = self.current_state()
         if s.phase is Phase.REINFORCE:
-            return list(self._legal_reinforce(s))
+            return list(self._legal_reinforce(s)) + list(self._legal_trade_ins(s))
         if s.phase is Phase.ATTACK:
             return list(self._legal_attack(s))
         if s.phase is Phase.OCCUPY:
@@ -247,6 +250,31 @@ class Environment:
         value = card_set_value(s.cards_traded_in_count)
         s.cards_traded_in_count += 1
         return value
+
+    def _apply_trade_in(self, s: State, action: TradeInAction) -> dict:
+        if s.phase is not Phase.REINFORCE:
+            raise ValueError("Trade-in only allowed during REINFORCE")
+        pid = s.current_player_index
+        hand = s.hands[pid]
+        idxs = action.card_indices
+        if any(i >= len(hand) for i in idxs):
+            raise ValueError("Card index out of range")
+        trio = tuple(hand[i] for i in idxs)
+        if not is_valid_set(trio):
+            raise ValueError("Selected cards are not a valid set")
+        value = self._trade_in_set(s, pid, trio)  # type: ignore[arg-type]
+        s.reinforcement_budget += value
+        return {"traded": value, "cards": len(hand) - 3}
+
+    def _legal_trade_ins(self, s: State) -> Iterable[Action]:
+        pid = s.current_player_index
+        hand = s.hands[pid]
+        n = len(hand)
+        for i in range(n):
+            for j in range(i + 1, n):
+                for k in range(j + 1, n):
+                    if is_valid_set((hand[i], hand[j], hand[k])):
+                        yield TradeInAction(card_indices=(i, j, k))
 
     def trade_in_cards(self, cards: Sequence[Card]) -> int:
         """Optional explicit trade-in (callable during reinforcement)."""

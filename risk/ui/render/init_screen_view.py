@@ -21,7 +21,7 @@ from typing import Optional
 import pygame
 
 from risk.game.settings import GameSettings
-from risk.ui.init_screen import DEFAULT_COLORS, InitScreenState
+from risk.ui.input.init_screen import DEFAULT_COLORS, InitScreenState
 
 
 # --- colors / layout ------------------------------------------------------
