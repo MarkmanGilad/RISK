@@ -184,6 +184,26 @@ def _end_message(env) -> str:
     return f"Game over. Winner: P{w}" if w is not None else "Game over."
 
 
+def _print_player_summary(ctx: GameContext, steps: int) -> None:
+    topology = ctx.env.topology
+    state = ctx.env.current_state()
+    print(f"steps = {steps}")
+    for player in ctx.settings.players:
+        owned_indices = [i for i, owner in enumerate(state.owners) if owner == player.id]
+        territories = len(owned_indices)
+        armies = sum(state.armies[i] for i in owned_indices)
+        continents = [
+            continent
+            for continent in topology.continents
+            if all(state.owners[topology.index_of(territory)] == player.id for territory in topology.territories_in(continent))
+        ]
+        continent_text = ", ".join(continents) if continents else "none"
+        print(
+            f"P{player.id} {player.name}: continents={continent_text} "
+            f"territories={territories} soldiers={armies}"
+        )
+
+
 def main() -> None:
     """Training entry point. Edit this freely — it is your scratch pad.
 
@@ -210,9 +230,10 @@ def main() -> None:
         transitions.append((state, action, result.info))
 
     # 4) Run one episode. Use play_rendered(ctx, fps=30) to watch it instead.
-    winner = play_headless(ctx, max_steps=20_000, on_step=collect)
+    winner = play_headless(ctx, max_steps=50_000, on_step=collect)
 
-    print(f"winner = {winner}    steps = {len(transitions)}")
+    print(f"winner = {winner}")
+    _print_player_summary(ctx, len(transitions))
 
 
 __all__ = ["play_headless", "play_rendered", "StepHook", "main"]

@@ -39,17 +39,24 @@ DEFAULT_PLAY_AI_DELAY_MS = 600
 DEFAULT_PLAY_MARKER_MS = 900
 
 
-def _run_headless(max_ticks: Optional[int], players: int, seed: int) -> int:
+def _run_headless(max_ticks: Optional[int], players: int, seed: int, auto_restart: bool) -> int:
     """Train mode without any rendering — pure simulation via the shared factory."""
-    ctx = build_game(default_settings(n=players, seed=seed))
-    winner = ctx.game.play_until_terminal(max_steps=max_ticks or 1_000_000)
-    print(f"[train-no-render] winner={'P' + str(winner) if winner is not None else 'None'}")
-    return 0
+    current_seed = seed
+    while True:
+        ctx = build_game(default_settings(n=players, seed=current_seed))
+        winner = ctx.game.play_until_terminal(max_steps=max_ticks or 1_000_000)
+        print(
+            f"[train-no-render] winner={'P' + str(winner) if winner is not None else 'None'}"
+        )
+        if not auto_restart:
+            return 0
+        current_seed += 1
 
 
 def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0, players: int = 3,
         max_ticks: Optional[int] = None, skip_menu: bool = False,
         mode: str = "play",
+    auto_restart: bool = False,
         ai_delay_ms: Optional[int] = None,
         marker_ms: Optional[int] = None) -> int:
     """Run the game.
@@ -62,7 +69,7 @@ def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0
         train-no-render — pure simulation, no pygame window.
     """
     if mode == "train-no-render":
-        return _run_headless(max_ticks, players, seed)
+        return _run_headless(max_ticks, players, seed, auto_restart)
 
     if mode not in ("play", "train"):
         raise ValueError(f"Unknown mode {mode!r}")
@@ -95,30 +102,46 @@ def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0
         screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption(f"Risk ({mode})")
 
-        # PRE-GAME: produce settings (menu, or defaults for smoke tests).
-        # `--max-ticks` is used by smoke tests and implies no menu.
-        settings = run_setup(
-            screen,
-            players=players,
-            seed=seed,
-            skip_menu=skip_menu or max_ticks is not None,
-        )
-        if settings is None:
-            return 0  # user closed the window
+        current_seed = seed
+        while True:
+            # PRE-GAME: produce settings (menu, or defaults for smoke tests).
+            # `--max-ticks` is used by smoke tests and implies no menu.
+            if skip_menu or max_ticks is not None or auto_restart:
+                settings = default_settings(n=players, seed=current_seed)
+            else:
+                settings = run_setup(
+                    screen,
+                    players=players,
+                    seed=current_seed,
+                    skip_menu=False,
+                )
+            if settings is None:
+                return 0  # user closed the window
 
-        # BUILD: pygame-free wiring shared with headless training.
-        ctx = build_game(settings)
+            # BUILD: pygame-free wiring shared with headless training.
+            ctx = build_game(settings)
 
-        # GAME: run the interactive loop.
-        loop = AppLoop(
-            ctx,
-            screen,
-            width=width,
-            height=height,
-            ai_delay_ms=ai_delay,
-            marker_ms=marker_dur,
-        )
-        return loop.run(max_ticks=max_ticks)
+            # GAME: run the interactive loop.
+            loop = AppLoop(
+                ctx,
+                screen,
+                width=width,
+                height=height,
+                ai_delay_ms=ai_delay,
+                marker_ms=marker_dur,
+            )
+            loop.run(max_ticks=max_ticks, show_win_screen=not auto_restart)
+
+            # Auto-restart is for trainer-style runs: immediately start a new
+            # game with a fresh seed and no menu/win-screen pause.
+            if auto_restart:
+                current_seed += 1
+                continue
+
+            # If running with max_ticks (smoke tests / train mode), exit after
+            # one game rather than looping back to the menu.
+            if max_ticks is not None or skip_menu:
+                return 0
     finally:
         pygame.quit()
 
@@ -150,6 +173,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--auto-restart",
+        action="store_true",
+        help="Immediately start a new game after the current one ends.",
+    )
+    parser.add_argument(
         "--ai-delay-ms", type=int, default=None,
         help="Override pacing between AI ticks in `play` mode.",
     )
@@ -162,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         args.width, args.height, args.seed, args.players, args.max_ticks,
         skip_menu=args.skip_menu,
         mode=args.mode,
+        auto_restart=args.auto_restart,
         ai_delay_ms=args.ai_delay_ms,
         marker_ms=args.marker_ms,
     )

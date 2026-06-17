@@ -28,6 +28,9 @@ from risk.app.view import GameView
 AI_MARKER_RGB = (255, 230, 80)
 
 END_LINGER_MS = 2000
+WIN_BG      = (10, 10, 14)
+WIN_FG      = (255, 215, 0)
+WIN_SUB_FG  = (200, 200, 200)
 
 
 class AppLoop:
@@ -57,7 +60,7 @@ class AppLoop:
 
     # --- main loop -------------------------------------------------------
 
-    def run(self, max_ticks: Optional[int] = None) -> int:
+    def run(self, max_ticks: Optional[int] = None, show_win_screen: bool = True) -> int:
         clock = pygame.time.Clock()
         ticks = 0
         while True:
@@ -84,10 +87,54 @@ class AppLoop:
             if max_ticks is not None and ticks >= max_ticks:
                 break
             if self.env.is_terminal():
-                if max_ticks is None:
-                    pygame.time.wait(END_LINGER_MS)  # let the user see the end
+                if max_ticks is None and show_win_screen:
+                    self._show_win_screen()
                 break
         return 0
+
+    def _show_win_screen(self) -> None:
+        """Overlay a winner announcement and wait for a key/click to continue."""
+        winner = self.env.winner()
+        if winner is not None:
+            player = self.settings.players[winner]
+            headline = f"{player.name} wins!"
+            color = player.color
+        else:
+            headline = "Game over — draw!"
+            color = WIN_FG
+
+        screen = self.view.screen
+        w, h = screen.get_size()
+
+        big_font = pygame.font.SysFont("consolas", max(36, h // 18), bold=True)
+        sub_font = pygame.font.SysFont("consolas", max(20, h // 32))
+
+        sub_surf = sub_font.render(
+            "Press any key or click to return to the main menu", True, WIN_SUB_FG
+        )
+
+        clock = pygame.time.Clock()
+        start = pygame.time.get_ticks()
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
+                if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                    if pygame.time.get_ticks() - start > 800:  # prevent instant skip
+                        return
+
+            # Dim the current board frame.
+            overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 170))
+            screen.blit(overlay, (0, 0))
+
+            # Winner text.
+            head_surf = big_font.render(headline, True, color)
+            screen.blit(head_surf, head_surf.get_rect(center=(w // 2, h // 2 - 40)))
+            screen.blit(sub_surf, sub_surf.get_rect(center=(w // 2, h // 2 + 40)))
+
+            pygame.display.flip()
+            clock.tick(30)
 
     @staticmethod
     def _wants_quit(events) -> bool:
