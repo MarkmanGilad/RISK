@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from risk.game.constants import MAX_PLAYERS, MIN_PLAYERS
-from risk.game.player import Player
+from risk.game.player import AGENT_KIND_ORDER, ALLOWED_AGENT_KINDS, Player
 from risk.game.settings import GameSettings
 
 
@@ -33,7 +33,7 @@ DEFAULT_COLORS: tuple[tuple[int, int, int], ...] = (
 class _Seat:
     name: str
     color: tuple[int, int, int]
-    agent_kind: str  # "human" | "ai"
+    agent_kind: str
 
 
 @dataclass
@@ -79,9 +79,20 @@ class InitScreenState:
 
     def set_agent_kind(self, index: int, kind: str) -> None:
         self._check_index(index)
-        if kind not in {"human", "ai"}:
-            raise ValueError(f"agent_kind must be 'human' or 'ai', got {kind!r}")
+        if kind not in ALLOWED_AGENT_KINDS:
+            raise ValueError(
+                f"agent_kind must be one of {sorted(ALLOWED_AGENT_KINDS)}, got {kind!r}"
+            )
         self.seats[index].agent_kind = kind
+
+    def next_agent_kind(self, index: int) -> str:
+        self._check_index(index)
+        current = self.seats[index].agent_kind
+        if current not in AGENT_KIND_ORDER:
+            current = "random"
+        next_index = (AGENT_KIND_ORDER.index(current) + 1) % len(AGENT_KIND_ORDER)
+        self.seats[index].agent_kind = AGENT_KIND_ORDER[next_index]
+        return self.seats[index].agent_kind
 
     def _check_index(self, index: int) -> None:
         if not (0 <= index < len(self.seats)):

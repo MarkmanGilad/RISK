@@ -4,12 +4,12 @@ Run:
     python -m risk.app.main
 
 Shows the init / setup screen first, where the user picks player count,
-names, colors, and seat types (Human / AI). Once the user clicks **Start
+names, colors, and seat types. Once the user clicks **Start
 Game**, the chosen `GameSettings` are used to build the environment and
 agents.
 
 Smoke tests pass `--skip-menu` (or `--max-ticks`) to bypass the menu and
-start with a default all-AI roster.
+start with a default all-random roster.
 """
 from __future__ import annotations
 
@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--skip-menu", action="store_true",
-        help="Skip the init screen and start a default all-AI game.",
+        help="Skip the init screen and start a default all-random game.",
     )
     parser.add_argument(
         "--mode",

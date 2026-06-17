@@ -44,7 +44,6 @@ if __package__ in (None, ""):
     if str(_REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPO_ROOT))
 
-from risk.agents.human_agent import HumanAgent
 from risk.app.factory import GameContext
 from risk.game.actions import Action
 from risk.game.environment import StepResult
@@ -57,7 +56,7 @@ StepHook = Callable[[State, Action, StepResult], None]
 def _reject_humans(ctx: GameContext) -> None:
     """Self-play is AI-only: a HumanAgent would stall (it never gets events)."""
     for agent in ctx.agents:
-        if isinstance(agent, HumanAgent):
+        if type(agent).__name__ == "HumanAgent":
             raise ValueError(
                 "play_headless / play_rendered are for AI-only self-play; "
                 f"seat {agent.player_id} is a HumanAgent. Use an all-AI roster "
@@ -79,6 +78,7 @@ def play_headless(
     """
     _reject_humans(ctx)
     env, agents = ctx.env, ctx.agents
+    steps = 0
 
     for _ in range(max_steps):
         if env.is_terminal():
@@ -92,6 +92,11 @@ def play_headless(
         result = env.step(action)
         if on_step is not None:
             on_step(before, action, result)
+        steps += 1
+        print(f"steps = {steps}", end="\r", flush=True)
+
+    if steps:
+        print()
     return env.winner()
 
 
@@ -149,6 +154,7 @@ def play_rendered(
                     if on_step is not None:
                         on_step(before, action, result)
                     steps += 1
+                    print(f"steps = {steps}", end="\r", flush=True)
 
             view.render(
                 env.current_state(),
@@ -165,6 +171,8 @@ def play_rendered(
 
             if env.is_terminal():
                 break
+        if steps:
+            print()
         return env.winner()
     finally:
         pygame.quit()
@@ -204,6 +212,20 @@ def _print_player_summary(ctx: GameContext, steps: int) -> None:
         )
 
 
+def _print_roster(ctx: GameContext) -> None:
+    print("roster:")
+    for player, agent in zip(ctx.settings.players, ctx.agents):
+        print(f"  P{player.id} {player.name}: {type(agent).__name__}")
+
+
+def _winner_text(ctx: GameContext, winner: Optional[int]) -> str:
+    if winner is None:
+        return "None"
+    player = ctx.settings.players[winner]
+    agent = ctx.agents[winner]
+    return f"P{winner} {player.name} ({type(agent).__name__})"
+
+
 def main() -> None:
     """Training entry point. Edit this freely — it is your scratch pad.
 
@@ -211,17 +233,20 @@ def main() -> None:
     then call `play_headless` (fast, invisible) or `play_rendered` (watchable).
     Run it with:  python -m risk.learning.self_play
     """
+    from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
     from risk.app.factory import build_game
     from risk.app.setup import default_settings
 
-    # 1) Roster: an all-AI (RandomAgent) game. Change `n` for player count.
+    # 1) Roster: Raider vs Sentinel vs Empire. Change `seed` to rematch.
     ctx = build_game(default_settings(n=3, seed=0))
+    ctx.agents[0] = RaiderAgent(player_id=0, env=ctx.env, seed=123)
+    ctx.agents[1] = SentinelAgent(player_id=1, env=ctx.env, seed=456)
+    ctx.agents[2] = EmpireAgent(player_id=2, env=ctx.env, seed=789)
+    _print_roster(ctx)
 
-    # 2) Swap in your own agents per seat (index must equal player_id):
-    #    from risk.agents.random_agent import RandomAgent
+    # 2) To test your learner, replace one seat:
     #    from risk.learning.my_agent import MyAgent
     #    ctx.agents[0] = MyAgent(player_id=0, env=ctx.env)
-    #    ctx.agents[1] = RandomAgent(player_id=1, env=ctx.env, seed=123)
 
     # 3) (Optional) collect transitions for training.
     transitions: list = []
@@ -230,9 +255,11 @@ def main() -> None:
         transitions.append((state, action, result.info))
 
     # 4) Run one episode. Use play_rendered(ctx, fps=30) to watch it instead.
-    winner = play_headless(ctx, max_steps=50_000, on_step=collect)
+    winner = play_headless(ctx, max_steps=150_000, on_step=collect)
+    terminated = ctx.env.is_terminal()
 
-    print(f"winner = {winner}")
+    print(f"winner = {_winner_text(ctx, winner)}")
+    print(f"terminated = {terminated}")
     _print_player_summary(ctx, len(transitions))
 
 

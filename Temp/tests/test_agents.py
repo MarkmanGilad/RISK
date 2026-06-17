@@ -4,6 +4,18 @@ from __future__ import annotations
 import pytest
 
 from risk.agents.base_agent import BaseAgent
+from risk.agents.heuristic_agent import (
+    AttackAgent,
+    BSRAgent,
+    CompositeAgent,
+    ContinentAgent,
+    EmpireAgent,
+    RaiderAgent,
+    SentinelAgent,
+    ShapeAgent,
+    attacker_roll_edge,
+    battle_win_probability,
+)
 from risk.agents.human_agent import HumanAgent
 from risk.agents.random_agent import RandomAgent
 from risk.game.actions import (
@@ -118,3 +130,47 @@ def test_random_agents_play_many_steps_without_crashing() -> None:
         chosen = a.act([], s)
         assert chosen is not None
         env.step(chosen)
+
+
+# --- Heuristic agents -----------------------------------------------------
+
+
+def test_attacker_roll_edge_uses_exact_risk_probabilities() -> None:
+    assert attacker_roll_edge(3, 2) == pytest.approx(2890 / 7776)
+    assert attacker_roll_edge(1, 1) == pytest.approx(15 / 36)
+    assert battle_win_probability(2, 1) == pytest.approx(15 / 36)
+
+
+def test_heuristic_agents_choose_valid_actions() -> None:
+    env = _fresh_env(seed=17)
+    agents = [
+        AttackAgent(player_id=0, env=env, seed=10),
+        BSRAgent(player_id=1, env=env, seed=11),
+        CompositeAgent(player_id=2, env=env, seed=12),
+    ]
+
+    for _ in range(250):
+        if env.is_terminal():
+            break
+        state = env.current_state()
+        action = agents[state.current_player_index].act([], state)
+        assert action is not None
+        env.step(action)
+
+
+def test_all_tiered_heuristic_agents_construct() -> None:
+    env = _fresh_env(seed=23)
+    agents = [
+        AttackAgent(player_id=0, env=env),
+        BSRAgent(player_id=0, env=env),
+        ContinentAgent(player_id=0, env=env),
+        ShapeAgent(player_id=0, env=env),
+        CompositeAgent(player_id=0, env=env),
+        RaiderAgent(player_id=0, env=env),
+        SentinelAgent(player_id=0, env=env),
+        EmpireAgent(player_id=0, env=env),
+    ]
+
+    for agent in agents:
+        action = agent.act([], env.current_state())
+        assert action is not None

@@ -10,7 +10,7 @@ Interaction:
   to delete).
 - Click a color swatch to cycle through the palette (skipping colors
   already in use by other seats).
-- Click the seat-type cell to toggle between "Human" and "AI".
+- Click the seat-type cell to cycle through Human / Random / Raider / Sentinel / Empire.
 - Click **Start Game** to begin; the button is greyed out while the
   config is invalid (duplicate colors, blank names).
 """
@@ -21,6 +21,7 @@ from typing import Optional
 import pygame
 
 from risk.game.settings import GameSettings
+from risk.game.player import AGENT_KIND_LABELS
 from risk.ui.input.init_screen import DEFAULT_COLORS, InitScreenState
 
 
@@ -48,7 +49,7 @@ COLUMN_X = {
 }
 NAME_W = 270
 SWATCH_W = 60
-KIND_W = 100
+KIND_W = 130
 
 
 class _Button:
@@ -183,7 +184,11 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
             kind_rects.append(kind_rect)
             pygame.draw.rect(screen, PANEL_HI, kind_rect, border_radius=4)
             pygame.draw.rect(screen, MUTED, kind_rect, 1, border_radius=4)
-            kind_label = font.render(seat.agent_kind.title(), True, TEXT)
+            kind_label = font.render(
+                AGENT_KIND_LABELS.get(seat.agent_kind, seat.agent_kind.title()),
+                True,
+                TEXT,
+            )
             screen.blit(kind_label, kind_label.get_rect(center=kind_rect.center))
 
         # --- start button + validation ---------------------------------
@@ -266,10 +271,7 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
                     else:
                         for i, r in enumerate(kind_rects):
                             if r.collidepoint(pos):
-                                state.set_agent_kind(
-                                    i,
-                                    "ai" if state.seats[i].agent_kind == "human" else "human",
-                                )
+                                state.next_agent_kind(i)
                                 break
 
 

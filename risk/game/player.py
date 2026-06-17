@@ -11,7 +11,24 @@ from dataclasses import dataclass
 from typing import Final
 
 
-ALLOWED_AGENT_KINDS: Final[frozenset[str]] = frozenset({"human", "ai"})
+AGENT_KIND_ORDER: Final[tuple[str, ...]] = (
+    "human",
+    "random",
+    "raider",
+    "sentinel",
+    "empire",
+)
+AGENT_KIND_LABELS: Final[dict[str, str]] = {
+    "human": "Human",
+    "random": "Random",
+    "raider": "Raider",
+    "sentinel": "Sentinel",
+    "empire": "Empire",
+    "ai": "AI",
+}
+ALLOWED_AGENT_KINDS: Final[frozenset[str]] = frozenset(
+    {*AGENT_KIND_ORDER, "ai"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,4 +58,9 @@ class Player:
             )
 
 
-__all__ = ["Player", "ALLOWED_AGENT_KINDS"]
+__all__ = [
+    "AGENT_KIND_LABELS",
+    "AGENT_KIND_ORDER",
+    "ALLOWED_AGENT_KINDS",
+    "Player",
+]

@@ -37,7 +37,12 @@ def test_player_is_frozen() -> None:
         p.id = 1  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("bad", ["", "ROBOT", "HUMAN", "scripted", "random"])
+@pytest.mark.parametrize("kind", ["human", "ai", "random", "raider", "sentinel", "empire"])
+def test_player_accepts_agent_kinds(kind: str) -> None:
+    assert _player(agent_kind=kind).agent_kind == kind
+
+
+@pytest.mark.parametrize("bad", ["", "ROBOT", "HUMAN", "scripted"])
 def test_player_rejects_unknown_agent_kind(bad: str) -> None:
     with pytest.raises(ValueError):
         _player(agent_kind=bad)

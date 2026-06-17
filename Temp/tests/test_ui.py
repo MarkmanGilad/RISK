@@ -8,7 +8,7 @@ import pytest
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 from risk.ui.input.hit_test import TerritoryHitTester
-from risk.ui.input.init_screen import DEFAULT_COLORS, InitScreenState
+from risk.ui.input.init_screen import InitScreenState
 
 
 # --- hit testing ----------------------------------------------------------
@@ -112,10 +112,20 @@ def test_init_screen_set_name_and_color_and_kind() -> None:
     s = InitScreenState()
     s.set_name(0, "Alice")
     s.set_color(1, (12, 34, 56))
-    s.set_agent_kind(2, "ai")
+    s.set_agent_kind(2, "raider")
     assert s.seats[0].name == "Alice"
     assert s.seats[1].color == (12, 34, 56)
-    assert s.seats[2].agent_kind == "ai"
+    assert s.seats[2].agent_kind == "raider"
+
+
+def test_init_screen_cycles_agent_kinds() -> None:
+    s = InitScreenState()
+    assert s.seats[0].agent_kind == "human"
+    assert s.next_agent_kind(0) == "random"
+    assert s.next_agent_kind(0) == "raider"
+    assert s.next_agent_kind(0) == "sentinel"
+    assert s.next_agent_kind(0) == "empire"
+    assert s.next_agent_kind(0) == "human"
 
 
 def test_init_screen_rejects_invalid_inputs() -> None:
@@ -135,13 +145,13 @@ def test_init_screen_build_settings_round_trip() -> None:
     s.set_player_count(4)
     s.set_name(0, "Alice")
     s.set_name(1, "Bob")
-    s.set_agent_kind(2, "ai")
-    s.set_agent_kind(3, "ai")
+    s.set_agent_kind(2, "raider")
+    s.set_agent_kind(3, "empire")
     settings = s.build_settings(seed=99)
     assert settings.player_count == 4
     assert settings.seed == 99
     assert [p.name for p in settings.players] == ["Alice", "Bob", "Player 3", "Player 4"]
-    assert {p.agent_kind for p in settings.players} == {"human", "ai"}
+    assert {p.agent_kind for p in settings.players} == {"human", "raider", "empire"}
 
 
 def test_init_screen_blocks_start_on_duplicate_colors() -> None:

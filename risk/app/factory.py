@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from risk.agents.base_agent import BaseAgent
-from risk.agents.human_agent import HumanAgent
+from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
 from risk.agents.random_agent import RandomAgent
 from risk.app.game import Game
 from risk.game.environment import Environment
@@ -35,14 +35,25 @@ def build_agents(settings: GameSettings, env: Environment) -> list[BaseAgent]:
     """
     out: list[BaseAgent] = []
     for p in settings.players:
+        seed = (settings.seed or 0) + p.id + 1
         if p.agent_kind == "human":
+            from risk.agents.human_agent import HumanAgent
+
             out.append(HumanAgent(player_id=p.id, env=env, settings=settings))
-        else:
+        elif p.agent_kind in {"ai", "random"}:
             out.append(
                 RandomAgent(
-                    player_id=p.id, env=env, seed=(settings.seed or 0) + p.id + 1
+                    player_id=p.id, env=env, seed=seed
                 )
             )
+        elif p.agent_kind == "raider":
+            out.append(RaiderAgent(player_id=p.id, env=env, seed=seed))
+        elif p.agent_kind == "sentinel":
+            out.append(SentinelAgent(player_id=p.id, env=env, seed=seed))
+        elif p.agent_kind == "empire":
+            out.append(EmpireAgent(player_id=p.id, env=env, seed=seed))
+        else:
+            raise ValueError(f"Unknown agent_kind {p.agent_kind!r}")
     return out
 
 
