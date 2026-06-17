@@ -11,7 +11,7 @@ import pygame
 
 from risk.constants import card_set_value
 from risk.game.phase import Phase
-from risk.game.player import Player
+from risk.game.player import AGENT_KIND_LABELS, Player
 from risk.game.settings import GameSettings
 from risk.game.state import State
 from risk.ui.input.human_input import HudActionPanelModel
@@ -76,8 +76,9 @@ class HudPanel:
         swatch = pygame.Rect(x, y + 3, 14, 14)
         pygame.draw.rect(target, player.color, swatch)
         pygame.draw.rect(target, self.FG, swatch, 1)
+        kind_label = AGENT_KIND_LABELS.get(player.agent_kind, player.agent_kind.title())
         label = self.font.render(
-            f"{player.name}  ({player.agent_kind})", True, self.FG
+            f"{player.name}  ({kind_label})", True, self.FG
         )
         target.blit(label, (x + 22, y))
         y += line_h + 4
@@ -104,8 +105,9 @@ class HudPanel:
             tag = "X" if p.id in state.eliminated else ("*" if p.id == pid else " ")
             sw = pygame.Rect(x, y + 3, 10, 10)
             pygame.draw.rect(target, p.color, sw)
+            p_kind_label = AGENT_KIND_LABELS.get(p.agent_kind, p.agent_kind.title())
             line = self.font.render(
-                f"{tag} {p.name[:8]:<8} terr={n_owned:>2} arm={n_armies:>3} cards={n_cards}",
+                f"{tag} {p.name[:6]:<6} {p_kind_label:<8} t={n_owned:>2} a={n_armies:>3} c={n_cards}",
                 True,
                 self.FG,
             )
