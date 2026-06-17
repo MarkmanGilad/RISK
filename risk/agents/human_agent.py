@@ -135,7 +135,7 @@ class HumanAgent(BaseAgent):
         state = self.env.current_state()
         if state.phase is not Phase.REINFORCE:
             return False
-        if action.total != state.reinforcement_budget:
+        if action.total > state.reinforcement_budget:
             return False
         pid = state.current_player_index
         topology = self.env.topology

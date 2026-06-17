@@ -344,6 +344,21 @@ rules:
   `main()` is a deliberately editable training scratch pad — build a
   roster, swap in your learning agent for one seat, run a driver — runnable
   via `python -m risk.learning.self_play`.
+- **`graph_adapter.py` — `state_to_pyg(state, topology, settings)`.**
+  Converts a game snapshot into a `torch_geometric.data.Data` graph: one
+  node per territory (continent one-hot + owner one-hot + army count),
+  `edge_index` straight from `BoardTopology.edge_index()`, and a global `u`
+  vector (whose turn, phase, cards, continent bonuses, reinforcement
+  budget, eliminated players, ...). See [Docs/GraphAdapter.md](Docs/GraphAdapter.md)
+  for the full field-by-field layout and the design decisions behind it.
+- **`action_encoder.py` — `ActionEncoder`.** Converts `Action` candidates
+  (typically `env.legal_actions()`) into a `[N, 4]` long tensor of
+  `(stage, t1, t2, n)` rows for scoring `Q(s, a)` per candidate — the
+  encoding each `Action` subclass exposes itself via
+  `Action.dqn_index()` in `risk/game/actions.py`. See
+  [Docs/Action.md](Docs/Action.md)'s "Representing actions for DQN"
+  section for why this shape (score legal candidates, not a fixed
+  flat action-ID table) and the full per-stage tuple layout.
 
 ### `Temp/tests/` — the test suite
 
@@ -381,10 +396,23 @@ automatically at the top of the files that need it).
 ## Roadmap
 
 The architecture exists specifically to make this last step a clean
-addition rather than a rewrite:
+addition rather than a rewrite. Done so far:
 
-- A graph/tensor adapter consuming `(BoardTopology, State)` — territory
-  ownership/army one-hot + `edge_index()` — to feed a GCN.
+- ✅ A graph adapter (`risk.learning.graph_adapter.state_to_pyg`) turning a
+  game snapshot into a `torch_geometric.data.Data` object for a GCN.
+- ✅ An action representation (`risk.learning.action_encoder.ActionEncoder`)
+  scoring legal candidates rather than indexing a fixed action-ID table —
+  the piece that makes a huge, variable-shaped action space tractable for
+  DQN.
+- ✅ Multi-step reinforcement — the engine now allows placing part of a
+  turn's budget and continuing later, which was the one combinatorial
+  action standing in the way of a clean per-candidate `Q(s, a)` design
+  (see [Docs/RL-Prep-Changes.md](Docs/RL-Prep-Changes.md)).
+
+Still open:
+
+- The actual GCN + per-stage scoring heads — `Q(s, a) = head[stage](graph_embedding(s), t1, t2, n)`,
+  per [Docs/Action.md](Docs/Action.md)'s "Network wiring" section.
 - A DQN training loop built on `risk.learning.SelfPlay`, training against
   the bundled heuristic agents (`RandomAgent` → `RaiderAgent` /
   `SentinelAgent` / `EmpireAgent`) as an opponent curriculum.

@@ -103,6 +103,65 @@ def test_reinforcement_includes_continent_bonus() -> None:
     assert expected >= max(MIN_REINFORCEMENT, owned // 3) + bonus
 
 
+# --- multi-step reinforcement ----------------------------------------------
+
+
+def test_reinforce_partial_placement_stays_in_reinforce() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    pid = s.current_player_index
+    budget = s.reinforcement_budget
+    assert budget >= 2, "test needs a budget of at least 2 to split"
+    owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
+
+    env.step(ReinforcementAction(placements={owned[0]: 1}))
+    assert s.phase is Phase.REINFORCE
+    assert s.current_player_index == pid
+    assert s.reinforcement_budget == budget - 1
+
+    # Placing the rest finishes reinforcement and advances to ATTACK.
+    env.step(ReinforcementAction(placements={owned[0]: budget - 1}))
+    assert s.phase is Phase.ATTACK
+    assert s.reinforcement_budget == 0
+
+
+def test_reinforce_full_budget_in_one_step_still_ends_phase() -> None:
+    """A human (or any agent) placing the whole budget at once keeps working
+    exactly as before — multi-step is optional, not required."""
+    env = _fresh_env()
+    s = env.current_state()
+    owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
+    budget = s.reinforcement_budget
+
+    env.step(ReinforcementAction(placements={owned[0]: budget}))
+    assert s.phase is Phase.ATTACK
+    assert s.reinforcement_budget == 0
+
+
+def test_reinforce_rejects_total_over_budget() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
+    with pytest.raises(ValueError):
+        env.step(ReinforcementAction(placements={owned[0]: s.reinforcement_budget + 1}))
+
+
+def test_legal_reinforce_offers_one_half_all_buckets() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    budget = s.reinforcement_budget
+    assert budget >= 4, "test needs a budget where one/half/all are distinct"
+    owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
+
+    acts = [a for a in env.legal_actions() if isinstance(a, ReinforcementAction)]
+    amounts_for_first = sorted(
+        a.total for a in acts if owned[0] in a.placements
+    )
+    assert amounts_for_first == sorted({1, budget // 2, budget})
+    # Bounded: at most 3 amounts per owned territory, never one-per-army-unit.
+    assert len(acts) == len(owned) * len(amounts_for_first)
+
+
 # --- legal actions per phase ----------------------------------------------
 
 

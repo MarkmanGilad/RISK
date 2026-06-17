@@ -168,10 +168,11 @@ class Environment:
 
         Note: ReinforcementAction is parameterized; enumerating *all* possible
         placements is exponential. For attacks/fortify we enumerate exactly.
-        For reinforcement we yield one canonical "place-all-on-first-territory"
-        per owned territory, plus the per-territory free-form is also legal.
-        Tests / agents that want the full continuous space should construct
-        their own ReinforcementAction and let `step` validate it.
+        For reinforcement we yield a bucketed amount (one / half / all of the
+        remaining budget) per owned territory — reinforcement is multi-step,
+        so any split is still reachable over a few actions. Agents that want
+        a specific split should construct their own ReinforcementAction and
+        let `step` validate it.
         """
         s = self.current_state()
         if s.phase is Phase.REINFORCE:
@@ -233,18 +234,21 @@ class Environment:
             idx = self.topology.index_of(terr)
             if s.owners[idx] != pid:
                 raise ValueError(f"Player {pid} does not own {terr}")
-        if action.total != s.reinforcement_budget:
+        if action.total > s.reinforcement_budget:
             raise ValueError(
-                f"Reinforcement total {action.total} != budget {s.reinforcement_budget}"
+                f"Reinforcement total {action.total} exceeds budget {s.reinforcement_budget}"
             )
-        # Apply.
+        # Apply. Reinforcement is multi-step: a player may place part of the
+        # budget and stay in REINFORCE to place the rest in a later action;
+        # the phase only advances once the whole budget is placed.
         for terr, count in action.placements.items():
             idx = self.topology.index_of(terr)
             s.armies[idx] += count
-        s.reinforcement_budget = 0
-        s.phase = Phase.ATTACK
-        self._conquered_this_turn = False
-        return {"placed": dict(action.placements)}
+        s.reinforcement_budget -= action.total
+        if s.reinforcement_budget == 0:
+            s.phase = Phase.ATTACK
+            self._conquered_this_turn = False
+        return {"placed": dict(action.placements), "remaining_budget": s.reinforcement_budget}
 
     def _trade_in_set(self, s: State, pid: int, trio: tuple[Card, Card, Card]) -> int:
         for c in trio:
@@ -299,12 +303,18 @@ class Environment:
     def _legal_reinforce(self, s: State) -> Iterable[Action]:
         pid = s.current_player_index
         owned = [self.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
-        if not owned or s.reinforcement_budget <= 0:
+        budget = s.reinforcement_budget
+        if not owned or budget <= 0:
             return
-        # One canonical action per territory (all on one) — agents may also
-        # construct mixed placements and submit those.
+        # Bucketed amounts per territory — one, half (//2), and all of the
+        # remaining budget — instead of enumerating every integer amount
+        # (which would scale with army count, not board size). Reinforcement
+        # is multi-step, so any split is still reachable over a few actions;
+        # agents may also construct their own placements and submit those.
+        amounts = sorted({amt for amt in (1, budget // 2, budget) if amt > 0})
         for t in owned:
-            yield ReinforcementAction(placements={t: s.reinforcement_budget})
+            for amt in amounts:
+                yield ReinforcementAction(placements={t: amt})
 
     # --- attack ----------------------------------------------------------
 

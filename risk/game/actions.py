@@ -7,14 +7,41 @@ validity (field types, value ranges, known territory ids).
 
 Round-trips through `to_dict` / `ActionCodec.from_dict` for replay, logging,
 and future RL trajectories.
+
+Each subclass also knows how to encode itself as a `(stage, t1, t2, n)`
+integer tuple via `dqn_index()` — see `Docs/Action.md`'s "Representing
+actions for DQN" section. This stays plain Python (no torch import here);
+`risk.learning.action_encoder.ActionEncoder` is what turns a batch of these
+tuples into tensors.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional
+from enum import IntEnum
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from risk.constants import MAX_ATTACK_DICE, MAX_DEFEND_DICE
 from risk.game.phase import Phase
+
+if TYPE_CHECKING:
+    from risk.game.board_topology import BoardTopology
+    from risk.game.state import State
+
+
+class ActionStage(IntEnum):
+    """The DQN action-representation "stage" a candidate belongs to.
+
+    Distinct from `Phase`: `REINFORCE` splits into two stages here
+    (trading cards vs. placing armies are different decisions that happen
+    to share one game `Phase`). `SETUP`/`GAME_OVER` aren't agent decisions
+    so they have no stage.
+    """
+
+    TRADE_IN = 0
+    REINFORCE_PLACE = 1
+    ATTACK = 2
+    OCCUPY = 3
+    FORTIFY = 4
 
 
 # --- base -----------------------------------------------------------------
@@ -22,9 +49,14 @@ from risk.game.phase import Phase
 
 @dataclass(frozen=True, slots=True)
 class Action:
-    """Abstract base for all player actions. Subclasses set `phase`."""
+    """Abstract base for all player actions. Subclasses set `phase`/`stage`."""
+
+    # Sentinel for an unused t1/t2 slot in `dqn_index()` (e.g. StopAttackAction,
+    # skipped FortifyAction).
+    NONE_INDEX: ClassVar[int] = -1
 
     phase: ClassVar[Phase]
+    stage: ClassVar[ActionStage]
 
     @staticmethod
     def _check_territory(name: str, topology) -> None:
@@ -34,6 +66,12 @@ class Action:
             raise ValueError(f"Unknown territory: {name!r}")
 
     def to_dict(self) -> dict[str, Any]:  # pragma: no cover - abstract
+        raise NotImplementedError
+
+    def dqn_index(
+        self, topology: "BoardTopology", state: Optional["State"] = None
+    ) -> tuple[int, int, int, int]:  # pragma: no cover - abstract
+        """Encode this action as `(stage, t1, t2, n)` — see `Docs/Action.md`."""
         raise NotImplementedError
 
 
@@ -46,6 +84,7 @@ class ReinforcementAction(Action):
 
     placements: dict[str, int]
     phase: ClassVar[Phase] = Phase.REINFORCE
+    stage: ClassVar[ActionStage] = ActionStage.REINFORCE_PLACE
 
     def __post_init__(self) -> None:
         if not isinstance(self.placements, dict):
@@ -69,13 +108,23 @@ class ReinforcementAction(Action):
     def validate_against(self, topology, budget: Optional[int] = None) -> None:
         for terr in self.placements:
             self._check_territory(terr, topology)
-        if budget is not None and self.total != budget:
+        if budget is not None and self.total > budget:
             raise ValueError(
-                f"ReinforcementAction total {self.total} does not match budget {budget}"
+                f"ReinforcementAction total {self.total} exceeds budget {budget}"
             )
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "reinforce", "placements": dict(self.placements)}
+
+    def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
+        if len(self.placements) != 1:
+            raise ValueError(
+                "dqn_index only supports a single-territory ReinforcementAction "
+                "(the shape Environment.legal_actions() generates); a custom "
+                "multi-territory split has no representation in this tuple."
+            )
+        (terr, amount), = self.placements.items()
+        return (int(self.stage), topology.index_of(terr), self.NONE_INDEX, amount)
 
 
 # --- attack ---------------------------------------------------------------
@@ -87,6 +136,7 @@ class AttackAction(Action):
     to_territory: str
     dice: int
     phase: ClassVar[Phase] = Phase.ATTACK
+    stage: ClassVar[ActionStage] = ActionStage.ATTACK
 
     def __post_init__(self) -> None:
         if not isinstance(self.from_territory, str) or not self.from_territory:
@@ -112,6 +162,14 @@ class AttackAction(Action):
             "dice": self.dice,
         }
 
+    def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
+        return (
+            int(self.stage),
+            topology.index_of(self.from_territory),
+            topology.index_of(self.to_territory),
+            self.dice,
+        )
+
 
 # --- stop attack ----------------------------------------------------------
 
@@ -121,9 +179,13 @@ class StopAttackAction(Action):
     """Signal end-of-attack phase. Transitions to FORTIFY."""
 
     phase: ClassVar[Phase] = Phase.ATTACK
+    stage: ClassVar[ActionStage] = ActionStage.ATTACK
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "stop_attack"}
+
+    def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
+        return (int(self.stage), self.NONE_INDEX, self.NONE_INDEX, 0)
 
 
 # --- trade in cards -------------------------------------------------------
@@ -140,6 +202,7 @@ class TradeInAction(Action):
 
     card_indices: tuple[int, int, int]
     phase: ClassVar[Phase] = Phase.REINFORCE
+    stage: ClassVar[ActionStage] = ActionStage.TRADE_IN
 
     def __post_init__(self) -> None:
         if not isinstance(self.card_indices, tuple) or len(self.card_indices) != 3:
@@ -154,6 +217,10 @@ class TradeInAction(Action):
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "trade_in", "card_indices": list(self.card_indices)}
+
+    def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
+        i, j, k = self.card_indices
+        return (int(self.stage), i, j, k)
 
 
 # --- occupy ---------------------------------------------------------------
@@ -170,6 +237,7 @@ class OccupyAction(Action):
 
     count: int
     phase: ClassVar[Phase] = Phase.OCCUPY
+    stage: ClassVar[ActionStage] = ActionStage.OCCUPY
 
     def __post_init__(self) -> None:
         if not isinstance(self.count, int) or isinstance(self.count, bool):
@@ -179,6 +247,15 @@ class OccupyAction(Action):
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "occupy", "count": self.count}
+
+    def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
+        if state is None or state.pending_attack is None:
+            raise ValueError(
+                "OccupyAction.dqn_index requires `state` with a pending_attack "
+                "(the from/to territories aren't stored on the action itself)"
+            )
+        pa = state.pending_attack
+        return (int(self.stage), pa.from_index, pa.to_index, self.count)
 
 
 # --- fortify --------------------------------------------------------------
@@ -192,6 +269,7 @@ class FortifyAction(Action):
     to_territory: Optional[str]
     count: int
     phase: ClassVar[Phase] = Phase.FORTIFY
+    stage: ClassVar[ActionStage] = ActionStage.FORTIFY
 
     def __post_init__(self) -> None:
         if not isinstance(self.count, int) or isinstance(self.count, bool):
@@ -225,6 +303,16 @@ class FortifyAction(Action):
             "to_territory": self.to_territory,
             "count": self.count,
         }
+
+    def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
+        if self.is_skip:
+            return (int(self.stage), self.NONE_INDEX, self.NONE_INDEX, 0)
+        return (
+            int(self.stage),
+            topology.index_of(self.from_territory),
+            topology.index_of(self.to_territory),
+            self.count,
+        )
 
 
 # --- round-trip -----------------------------------------------------------
@@ -262,6 +350,7 @@ class ActionCodec:
 __all__ = [
     "Action",
     "ActionCodec",
+    "ActionStage",
     "ReinforcementAction",
     "AttackAction",
     "StopAttackAction",

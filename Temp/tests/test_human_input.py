@@ -168,6 +168,15 @@ def test_reinforce_left_click_increments_and_button_submits():
     # Pending placements emptied on successful submit.
     assert controller.pending_placements == {}
 
+    # End-to-end: a human placing the whole budget in one go still finishes
+    # REINFORCE in a single step, unaffected by reinforcement now allowing
+    # multi-step (partial) placements for non-human agents.
+    action = agents[0].act([], env.current_state())
+    assert action is not None
+    env.step(action)
+    assert env.current_state().phase is Phase.ATTACK
+    assert env.current_state().reinforcement_budget == 0
+
 
 def test_reinforce_mixed_placement_across_territories_submits():
     # Regression: a placement spread over several owned territories must be

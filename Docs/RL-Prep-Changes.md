@@ -187,3 +187,118 @@ Re-verified: `python -m pytest Temp/tests -q` → 204 passed, 1 skipped;
 only within that one file's `Player`/`Card` unit tests — different enough
 purpose from the `conftest.py` builders that folding them in would blur
 what each helper is for, for no real line-count win.
+
+## Follow-up pass: multi-step reinforcement (DQN action-space prep)
+
+Context: designing how to feed actions into a DQN ([Docs/Action.md](Action.md)'s
+"Representing actions for DQN" section) surfaced that `ReinforcementAction`
+was the one combinatorial action in the game — it required placing the
+*entire* turn's budget in a single action (`total == budget`, exactly),
+across any split of owned territories. That doesn't fit the
+per-candidate-`Q(s,a)` scoring design: there's no small, bounded way to
+enumerate "every possible split."
+
+**Rule change — reinforcement is now multi-step.** A `ReinforcementAction`
+may place *up to* the remaining budget (`total <= budget`, not `==`); the
+environment decrements the budget instead of zeroing it, and only advances
+`REINFORCE → ATTACK` once the budget reaches exactly `0`. Placing the whole
+budget in one action (the only thing the human UI ever does) still ends
+the phase in a single step, unchanged — multi-step is an option the
+*engine* now permits, not something every caller has to use.
+
+- `risk/game/environment.py` — `_apply_reinforce`: `>` instead of `!=` for
+  the over-budget check; budget decrements; phase transition is now
+  conditional on `budget == 0`.
+- `risk/game/actions.py` — `ReinforcementAction.validate_against`: same
+  `>` relaxation, so the action's own validation agrees with what
+  `Environment` enforces instead of being stricter than the real rule.
+- `risk/agents/human_agent.py` — `_is_legal_reinforce` had its *own* exact-
+  match check (a generic submission safety-net used by `act()`/`submit()`,
+  separate from the click-driven UI). Relaxed the same way, or it would
+  have rejected otherwise-legal partial reinforcements submitted outside
+  the UI's own flow.
+- **`HumanInputController._submit_reinforce` (the actual mouse-driven UI)
+  was deliberately left untouched** — it still requires
+  `placed == budget` before enabling "Place Armies," so human play is
+  unaffected. Added an end-to-end test driving a human agent through the
+  real click → submit → `act()` → `env.step()` path confirming it still
+  reaches `ATTACK` with `budget == 0` in one step.
+
+**Bounding the AI candidate set.** Naively letting `legal_actions()` offer
+every integer amount (1..budget per owned territory) would scale with army
+count instead of board size — a budget of 100 would mean ~100× more
+reinforcement candidates than a budget of 3, for the same ~20 owned
+territories. Instead, `Environment._legal_reinforce` now yields a bucketed
+amount per territory — **`1`, `budget // 2`, `budget`** (deduplicated, so a
+budget of 1 yields a single candidate, not three identical ones). Candidate
+count for `REINFORCE_PLACE` stays `O(owned territories)` regardless of army
+count; any other split is still reachable over a few steps now that
+reinforcement is multi-step.
+
+Updated [`Action.md`](Action.md)'s `ReinforcementAction` section and its
+DQN tuple table/notes to match (dropped the now-stale "amount is constant
+this step" caveat — `n` is a real per-step choice now).
+
+**Verified:** added regression tests in `test_environment.py` (partial
+placement stays in `REINFORCE` and decrements budget; full-budget-in-one-
+step still ends the phase; over-budget placement still raises; the bucketed
+`legal_actions()` output matches `{1, budget//2, budget}` and stays bounded
+by `territories × buckets`) and the human end-to-end test in
+`test_human_input.py` described above. `python -m pytest Temp/tests -q` →
+208 passed (4 new), 1 skipped. `python -m risk.learning.self_play` and
+`python -m risk.app.main` both still run end-to-end (self-play step counts
+shift under the same seed vs. before, expected: `RandomAgent` now samples
+from a richer bucketed reinforcement candidate set, changing its RNG
+consumption pattern — not a bug).
+
+## Follow-up pass: action representation for DQN (implementation)
+
+[`Action.md`](Action.md)'s "Representing actions for DQN" section described
+the `(stage, t1, t2, n)` tuple design; this pass implements it.
+
+- **`risk/game/actions.py`** — added an `ActionStage` `IntEnum`
+  (`TRADE_IN=0, REINFORCE_PLACE=1, ATTACK=2, OCCUPY=3, FORTIFY=4`) and
+  `Action.NONE_INDEX = -1` (the sentinel for an unused `t1`/`t2` slot).
+  Every concrete `Action` subclass got a `stage: ClassVar[ActionStage]` and
+  a `dqn_index(topology, state=None) -> tuple[int, int, int, int]` method —
+  plain Python, no torch import added to the game core (mirrors how
+  `to_dict()` already works: each class knows how to serialize itself).
+  Two subtleties handled there rather than glossed over:
+  - `OccupyAction.dqn_index` needs `state` (not just `topology`) — its
+    `from`/`to` territories live on `state.pending_attack`, not on the
+    action itself. Raises clearly if `state` is omitted or has no pending
+    attack.
+  - `ReinforcementAction.dqn_index` raises if `placements` spans more than
+    one territory — that shape has no representation in this tuple by
+    design (`legal_actions()` never produces it; multi-territory splits
+    are a candidate-set design choice, not a tuple-encoding gap).
+- **`risk/learning/action_encoder.py`** (new) — `ActionEncoder`, the class
+  that batches a list of `Action`s into tensors: `encode_one` (single
+  tuple), `encode_many` (`[N, 4]` long tensor), and `encode_legal(env)` —
+  the convenience path that calls `env.legal_actions()` and encodes the
+  result in one call, passing both `topology` and `state` through
+  automatically so `OccupyAction` candidates encode correctly without the
+  caller having to remember why.
+
+**Verified against real game states**, not just isolated unit tests — drove
+an `Environment` through all 5 stages and checked every encoded row against
+a manually-computed expected tuple:
+- `REINFORCE`/`TRADE_IN` mixed candidates (both action types appear
+  together during `REINFORCE` when the hand holds cards).
+- `ATTACK`, including the `StopAttackAction` sentinel row `(ATTACK, -1, -1, 0)`.
+- `OCCUPY`, confirming `pending_attack.from_index`/`to_index` come through
+  correctly.
+- `FORTIFY`, both the skip sentinel and a real move.
+- Both intentional error paths (`OccupyAction` without `state`,
+  multi-territory `ReinforcementAction`) raise as designed.
+
+`python -m pytest Temp/tests -q` → 208 passed, 1 skipped (unchanged — this
+pass added no test-suite regressions; the verification above was done as
+standalone scripts against live `Environment` instances rather than
+checked-in tests, since it's exercising a not-yet-consumed encoding layer
+rather than existing game behavior).
+
+Updated [`Action.md`](Action.md) and [`README.md`](../README.md) (the
+`risk/learning/` folder tour and the Roadmap) to reference the real
+`ActionStage`/`Action.dqn_index`/`ActionEncoder` names instead of reading
+as an open proposal.
