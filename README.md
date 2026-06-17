@@ -30,7 +30,7 @@ python -m pytest Temp/tests -q       # run the test suite
    - [`risk/ui/` — input & rendering](#riskui--input--rendering)
    - [`risk/learning/` — self-play & training](#risklearning--self-play--training)
    - [`Temp/tests/` — the test suite](#temptests--the-test-suite)
-   - [`Assets/`, `Docs/`, `demos/`](#assets-docs-demos)
+   - [`Assets/`, `Docs/`](#assets-docs)
 5. [Testing](#testing)
 6. [Roadmap](#roadmap)
 
@@ -371,7 +371,7 @@ input controller, hit-testing, and app-level smoke tests. `conftest.py`
 holds the shared `make_settings()` / `make_env()` builders used across
 files instead of each test file hand-rolling its own.
 
-### `Assets/`, `Docs/`, `demos/`
+### `Assets/`, `Docs/`
 
 - **`Assets/RiskMap/`** — the board image, label sprite sheet, and
   `risk_map_data.json` (territory names, adjacency, continents/bonuses,
@@ -381,8 +381,6 @@ files instead of each test file hand-rolling its own.
   ([`BoardTopology.md`](Docs/BoardTopology.md), [`Action.md`](Docs/Action.md),
   [`GraphAdapter.md`](Docs/GraphAdapter.md)) plus a running changelog of
   larger changes ([`RL-Prep-Changes.md`](Docs/RL-Prep-Changes.md)).
-- **`demos/`** — standalone renderer-only scripts kept as graphics
-  references; not part of the playable game or its import graph.
 
 ---
 
