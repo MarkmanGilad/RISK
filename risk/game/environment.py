@@ -24,8 +24,7 @@ from risk.game.actions import (
     TradeInAction,
 )
 from risk.game.board_topology import BoardTopology
-from risk.game.card import Card, is_valid_set
-from risk.game.constants import (
+from risk.constants import (
     CARD_SYMBOLS,
     DIE_SIDES,
     MAX_ATTACK_DICE,
@@ -37,6 +36,7 @@ from risk.game.constants import (
     card_set_value,
     starting_armies_for,
 )
+from risk.game.card import Card, CardRules
 from risk.game.phase import Phase
 from risk.game.player import Player
 from risk.game.settings import GameSettings
@@ -218,8 +218,7 @@ class Environment:
         base = max(MIN_REINFORCEMENT, len(owned) // TERRITORIES_PER_REINFORCEMENT)
         bonus = 0
         for continent in self.topology.continents:
-            indices = [self.topology.index_of(t) for t in self.topology.territories_in(continent)]
-            if all(s.owners[i] == player_id for i in indices):
+            if self.topology.owns_continent(s.owners, continent, player_id):
                 bonus += self.topology.continent_bonus(continent)
         return base + bonus
 
@@ -264,7 +263,7 @@ class Environment:
         if any(i >= len(hand) for i in idxs):
             raise ValueError("Card index out of range")
         trio = tuple(hand[i] for i in idxs)
-        if not is_valid_set(trio):
+        if not CardRules.is_valid_set(trio):
             raise ValueError("Selected cards are not a valid set")
         value = self._trade_in_set(s, pid, trio)  # type: ignore[arg-type]
         s.reinforcement_budget += value
@@ -277,7 +276,7 @@ class Environment:
         for i in range(n):
             for j in range(i + 1, n):
                 for k in range(j + 1, n):
-                    if is_valid_set((hand[i], hand[j], hand[k])):
+                    if CardRules.is_valid_set((hand[i], hand[j], hand[k])):
                         yield TradeInAction(card_indices=(i, j, k))
 
     def trade_in_cards(self, cards: Sequence[Card]) -> int:
@@ -285,7 +284,7 @@ class Environment:
         s = self.current_state()
         if s.phase is not Phase.REINFORCE:
             raise ValueError("Trade-in only allowed during REINFORCE")
-        if not is_valid_set(cards):
+        if not CardRules.is_valid_set(cards):
             raise ValueError("Not a valid trade-in set")
         pid = s.current_player_index
         hand_counter = Counter(id(c) for c in s.hands[pid])

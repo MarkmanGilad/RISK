@@ -5,26 +5,16 @@ legality vs. ownership / armies / adjacency. That validation belongs
 to `Environment` (Phase 4). Construction only enforces structural
 validity (field types, value ranges, known territory ids).
 
-Round-trips through `to_dict` / `action_from_dict` for replay, logging,
+Round-trips through `to_dict` / `ActionCodec.from_dict` for replay, logging,
 and future RL trajectories.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, ClassVar, Optional
 
-from risk.game.constants import MAX_ATTACK_DICE, MAX_DEFEND_DICE
+from risk.constants import MAX_ATTACK_DICE, MAX_DEFEND_DICE
 from risk.game.phase import Phase
-
-
-# --- helpers --------------------------------------------------------------
-
-
-def _check_territory(name: str, topology) -> None:
-    if topology is None:
-        return
-    if name not in topology.territories:
-        raise ValueError(f"Unknown territory: {name!r}")
 
 
 # --- base -----------------------------------------------------------------
@@ -35,6 +25,13 @@ class Action:
     """Abstract base for all player actions. Subclasses set `phase`."""
 
     phase: ClassVar[Phase]
+
+    @staticmethod
+    def _check_territory(name: str, topology) -> None:
+        if topology is None:
+            return
+        if name not in topology.territories:
+            raise ValueError(f"Unknown territory: {name!r}")
 
     def to_dict(self) -> dict[str, Any]:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -71,7 +68,7 @@ class ReinforcementAction(Action):
 
     def validate_against(self, topology, budget: Optional[int] = None) -> None:
         for terr in self.placements:
-            _check_territory(terr, topology)
+            self._check_territory(terr, topology)
         if budget is not None and self.total != budget:
             raise ValueError(
                 f"ReinforcementAction total {self.total} does not match budget {budget}"
@@ -104,8 +101,8 @@ class AttackAction(Action):
             raise ValueError(f"dice must be in 1..{MAX_ATTACK_DICE}, got {self.dice}")
 
     def validate_against(self, topology) -> None:
-        _check_territory(self.from_territory, topology)
-        _check_territory(self.to_territory, topology)
+        self._check_territory(self.from_territory, topology)
+        self._check_territory(self.to_territory, topology)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -218,8 +215,8 @@ class FortifyAction(Action):
     def validate_against(self, topology) -> None:
         if self.is_skip:
             return
-        _check_territory(self.from_territory, topology)
-        _check_territory(self.to_territory, topology)
+        self._check_territory(self.from_territory, topology)
+        self._check_territory(self.to_territory, topology)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -233,48 +230,42 @@ class FortifyAction(Action):
 # --- round-trip -----------------------------------------------------------
 
 
-_REGISTRY: dict[str, type[Action]] = {
-    "reinforce": ReinforcementAction,
-    "attack": AttackAction,
-    "stop_attack": StopAttackAction,
-    "trade_in": TradeInAction,
-    "occupy": OccupyAction,
-    "fortify": FortifyAction,
-}
+class ActionCodec:
+    """Round-trips an `Action` through its `to_dict()` representation."""
 
-
-def action_from_dict(data: dict[str, Any]) -> Action:
-    t = data.get("type")
-    if t == "reinforce":
-        return ReinforcementAction(placements=dict(data["placements"]))
-    if t == "attack":
-        return AttackAction(
-            from_territory=data["from_territory"],
-            to_territory=data["to_territory"],
-            dice=int(data["dice"]),
-        )
-    if t == "stop_attack":
-        return StopAttackAction()
-    if t == "trade_in":
-        return TradeInAction(card_indices=tuple(int(i) for i in data["card_indices"]))
-    if t == "occupy":
-        return OccupyAction(count=int(data["count"]))
-    if t == "fortify":
-        return FortifyAction(
-            from_territory=data.get("from_territory"),
-            to_territory=data.get("to_territory"),
-            count=int(data["count"]),
-        )
-    raise ValueError(f"Unknown action type: {t!r}")
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> Action:
+        t = data.get("type")
+        if t == "reinforce":
+            return ReinforcementAction(placements=dict(data["placements"]))
+        if t == "attack":
+            return AttackAction(
+                from_territory=data["from_territory"],
+                to_territory=data["to_territory"],
+                dice=int(data["dice"]),
+            )
+        if t == "stop_attack":
+            return StopAttackAction()
+        if t == "trade_in":
+            return TradeInAction(card_indices=tuple(int(i) for i in data["card_indices"]))
+        if t == "occupy":
+            return OccupyAction(count=int(data["count"]))
+        if t == "fortify":
+            return FortifyAction(
+                from_territory=data.get("from_territory"),
+                to_territory=data.get("to_territory"),
+                count=int(data["count"]),
+            )
+        raise ValueError(f"Unknown action type: {t!r}")
 
 
 __all__ = [
     "Action",
+    "ActionCodec",
     "ReinforcementAction",
     "AttackAction",
     "StopAttackAction",
     "TradeInAction",
     "OccupyAction",
     "FortifyAction",
-    "action_from_dict",
 ]

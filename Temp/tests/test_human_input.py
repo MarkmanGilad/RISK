@@ -17,6 +17,7 @@ from risk.game.actions import (
     StopAttackAction,
     TradeInAction,
 )
+from .conftest import make_settings
 from risk.game.card import Card
 from risk.game.environment import Environment
 from risk.game.phase import Phase
@@ -32,18 +33,7 @@ from risk.ui.input.human_input import (
 
 
 def _settings(human_ids: set[int], n: int = 3, seed: int = 1) -> GameSettings:
-    return GameSettings(
-        players=tuple(
-            Player(
-                id=i,
-                name=f"P{i}",
-                color=(i * 30 + 10, i * 40 + 10, i * 50 + 10),
-                agent_kind="human" if i in human_ids else "ai",
-            )
-            for i in range(n)
-        ),
-        seed=seed,
-    )
+    return make_settings(n=n, seed=seed, agent_kind="ai", human_ids=human_ids)
 
 
 def _build(human_ids: set[int], seed: int = 1, n: int = 3):

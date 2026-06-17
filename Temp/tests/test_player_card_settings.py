@@ -4,12 +4,7 @@ from __future__ import annotations
 import pytest
 
 from risk.game.board_topology import BoardTopology
-from risk.game.card import (
-    Card,
-    find_valid_set,
-    is_valid_set,
-    validate_against_topology,
-)
+from risk.game.card import Card, CardRules
 from risk.game.player import Player
 from risk.game.settings import GameSettings
 
@@ -101,10 +96,10 @@ def test_card_validate_against_topology() -> None:
     ok = Card(territory_id="Alaska", symbol="infantry")
     bad = Card(territory_id="Atlantis", symbol="infantry")
     wild = Card(territory_id=None, symbol="wild")
-    validate_against_topology(ok, topo)        # no raise
-    validate_against_topology(wild, topo)      # no raise
+    CardRules.validate_against_topology(ok, topo)        # no raise
+    CardRules.validate_against_topology(wild, topo)      # no raise
     with pytest.raises(ValueError):
-        validate_against_topology(bad, topo)
+        CardRules.validate_against_topology(bad, topo)
 
 
 # --- Card trade-in sets ----------------------------------------------------
@@ -117,33 +112,33 @@ def _c(sym: str, terr: str | None = None) -> Card:
 
 
 def test_three_of_a_kind_is_valid() -> None:
-    assert is_valid_set([_c("infantry", "A"), _c("infantry", "B"), _c("infantry", "C")])
-    assert is_valid_set([_c("cavalry", "A"), _c("cavalry", "B"), _c("cavalry", "C")])
+    assert CardRules.is_valid_set([_c("infantry", "A"), _c("infantry", "B"), _c("infantry", "C")])
+    assert CardRules.is_valid_set([_c("cavalry", "A"), _c("cavalry", "B"), _c("cavalry", "C")])
 
 
 def test_one_of_each_is_valid() -> None:
-    assert is_valid_set([_c("infantry", "A"), _c("cavalry", "B"), _c("artillery", "C")])
+    assert CardRules.is_valid_set([_c("infantry", "A"), _c("cavalry", "B"), _c("artillery", "C")])
 
 
 def test_wilds_substitute() -> None:
     # Two infantry + 1 wild -> three of a kind
-    assert is_valid_set([_c("infantry", "A"), _c("infantry", "B"), _c("wild")])
+    assert CardRules.is_valid_set([_c("infantry", "A"), _c("infantry", "B"), _c("wild")])
     # 1 infantry + 1 cavalry + 1 wild -> one of each (wild as artillery)
-    assert is_valid_set([_c("infantry", "A"), _c("cavalry", "B"), _c("wild")])
+    assert CardRules.is_valid_set([_c("infantry", "A"), _c("cavalry", "B"), _c("wild")])
     # 1 regular + 2 wilds -> always valid (wilds can be anything)
-    assert is_valid_set([_c("artillery", "A"), _c("wild"), _c("wild")])
+    assert CardRules.is_valid_set([_c("artillery", "A"), _c("wild"), _c("wild")])
     # 3 wilds -> valid
-    assert is_valid_set([_c("wild"), _c("wild"), _c("wild")])
+    assert CardRules.is_valid_set([_c("wild"), _c("wild"), _c("wild")])
 
 
 def test_invalid_sets_rejected() -> None:
     # Two of one + one of another with no wild -> invalid
-    assert not is_valid_set(
+    assert not CardRules.is_valid_set(
         [_c("infantry", "A"), _c("infantry", "B"), _c("cavalry", "C")]
     )
     # Wrong card count
-    assert not is_valid_set([_c("infantry", "A"), _c("infantry", "B")])
-    assert not is_valid_set(
+    assert not CardRules.is_valid_set([_c("infantry", "A"), _c("infantry", "B")])
+    assert not CardRules.is_valid_set(
         [_c("infantry", "A"), _c("infantry", "B"), _c("infantry", "C"), _c("wild")]
     )
 
@@ -155,14 +150,14 @@ def test_find_valid_set_picks_a_subset() -> None:
         _c("infantry", "C"),
         _c("artillery", "D"),
     ]
-    trio = find_valid_set(hand)
+    trio = CardRules.find_valid_set(hand)
     assert trio is not None
-    assert is_valid_set(trio)
+    assert CardRules.is_valid_set(trio)
 
 
 def test_find_valid_set_returns_none_when_no_set() -> None:
     hand = [_c("infantry", "A"), _c("infantry", "B"), _c("cavalry", "C")]
-    assert find_valid_set(hand) is None
+    assert CardRules.find_valid_set(hand) is None
 
 
 # --- GameSettings ----------------------------------------------------------

@@ -1,21 +1,21 @@
-"""Shared, pygame-free game constants for the Risk engine.
+"""All game-rule constants and magic numbers for the Risk engine.
 
-Everything here is a plain value or a pure function. No state, no I/O,
-no pygame import. `Environment`, `State`, action classes, agents, and UI
-code may all read from this module without creating import cycles.
+Everything here is a plain value or a pure function — no state, no I/O, no
+pygame import. `Environment`, `State`, action classes, and agents all read
+from this module. Import with `from risk.constants import *`.
+
+UI-only constants (colors, layout, pacing) live in `risk.ui_constants`.
 """
 from __future__ import annotations
 
 from typing import Final
 
-
-# --- Players ---------------------------------------------------------------
+# --- Players -----------------------------------------------------------
 
 MIN_PLAYERS: Final[int] = 3
 MAX_PLAYERS: Final[int] = 6
 
 # Classic Risk starting armies per player count.
-# Indexed by player count for direct lookup.
 STARTING_ARMIES: Final[dict[int, int]] = {
     3: 35,
     4: 30,
@@ -24,7 +24,7 @@ STARTING_ARMIES: Final[dict[int, int]] = {
 }
 
 
-# --- Reinforcement ---------------------------------------------------------
+# --- Reinforcement -------------------------------------------------------
 
 # At the start of a turn, a player gets max(MIN_REINFORCEMENT,
 # owned_territories // TERRITORIES_PER_REINFORCEMENT) plus continent bonuses.
@@ -37,6 +37,29 @@ TERRITORIES_PER_REINFORCEMENT: Final[int] = 3
 MAX_ATTACK_DICE: Final[int] = 3
 MAX_DEFEND_DICE: Final[int] = 2
 DIE_SIDES: Final[int] = 6
+
+# Exact one-roll attacker win probabilities for Risk dice. Keys are
+# (attacker_dice, defender_dice); values are the probability that the
+# attacker inflicts more losses than the defender on that roll.
+ATTACKER_ROLL_EDGE: Final[dict[tuple[int, int], float]] = {
+    (1, 1): 15 / 36,
+    (1, 2): 55 / 216,
+    (2, 1): 125 / 216,
+    (2, 2): 295 / 1296,
+    (3, 1): 855 / 1296,
+    (3, 2): 2890 / 7776,
+}
+
+# Full outcome distribution for a single roll: (attacker_dice, defender_dice)
+# -> tuple of (attacker_losses, defender_losses, probability).
+ROLL_OUTCOMES: Final[dict[tuple[int, int], tuple[tuple[int, int, float], ...]]] = {
+    (1, 1): ((1, 0, 21 / 36), (0, 1, 15 / 36)),
+    (1, 2): ((1, 0, 161 / 216), (0, 1, 55 / 216)),
+    (2, 1): ((1, 0, 91 / 216), (0, 1, 125 / 216)),
+    (2, 2): ((2, 0, 581 / 1296), (1, 1, 420 / 1296), (0, 2, 295 / 1296)),
+    (3, 1): ((1, 0, 441 / 1296), (0, 1, 855 / 1296)),
+    (3, 2): ((2, 0, 2275 / 7776), (1, 1, 2611 / 7776), (0, 2, 2890 / 7776)),
+}
 
 
 # --- Cards -----------------------------------------------------------------
@@ -57,8 +80,9 @@ CARD_SET_INCREMENT_AFTER_FIXED: Final[int] = 5
 def card_set_value(trade_in_index: int) -> int:
     """Reinforcement bonus awarded for the n-th card set traded in (0-based).
 
-    The first six values come from :data:`CARD_SET_VALUES`. From the seventh
-    trade-in (index 6) onward each set is worth 5 more than the previous.
+    The first six values come from :data:`CARD_SET_VALUES`. From the
+    seventh trade-in (index 6) onward each set is worth 5 more than the
+    previous.
     """
     if trade_in_index < 0:
         raise ValueError(f"trade_in_index must be >= 0, got {trade_in_index}")
@@ -86,6 +110,8 @@ __all__ = [
     "MAX_ATTACK_DICE",
     "MAX_DEFEND_DICE",
     "DIE_SIDES",
+    "ATTACKER_ROLL_EDGE",
+    "ROLL_OUTCOMES",
     "CARD_SYMBOLS",
     "WILD_SYMBOL",
     "MAX_CARDS_IN_HAND",

@@ -20,17 +20,10 @@ import pygame
 
 from risk.agents.human_agent import HumanAgent
 from risk.app.factory import GameContext
-from risk.app.marker import ActionMarker, action_report, describe_action
+from risk.app.marker import ActionMarker
 from risk.app.pacer import AITickPacer
 from risk.app.view import GameView
-
-# Marker color for the last AI action overlay.
-AI_MARKER_RGB = (255, 230, 80)
-
-END_LINGER_MS = 2000
-WIN_BG      = (10, 10, 14)
-WIN_FG      = (255, 215, 0)
-WIN_SUB_FG  = (200, 200, 200)
+from risk.ui_constants import AI_MARKER_RGB, WIN_SCREEN_FG as WIN_FG, WIN_SCREEN_SUB_FG as WIN_SUB_FG
 
 
 class AppLoop:
@@ -157,8 +150,8 @@ class AppLoop:
         pre_pending = state.pending_attack
         result = self.env.step(action)
         name = self.settings.players[pid].name
-        self.last_action_text = describe_action(action, name, pre_pending)
-        self.last_action_lines = action_report(
+        self.last_action_text = ActionMarker.describe_action(action, name, pre_pending)
+        self.last_action_lines = ActionMarker.action_report(
             action, name, result.info, pre_pending
         )
         if not isinstance(player, HumanAgent):

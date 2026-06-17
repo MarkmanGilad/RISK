@@ -9,12 +9,25 @@ from typing import Optional
 
 import pygame
 
-from risk.game.constants import card_set_value
+from risk.constants import card_set_value
 from risk.game.phase import Phase
 from risk.game.player import Player
 from risk.game.settings import GameSettings
 from risk.game.state import State
 from risk.ui.input.human_input import HudActionPanelModel
+from risk.ui_constants import (
+    HUD_ACCENT,
+    HUD_BG,
+    HUD_BTN_BG,
+    HUD_BTN_BG_DISABLED,
+    HUD_BTN_FG,
+    HUD_BTN_FG_DISABLED,
+    HUD_BTN_PRIMARY,
+    HUD_BTN_PRIMARY_DISABLED,
+    HUD_FG,
+    HUD_LINK_FG,
+    HUD_PANEL_BG,
+)
 
 
 # Encoded hit-test region id format:
@@ -25,9 +38,9 @@ from risk.ui.input.human_input import HudActionPanelModel
 
 
 class HudPanel:
-    BG = (28, 28, 36)
-    FG = (235, 235, 235)
-    ACCENT = (255, 215, 0)
+    BG = HUD_BG
+    FG = HUD_FG
+    ACCENT = HUD_ACCENT
 
     def __init__(self, font: Optional[pygame.font.Font] = None) -> None:
         if font is None:
@@ -139,14 +152,14 @@ class HudPanel:
 
     # --- action panel for human turns ------------------------------------
 
-    PANEL_BG = (40, 44, 60)
-    BTN_BG = (60, 70, 95)
-    BTN_BG_DIS = (50, 52, 60)
-    BTN_PRIMARY = (60, 130, 80)
-    BTN_PRIMARY_DIS = (50, 70, 55)
-    BTN_FG = (235, 235, 240)
-    BTN_FG_DIS = (140, 145, 160)
-    LINK_FG = (180, 195, 230)
+    PANEL_BG = HUD_PANEL_BG
+    BTN_BG = HUD_BTN_BG
+    BTN_BG_DIS = HUD_BTN_BG_DISABLED
+    BTN_PRIMARY = HUD_BTN_PRIMARY
+    BTN_PRIMARY_DIS = HUD_BTN_PRIMARY_DISABLED
+    BTN_FG = HUD_BTN_FG
+    BTN_FG_DIS = HUD_BTN_FG_DISABLED
+    LINK_FG = HUD_LINK_FG
 
     def render_action_panel(
         self,

@@ -14,19 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from risk.game.constants import MAX_PLAYERS, MIN_PLAYERS
+from risk.constants import MAX_PLAYERS, MIN_PLAYERS
 from risk.game.player import AGENT_KIND_ORDER, ALLOWED_AGENT_KINDS, Player
 from risk.game.settings import GameSettings
-
-
-DEFAULT_COLORS: tuple[tuple[int, int, int], ...] = (
-    (0, 255, 228),
-    (0, 255, 0),
-    (0, 0, 255),
-    (255, 0, 0),
-    (255, 0, 255),
-    (255, 204, 204),
-)
+from risk.ui_constants import DEFAULT_PLAYER_COLORS as DEFAULT_COLORS
 
 
 @dataclass

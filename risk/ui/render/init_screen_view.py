@@ -23,33 +23,24 @@ import pygame
 from risk.game.settings import GameSettings
 from risk.game.player import AGENT_KIND_LABELS
 from risk.ui.input.init_screen import DEFAULT_COLORS, InitScreenState
-
-
-# --- colors / layout ------------------------------------------------------
-
-BG = (16, 18, 26)
-PANEL = (28, 30, 42)
-PANEL_HI = (40, 44, 60)
-TEXT = (235, 235, 240)
-MUTED = (140, 145, 160)
-ACCENT = (255, 215, 0)
-OK = (110, 200, 120)
-OK_DIM = (60, 90, 70)
-DANGER = (220, 90, 90)
-EDIT_BG = (50, 55, 75)
-
-ROW_H = 56
-ROW_PAD = 8
-COLUMN_X = {
-    "idx": 24,
-    "name": 70,
-    "color": 360,
-    "kind": 440,
-    "remove": 560,
-}
-NAME_W = 270
-SWATCH_W = 60
-KIND_W = 130
+from risk.ui_constants import (
+    SETUP_ACCENT as ACCENT,
+    SETUP_BG as BG,
+    SETUP_COLUMN_X as COLUMN_X,
+    SETUP_DANGER as DANGER,
+    SETUP_EDIT_BG as EDIT_BG,
+    SETUP_KIND_W as KIND_W,
+    SETUP_MUTED as MUTED,
+    SETUP_NAME_W as NAME_W,
+    SETUP_OK as OK,
+    SETUP_OK_DIM as OK_DIM,
+    SETUP_PANEL as PANEL,
+    SETUP_PANEL_HI as PANEL_HI,
+    SETUP_ROW_H as ROW_H,
+    SETUP_ROW_PAD as ROW_PAD,
+    SETUP_SWATCH_W as SWATCH_W,
+    SETUP_TEXT as TEXT,
+)
 
 
 class _Button:

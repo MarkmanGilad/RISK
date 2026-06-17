@@ -13,6 +13,7 @@ from functools import lru_cache
 from typing import Optional, Sequence
 
 from risk.agents.base_agent import BaseAgent
+from risk.constants import ATTACKER_ROLL_EDGE, MAX_ATTACK_DICE, MAX_DEFEND_DICE, ROLL_OUTCOMES
 from risk.game.actions import (
     Action,
     AttackAction,
@@ -25,28 +26,6 @@ from risk.game.actions import (
 from risk.game.environment import Environment
 from risk.game.phase import Phase
 from risk.game.state import State
-
-
-# Exact one-roll attacker win probabilities for Risk dice. Keys are
-# (attacker_dice, defender_dice); values are the probability that the attacker
-# inflicts more losses than the defender on that roll.
-ATTACKER_ROLL_EDGE: dict[tuple[int, int], float] = {
-    (1, 1): 15 / 36,
-    (1, 2): 55 / 216,
-    (2, 1): 125 / 216,
-    (2, 2): 295 / 1296,
-    (3, 1): 855 / 1296,
-    (3, 2): 2890 / 7776,
-}
-
-ROLL_OUTCOMES: dict[tuple[int, int], tuple[tuple[int, int, float], ...]] = {
-    (1, 1): ((1, 0, 21 / 36), (0, 1, 15 / 36)),
-    (1, 2): ((1, 0, 161 / 216), (0, 1, 55 / 216)),
-    (2, 1): ((1, 0, 91 / 216), (0, 1, 125 / 216)),
-    (2, 2): ((2, 0, 581 / 1296), (1, 1, 420 / 1296), (0, 2, 295 / 1296)),
-    (3, 1): ((1, 0, 441 / 1296), (0, 1, 855 / 1296)),
-    (3, 2): ((2, 0, 2275 / 7776), (1, 1, 2611 / 7776), (0, 2, 2890 / 7776)),
-}
 
 
 @dataclass(frozen=True)
@@ -75,8 +54,8 @@ def battle_win_probability(attacker_armies: int, defender_armies: int) -> float:
     if attacker_armies <= 1:
         return 0.0
 
-    attacker_dice = min(3, attacker_armies - 1)
-    defender_dice = min(2, defender_armies)
+    attacker_dice = min(MAX_ATTACK_DICE, attacker_armies - 1)
+    defender_dice = min(MAX_DEFEND_DICE, defender_armies)
     return sum(
         probability
         * battle_win_probability(
@@ -253,7 +232,7 @@ class AttackAgent(BaseAgent):
     def _attack_edge(self, state: State, action: AttackAction) -> float:
         assert self.env is not None
         defender = self.env.topology.index_of(action.to_territory)
-        defender_dice = min(2, state.armies[defender])
+        defender_dice = min(MAX_DEFEND_DICE, state.armies[defender])
         return attacker_roll_edge(action.dice, defender_dice)
 
     def _battle_odds(self, state: State, action: AttackAction) -> float:
@@ -266,7 +245,7 @@ class AttackAgent(BaseAgent):
     def _is_full_force_attack(self, state: State, action: AttackAction) -> bool:
         assert self.env is not None
         attacker = self.env.topology.index_of(action.from_territory)
-        return action.dice == min(3, state.armies[attacker] - 1)
+        return action.dice == min(MAX_ATTACK_DICE, state.armies[attacker] - 1)
 
     def _nearest_donor(
         self,
@@ -319,8 +298,7 @@ class ContinentAgent(BSRAgent):
         topology = self.env.topology
         continent = topology.continent_of(topology.territory_at(index))
         defend_bonus = 0.0
-        members = [topology.index_of(t) for t in topology.territories_in(continent)]
-        if all(state.owners[i] == self.player_id for i in members):
+        if topology.owns_continent(state.owners, continent, self.player_id):
             defend_bonus = topology.continent_bonus(continent) / 7
         return super()._territory_score(state, index) + defend_bonus
 
@@ -447,26 +425,22 @@ def _enemy_neighbor_ratio(state: State, topology, index: int, player_id: int) ->
 
 
 def _continent_attack_value(state: State, topology, player_id: int, target_index: int) -> float:
-    territory = topology.territory_at(target_index)
-    continent = topology.continent_of(territory)
-    members = [topology.index_of(t) for t in topology.territories_in(continent)]
-    owned = sum(1 for i in members if state.owners[i] == player_id)
-    enemies = len(members) - owned
+    continent = topology.continent_of(topology.territory_at(target_index))
+    owned, total = topology.continent_owner_counts(state.owners, continent, player_id)
+    enemies = total - owned
     if enemies <= 0:
         return 0.0
-    completion = owned / len(members)
+    completion = owned / total
     takeover_bonus = 1.0 if enemies == 1 else 0.0
     return 0.7 * completion + 0.3 * takeover_bonus
 
 
 def _continent_defense_value(state: State, topology, player_id: int, index: int) -> float:
-    territory = topology.territory_at(index)
-    continent = topology.continent_of(territory)
-    members = [topology.index_of(t) for t in topology.territories_in(continent)]
-    owned = sum(1 for i in members if state.owners[i] == player_id)
-    if owned == len(members):
+    continent = topology.continent_of(topology.territory_at(index))
+    owned, total = topology.continent_owner_counts(state.owners, continent, player_id)
+    if owned == total:
         return topology.continent_bonus(continent) / 7
-    return owned / len(members)
+    return owned / total
 
 
 def _compactness_after_take(state: State, topology, player_id: int, target_index: int) -> float:

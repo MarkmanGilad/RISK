@@ -7,6 +7,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pytest
 
+from .conftest import make_env, make_settings
 from risk.agents.human_agent import HumanAgent
 from risk.agents.random_agent import RandomAgent
 from risk.app.game import Game
@@ -16,19 +17,11 @@ from risk.game.settings import GameSettings
 
 
 def _settings(n: int = 3, seed: int = 1) -> GameSettings:
-    return GameSettings(
-        players=tuple(
-            Player(id=i, name=f"P{i}", color=(i * 30, i * 40, i * 50), agent_kind="ai")
-            for i in range(n)
-        ),
-        seed=seed,
-    )
+    return make_settings(n=n, seed=seed, agent_kind="ai")
 
 
 def _env(n: int = 3, seed: int = 1) -> Environment:
-    env = Environment()
-    env.reset(_settings(n, seed))
-    return env
+    return make_env(n=n, seed=seed, agent_kind="ai")
 
 
 # --- Game contract --------------------------------------------------------

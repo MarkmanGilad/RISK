@@ -39,6 +39,9 @@ class BoardTopology:
         continent_of(t)    - continent id that owns territory t
         territories_in(c)  - tuple of territory ids in continent c
         continent_bonus(c) - integer reinforcement bonus
+        continent_member_indices(c)        - integer indices of c's territories
+        continent_owner_counts(owners,c,p) - (owned_by_p, total) for c
+        owns_continent(owners, c, p)       - True if p owns every territory in c
         edge_index()       - (src, dst) parallel index tuples for GNN use
     """
 
@@ -68,6 +71,7 @@ class BoardTopology:
         self._continent_of: dict[str, str] = {}
         self._territories_in: dict[str, tuple[str, ...]] = {}
         self._continent_bonus: dict[str, int] = {}
+        self._continent_indices: dict[str, tuple[int, ...]] = {}
         self._validate_continents(continents)
         for cid in self._continents:
             members = tuple(sorted(continents[cid]["territories"]))
@@ -75,6 +79,10 @@ class BoardTopology:
             self._continent_bonus[cid] = int(continents[cid]["bonus"])
             for t in members:
                 self._continent_of[t] = cid
+        for cid in self._continents:
+            self._continent_indices[cid] = tuple(
+                self._index[t] for t in self._territories_in[cid]
+            )
 
         src: list[int] = []
         dst: list[int] = []
@@ -122,6 +130,29 @@ class BoardTopology:
 
     def continent_bonus(self, continent: str) -> int:
         return self._continent_bonus[continent]
+
+    def continent_member_indices(self, continent: str) -> tuple[int, ...]:
+        """Integer indices of every territory in `continent`."""
+        return self._continent_indices[continent]
+
+    def continent_owner_counts(
+        self, owners: Sequence[object], continent: str, player_id: object
+    ) -> tuple[int, int]:
+        """Return `(owned_by_player, total_members)` for `continent`.
+
+        `owners` is a state's owner array (`owners[i]` is the player id that
+        owns `territory_at(i)`, or `None`).
+        """
+        members = self._continent_indices[continent]
+        owned = sum(1 for i in members if owners[i] == player_id)
+        return owned, len(members)
+
+    def owns_continent(
+        self, owners: Sequence[object], continent: str, player_id: object
+    ) -> bool:
+        """True if `player_id` owns every territory in `continent`."""
+        owned, total = self.continent_owner_counts(owners, continent, player_id)
+        return owned == total
 
     def edge_index(self) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """Two parallel tuples (src, dst) of node indices, ready for GNN use."""

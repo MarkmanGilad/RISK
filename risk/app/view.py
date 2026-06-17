@@ -16,9 +16,8 @@ from risk.ui.input.hit_test import TerritoryHitTester
 from risk.ui.input.human_input import HudActionPanelModel
 from risk.ui.render.panels import HudPanel
 from risk.ui.render.risk_map import RiskMapRenderer
-
-HUD_WIDTH = 360
-BG_COLOR = (10, 10, 14)
+from risk.ui_constants import BOARD_BG_COLOR as BG_COLOR
+from risk.ui_constants import HUD_WIDTH
 
 
 class GameView:

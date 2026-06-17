@@ -18,7 +18,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Iterable, Optional, Sequence
 
-from risk.game.constants import CARD_SYMBOLS, WILD_SYMBOL
+from risk.constants import CARD_SYMBOLS, WILD_SYMBOL
 
 
 _ALL_SYMBOLS: frozenset[str] = frozenset(CARD_SYMBOLS) | {WILD_SYMBOL}
@@ -49,47 +49,51 @@ class Card:
         return self.symbol == WILD_SYMBOL
 
 
-def validate_against_topology(card: Card, topology) -> None:
-    """Raise if a non-wild card references a territory not in the topology."""
-    if card.is_wild:
-        return
-    if card.territory_id not in topology.territories:
-        raise ValueError(
-            f"Card references unknown territory {card.territory_id!r}"
-        )
+class CardRules:
+    """Trade-in and validity rules for `Card`s."""
 
+    @staticmethod
+    def validate_against_topology(card: Card, topology) -> None:
+        """Raise if a non-wild card references a territory not in the topology."""
+        if card.is_wild:
+            return
+        if card.territory_id not in topology.territories:
+            raise ValueError(
+                f"Card references unknown territory {card.territory_id!r}"
+            )
 
-def is_valid_set(cards: Sequence[Card]) -> bool:
-    """Return True if these exactly three cards form a tradeable set."""
-    if len(cards) != 3:
+    @staticmethod
+    def is_valid_set(cards: Sequence[Card]) -> bool:
+        """Return True if these exactly three cards form a tradeable set."""
+        if len(cards) != 3:
+            return False
+
+        wilds = sum(1 for c in cards if c.is_wild)
+        non_wild = Counter(c.symbol for c in cards if not c.is_wild)
+        distinct = len(non_wild)
+
+        # Three of a kind (wilds collapse to a single symbol).
+        if distinct <= 1:
+            return True
+
+        # One of each regular symbol, wilds filling in the rest.
+        if distinct + wilds == 3 and all(v == 1 for v in non_wild.values()):
+            return True
+
         return False
 
-    wilds = sum(1 for c in cards if c.is_wild)
-    non_wild = Counter(c.symbol for c in cards if not c.is_wild)
-    distinct = len(non_wild)
-
-    # Three of a kind (wilds collapse to a single symbol).
-    if distinct <= 1:
-        return True
-
-    # One of each regular symbol, wilds filling in the rest.
-    if distinct + wilds == 3 and all(v == 1 for v in non_wild.values()):
-        return True
-
-    return False
-
-
-def find_valid_set(hand: Iterable[Card]) -> Optional[tuple[Card, Card, Card]]:
-    """Return any 3-card valid subset of `hand`, or None if none exists."""
-    cards = list(hand)
-    n = len(cards)
-    for i in range(n):
-        for j in range(i + 1, n):
-            for k in range(j + 1, n):
-                trio = (cards[i], cards[j], cards[k])
-                if is_valid_set(trio):
-                    return trio
-    return None
+    @classmethod
+    def find_valid_set(cls, hand: Iterable[Card]) -> Optional[tuple[Card, Card, Card]]:
+        """Return any 3-card valid subset of `hand`, or None if none exists."""
+        cards = list(hand)
+        n = len(cards)
+        for i in range(n):
+            for j in range(i + 1, n):
+                for k in range(j + 1, n):
+                    trio = (cards[i], cards[j], cards[k])
+                    if cls.is_valid_set(trio):
+                        return trio
+        return None
 
 
-__all__ = ["Card", "is_valid_set", "find_valid_set", "validate_against_topology"]
+__all__ = ["Card", "CardRules"]

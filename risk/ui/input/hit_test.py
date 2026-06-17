@@ -12,25 +12,6 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 
-def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[int, int]]) -> bool:
-    """Standard even-odd ray-casting test."""
-    if len(polygon) < 3:
-        return False
-    x, y = point
-    inside = False
-    n = len(polygon)
-    j = n - 1
-    for i in range(n):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-        if ((yi > y) != (yj > y)) and (
-            x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
-        ):
-            inside = not inside
-        j = i
-    return inside
-
-
 class TerritoryHitTester:
     """Resolve (screen_x, screen_y) -> territory_id.
 
@@ -75,9 +56,28 @@ class TerritoryHitTester:
             return None
         for terr, polygons in self.territory_polygons.items():
             for poly in polygons:
-                if _point_in_polygon(img_pt, poly):
+                if self._point_in_polygon(img_pt, poly):
                     return terr
         return None
+
+    @staticmethod
+    def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[int, int]]) -> bool:
+        """Standard even-odd ray-casting test."""
+        if len(polygon) < 3:
+            return False
+        x, y = point
+        inside = False
+        n = len(polygon)
+        j = n - 1
+        for i in range(n):
+            xi, yi = polygon[i]
+            xj, yj = polygon[j]
+            if ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+            ):
+                inside = not inside
+            j = i
+        return inside
 
 
 __all__ = ["TerritoryHitTester"]

@@ -7,11 +7,11 @@ import pytest
 
 from risk.game.actions import (
     Action,
+    ActionCodec,
     AttackAction,
     FortifyAction,
     ReinforcementAction,
     StopAttackAction,
-    action_from_dict,
 )
 from risk.game.board_topology import BoardTopology
 from risk.game.phase import Phase
@@ -156,11 +156,11 @@ def test_fortify_validate_unknown_territory(topo: BoardTopology) -> None:
 )
 def test_action_round_trip(action: Action) -> None:
     text = json.dumps(action.to_dict())
-    rebuilt = action_from_dict(json.loads(text))
+    rebuilt = ActionCodec.from_dict(json.loads(text))
     assert type(rebuilt) is type(action)
     assert rebuilt.to_dict() == action.to_dict()
 
 
 def test_action_from_dict_rejects_unknown_type() -> None:
     with pytest.raises(ValueError):
-        action_from_dict({"type": "warp_drive"})
+        ActionCodec.from_dict({"type": "warp_drive"})

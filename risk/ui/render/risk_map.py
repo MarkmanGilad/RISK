@@ -7,18 +7,13 @@ from typing import Iterable
 import pygame
 from svg.path import Arc, CubicBezier, Line, QuadraticBezier, parse_path
 
+from risk.ui_constants import DEFAULT_PLAYER_COLORS
+
 _CURVED_SEGMENTS = (Arc, CubicBezier, QuadraticBezier)
 
 
 class RiskMapRenderer:
-    DEFAULT_PLAYER_COLORS = {
-        0: (0, 255, 228),
-        1: (0, 255, 0),
-        2: (0, 0, 255),
-        3: (255, 0, 0),
-        4: (255, 0, 255),
-        5: (255, 204, 204),
-    }
+    DEFAULT_PLAYER_COLORS = dict(enumerate(DEFAULT_PLAYER_COLORS))
 
     def __init__(self, assets_dir: str | Path | None = None, fill_alpha: int = 102, curve_steps: int = 24) -> None:
         self.root_dir = Path(__file__).resolve().parents[3]

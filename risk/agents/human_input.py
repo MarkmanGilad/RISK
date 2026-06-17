@@ -27,8 +27,8 @@ from risk.game.actions import (
     StopAttackAction,
     TradeInAction,
 )
-from risk.game.card import is_valid_set
-from risk.game.constants import card_set_value, MAX_CARDS_IN_HAND
+from risk.game.card import CardRules
+from risk.constants import MAX_CARDS_IN_HAND, card_set_value
 from risk.game.environment import Environment
 from risk.game.phase import Phase
 from risk.game.settings import GameSettings
@@ -513,7 +513,7 @@ class HumanInputController:
         trade_value: Optional[int] = None
         if can_trade and len(self.selected_cards) == 3:
             trio = tuple(hand[i] for i in sorted(self.selected_cards))
-            if is_valid_set(trio):
+            if CardRules.is_valid_set(trio):
                 trade_value = card_set_value(state.cards_traded_in_count)
         if can_trade:
             label = f"Trade Set (+{trade_value})" if trade_value else "Trade Set"

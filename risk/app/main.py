@@ -29,21 +29,17 @@ if __package__ in (None, ""):
 
 import pygame
 
-from risk.app.factory import build_game
+from risk.app.factory import GameFactory
 from risk.app.loop import AppLoop
-from risk.app.setup import default_settings, run_setup
-
-
-# Default AI action pacing in `play` mode (ms between AI ticks and marker fade).
-DEFAULT_PLAY_AI_DELAY_MS = 600
-DEFAULT_PLAY_MARKER_MS = 900
+from risk.app.setup import SetupStage
+from risk.ui_constants import DEFAULT_PLAY_AI_DELAY_MS, DEFAULT_PLAY_MARKER_MS, HUD_WIDTH
 
 
 def _run_headless(max_ticks: Optional[int], players: int, seed: int, auto_restart: bool) -> int:
     """Train mode without any rendering — pure simulation via the shared factory."""
     current_seed = seed
     while True:
-        ctx = build_game(default_settings(n=players, seed=current_seed))
+        ctx = GameFactory.build(SetupStage.default_settings(n=players, seed=current_seed))
         winner = ctx.game.play_until_terminal(max_steps=max_ticks or 1_000_000)
         print(
             f"[train-no-render] winner={'P' + str(winner) if winner is not None else 'None'}"
@@ -87,17 +83,16 @@ def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0
             info = pygame.display.Info()
             max_w = int(info.current_w * 0.90)
             max_h = int(info.current_h * 0.90)
-            # The HUD panel is a fixed 360px. Preserve the board (map) area
-            # aspect ratio (1240×1000 from the original 1600×1000 design),
-            # then add the HUD width back to get the total window width.
-            _HUD_W = 360
-            _BOARD_ASPECT = (1600 - _HUD_W) / 1000  # 1.24
+            # Preserve the board (map) area aspect ratio (1240×1000 from the
+            # original 1600×1000 design), then add the HUD width back to get
+            # the total window width.
+            _BOARD_ASPECT = (1600 - HUD_WIDTH) / 1000  # 1.24
             height = min(max_h, 1000)
             board_w = int(height * _BOARD_ASPECT)
-            width = board_w + _HUD_W
+            width = board_w + HUD_WIDTH
             if width > max_w:
                 width = max_w
-                board_w = width - _HUD_W
+                board_w = width - HUD_WIDTH
                 height = int(board_w / _BOARD_ASPECT)
         screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption(f"Risk ({mode})")
@@ -107,9 +102,9 @@ def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0
             # PRE-GAME: produce settings (menu, or defaults for smoke tests).
             # `--max-ticks` is used by smoke tests and implies no menu.
             if skip_menu or max_ticks is not None or auto_restart:
-                settings = default_settings(n=players, seed=current_seed)
+                settings = SetupStage.default_settings(n=players, seed=current_seed)
             else:
-                settings = run_setup(
+                settings = SetupStage.run_setup(
                     screen,
                     players=players,
                     seed=current_seed,
@@ -119,7 +114,7 @@ def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0
                 return 0  # user closed the window
 
             # BUILD: pygame-free wiring shared with headless training.
-            ctx = build_game(settings)
+            ctx = GameFactory.build(settings)
 
             # GAME: run the interactive loop.
             loop = AppLoop(

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence
 
-from risk.game.constants import MAX_PLAYERS, MIN_PLAYERS
+from risk.constants import MAX_PLAYERS, MIN_PLAYERS
 from risk.game.player import Player
 
 

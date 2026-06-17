@@ -1,11 +1,11 @@
-"""Tests for `risk.game.constants` and `risk.game.phase` (Phase 3.1)."""
+"""Tests for `risk.constants` and `risk.game.phase` (Phase 3.1)."""
 from __future__ import annotations
 
 import sys
 
 import pytest
 
-from risk.game import constants as C
+from risk import constants as C
 from risk.game.phase import Phase
 
 
@@ -115,6 +115,6 @@ def test_no_pygame_import_after_loading_constants_and_phase() -> None:
         pytest.skip("pygame already imported by an earlier test or plugin")
     import importlib
 
-    importlib.import_module("risk.game.constants")
+    importlib.import_module("risk.constants")
     importlib.import_module("risk.game.phase")
     assert "pygame" not in sys.modules

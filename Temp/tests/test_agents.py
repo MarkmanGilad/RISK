@@ -24,25 +24,18 @@ from risk.game.actions import (
     ReinforcementAction,
     StopAttackAction,
 )
+from .conftest import make_env, make_settings
 from risk.game.environment import Environment
 from risk.game.player import Player
 from risk.game.settings import GameSettings
 
 
 def _settings(n: int = 3, seed: int = 42) -> GameSettings:
-    return GameSettings(
-        players=tuple(
-            Player(id=i, name=f"P{i}", color=(10, 20, 30), agent_kind="ai")
-            for i in range(n)
-        ),
-        seed=seed,
-    )
+    return make_settings(n=n, seed=seed, agent_kind="ai")
 
 
 def _fresh_env(seed: int = 42) -> Environment:
-    env = Environment()
-    env.reset(_settings(seed=seed))
-    return env
+    return make_env(seed=seed, agent_kind="ai")
 
 
 # --- BaseAgent contract ---------------------------------------------------

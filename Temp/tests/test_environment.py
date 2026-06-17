@@ -12,8 +12,9 @@ from risk.game.actions import (
     ReinforcementAction,
     StopAttackAction,
 )
+from .conftest import make_env, make_settings
 from risk.game.board_topology import BoardTopology
-from risk.game.constants import MIN_REINFORCEMENT
+from risk.constants import MIN_REINFORCEMENT
 from risk.game.environment import Environment
 from risk.game.phase import Phase
 from risk.game.player import Player
@@ -24,17 +25,11 @@ from risk.game.settings import GameSettings
 
 
 def _settings(n: int = 3, seed: int = 1234) -> GameSettings:
-    players = tuple(
-        Player(id=i, name=f"P{i}", color=(10 * i, 20 * i, 30 * i), agent_kind="human")
-        for i in range(n)
-    )
-    return GameSettings(players=players, seed=seed)
+    return make_settings(n=n, seed=seed, agent_kind="human")
 
 
 def _fresh_env(n: int = 3, seed: int = 1234) -> Environment:
-    env = Environment()
-    env.reset(_settings(n, seed))
-    return env
+    return make_env(n=n, seed=seed, agent_kind="human")
 
 
 # --- reset ----------------------------------------------------------------
@@ -61,7 +56,7 @@ def test_reset_every_territory_owned_with_one_army_minimum() -> None:
 
 
 def test_reset_starting_armies_correct_per_player() -> None:
-    from risk.game.constants import starting_armies_for
+    from risk.constants import starting_armies_for
 
     for n in (3, 4, 5, 6):
         env = _fresh_env(n=n, seed=99)

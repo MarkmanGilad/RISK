@@ -5,7 +5,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from risk.learning.self_play import StepHook, play_headless, play_rendered
+    from risk.learning.self_play import SelfPlay, StepHook
 
 
 def __getattr__(name: str) -> Any:
@@ -14,4 +14,4 @@ def __getattr__(name: str) -> Any:
         return getattr(self_play, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__ = ["play_headless", "play_rendered", "StepHook"]
+__all__ = ["SelfPlay", "StepHook"]
