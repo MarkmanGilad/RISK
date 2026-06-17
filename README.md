@@ -344,17 +344,19 @@ rules:
   `main()` is a deliberately editable training scratch pad — build a
   roster, swap in your learning agent for one seat, run a driver — runnable
   via `python -m risk.learning.self_play`.
-- **`graph_adapter.py` — `state_to_pyg(state, topology, settings)`.**
-  Converts a game snapshot into a `torch_geometric.data.Data` graph: one
-  node per territory (continent one-hot + owner one-hot + army count),
-  `edge_index` straight from `BoardTopology.edge_index()`, and a global `u`
-  vector (whose turn, phase, cards, continent bonuses, reinforcement
-  budget, eliminated players, ...). See [Docs/GraphAdapter.md](Docs/GraphAdapter.md)
-  for the full field-by-field layout and the design decisions behind it.
-- **`action_encoder.py` — `ActionEncoder`.** Converts `Action` candidates
-  (typically `env.legal_actions()`) into a `[N, 4]` long tensor of
-  `(stage, t1, t2, n)` rows for scoring `Q(s, a)` per candidate — the
-  encoding each `Action` subclass exposes itself via
+- **`graph_adapter.py` — `GraphAdapter`.** Converts a game snapshot into a
+  `torch_geometric.data.Data` graph: one node per territory (continent
+  one-hot + owner one-hot + army count), `edge_index` straight from
+  `BoardTopology.edge_index()`, and a global `u` vector (whose turn, phase,
+  cards, continent bonuses, reinforcement budget, eliminated players, ...).
+  `GraphAdapter(topology, settings)` builds one adapter per game; call it
+  every step with just the state — `adapter(state) -> Data`. See
+  [Docs/GraphAdapter.md](Docs/GraphAdapter.md) for the full field-by-field
+  layout and the design decisions behind it.
+- **`action_encoder.py` — `ActionEncoder`.** `ActionEncoder(env)` then
+  `encoder()` converts the env's current `legal_actions()` into a `[N, 4]`
+  long tensor of `(stage, t1, t2, n)` rows for scoring `Q(s, a)` per
+  candidate — the encoding each `Action` subclass exposes itself via
   `Action.dqn_index()` in `risk/game/actions.py`. See
   [Docs/Action.md](Docs/Action.md)'s "Representing actions for DQN"
   section for why this shape (score legal candidates, not a fixed
@@ -400,7 +402,7 @@ automatically at the top of the files that need it).
 The architecture exists specifically to make this last step a clean
 addition rather than a rewrite. Done so far:
 
-- ✅ A graph adapter (`risk.learning.graph_adapter.state_to_pyg`) turning a
+- ✅ A graph adapter (`risk.learning.graph_adapter.GraphAdapter`) turning a
   game snapshot into a `torch_geometric.data.Data` object for a GCN.
 - ✅ An action representation (`risk.learning.action_encoder.ActionEncoder`)
   scoring legal candidates rather than indexing a fixed action-ID table —

@@ -4,16 +4,20 @@ Reference for [`risk/learning/graph_adapter.py`](../risk/learning/graph_adapter.
 which converts a game snapshot into a `torch_geometric.data.Data` object for
 the GCN+DQN trainer.
 
-```python
-from risk.learning.graph_adapter import state_to_pyg
+`topology`/`settings` don't change during a match, so the normal usage is
+to build one adapter per game and call it every step with just the state:
 
-data = state_to_pyg(env.current_state(), env.topology, ctx.settings)
+```python
+from risk.learning.graph_adapter import GraphAdapter
+
+adapter = GraphAdapter(env.topology, ctx.settings)
+data = adapter(env.current_state())
 # Data(x=[42, 13], edge_index=[2, 166], u=[1, 33])
 ```
 
 It lives in `risk/learning/`, not `risk/game/`, so the core rules engine
 (`risk/game/`) stays free of a torch/PyG import — `State.to_features()`'s
-docstring reserves exactly this seam. `state_to_pyg` is the real
+docstring reserves exactly this seam. `GraphAdapter` is the real
 implementation that stub was waiting for.
 
 ---
@@ -24,9 +28,9 @@ implementation that stub was waiting for.
 `State` is the dynamic data sitting on top of it (`owners[i]`, `armies[i]`,
 ...). A GCN needs that combination expressed as PyTorch tensors —
 node features, edge connectivity, and whatever isn't naturally per-node
-("global" state like whose turn it is). `state_to_pyg` does that mapping
-once, deterministically, so the same `State` always produces the same
-tensors (no shuffling, no hidden randomness).
+("global" state like whose turn it is). `GraphAdapter` does that mapping
+once per call, deterministically, so the same `State` always produces the
+same tensors (no shuffling, no hidden randomness).
 
 Node order is always `topology.territories`' sorted order
 (`topology.index_of(t)` is node `t`'s row in every tensor below) — stable
@@ -103,7 +107,7 @@ zero territories (which looks identical to "just got wiped out this turn").
   architecture for every game size, at the cost of a few always-zero
   columns in smaller games.
 - **No normalization in the adapter** — army counts and continent bonuses
-  are passed through raw. Keeps this function a pure, debuggable mapping;
+  are passed through raw. Keeps this method a pure, debuggable mapping;
   any scaling belongs in the model.
 - **Reused `topology.edge_index()` instead of rebuilding adjacency** — it
   already existed for exactly this purpose (`BoardTopology`'s docstring
@@ -118,10 +122,11 @@ zero territories (which looks identical to "just got wiped out this turn").
 ```python
 from risk.app.factory import GameFactory
 from risk.app.setup import SetupStage
-from risk.learning.graph_adapter import state_to_pyg
+from risk.learning.graph_adapter import GraphAdapter
 
 ctx = GameFactory.build(SetupStage.default_settings(n=4, seed=0))
-data = state_to_pyg(ctx.env.current_state(), ctx.env.topology, ctx.settings)
+adapter = GraphAdapter(ctx.env.topology, ctx.settings)
+data = adapter(ctx.env.current_state())
 data.validate(raise_on_error=True)   # passes: well-formed Data object
 ```
 

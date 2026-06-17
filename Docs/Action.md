@@ -207,14 +207,16 @@ batches those tuples into tensors:
 ```python
 from risk.learning.action_encoder import ActionEncoder
 
-candidates, tensor = ActionEncoder.encode_legal(env)   # tensor: [len(candidates), 4] long
+encoder = ActionEncoder(env)
+candidates, tensor = encoder()                          # tensor: [len(candidates), 4] long
 # ... score `tensor` against the graph state, argmax/sample a row index i ...
-env.step(candidates[i])                                 # the winning candidate is already a real Action
+env.step(candidates[i])                                  # the winning candidate is already a real Action
 ```
 
 `state` is required (not just `topology`) for `OccupyAction` specifically
 — its `from`/`to` territories live on `state.pending_attack`, not on the
-action itself. `ActionEncoder.encode_legal(env)` passes both automatically.
+action itself. `ActionEncoder` holds the `env`, so it pulls
+`env.topology`/`env.current_state()` automatically every call.
 
 ### The tuple: `(stage, t1, t2, n)`
 

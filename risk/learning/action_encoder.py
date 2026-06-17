@@ -15,27 +15,40 @@ from typing import Optional, Sequence
 import torch
 
 from risk.game.actions import Action
-from risk.game.board_topology import BoardTopology
 from risk.game.environment import Environment
 from risk.game.state import State
 
 
 class ActionEncoder:
-    """Converts `Action` candidates into `(stage, t1, t2, n)` tensors."""
+    """Converts `Action` candidates into `(stage, t1, t2, n)` tensors.
 
-    @staticmethod
+    Built around one `Environment` so it can always pull the current
+    `topology`/`state` automatically:
+
+        encoder = ActionEncoder(env)
+        candidates, tensor = encoder()   # == encoder.encode_legal()
+    """
+
+    def __init__(self, env: Environment) -> None:
+        self.env = env
+
+    def __call__(self) -> tuple[list[Action], torch.Tensor]:
+        return self.encode_legal()
+
     def encode_one(
-        action: Action, topology: BoardTopology, state: Optional[State] = None
+        self, action: Action, state: Optional[State] = None
     ) -> tuple[int, int, int, int]:
-        """One action -> its `(stage, t1, t2, n)` tuple (see `Action.dqn_index`)."""
-        return action.dqn_index(topology, state)
+        """One action -> its `(stage, t1, t2, n)` tuple (see `Action.dqn_index`).
 
-    @classmethod
+        `state` defaults to `self.env.current_state()`; pass it explicitly
+        only if encoding against a different snapshot.
+        """
+        if state is None:
+            state = self.env.current_state()
+        return action.dqn_index(self.env.topology, state)
+
     def encode_many(
-        cls,
-        actions: Sequence[Action],
-        topology: BoardTopology,
-        state: Optional[State] = None,
+        self, actions: Sequence[Action], state: Optional[State] = None
     ) -> torch.Tensor:
         """A batch of actions -> a `[len(actions), 4]` long tensor.
 
@@ -45,18 +58,17 @@ class ActionEncoder:
         """
         if not actions:
             return torch.empty((0, 4), dtype=torch.long)
-        rows = [cls.encode_one(a, topology, state) for a in actions]
+        rows = [self.encode_one(a, state) for a in actions]
         return torch.tensor(rows, dtype=torch.long)
 
-    @classmethod
-    def encode_legal(cls, env: Environment) -> tuple[list[Action], torch.Tensor]:
-        """Convenience: `env.legal_actions()` for the current state -> `(candidates, tensor)`.
+    def encode_legal(self) -> tuple[list[Action], torch.Tensor]:
+        """`self.env.legal_actions()` for the current state -> `(candidates, tensor)`.
 
         `tensor[i]` encodes `candidates[i]`; after scoring, index back into
         `candidates` with the winning row to get the real `Action` to step.
         """
-        candidates = env.legal_actions()
-        tensor = cls.encode_many(candidates, env.topology, env.current_state())
+        candidates = self.env.legal_actions()
+        tensor = self.encode_many(candidates, self.env.current_state())
         return candidates, tensor
 
 
