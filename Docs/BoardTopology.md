@@ -107,23 +107,30 @@ Total directed edges in `edge_index()`: equal to the sum of all
 territory degrees (each undirected border contributes two directed
 edges, which is the shape a GNN expects).
 
-## Future GNN Hook
+## GNN Hook
 
-`edge_index()` is the seam for the future graph adapter
-(`risk/learning/graph_adapter.py`, planned in the v1 plan as a
-post-game-engine step). The adapter will combine:
+`edge_index()` is the seam the graph adapter
+(`risk/learning/graph_adapter.py` — see [Docs/GraphAdapter.md](GraphAdapter.md))
+uses directly, unmodified, as `Data.edge_index`. It combines:
 
 - `BoardTopology.edge_index()` → graph structure,
 - `State` per-territory data (owner one-hot, army count, etc.) → node
   features,
 
-and produce framework-specific tensors (PyG / DGL). No PyTorch imports
-live in `BoardTopology` itself.
+into a `torch_geometric.data.Data` object. No PyTorch imports live in
+`BoardTopology` itself — only `risk/learning/` touches torch.
+
+Also worth knowing: `continent_owner_counts(owners, continent, player_id)`
+and `owns_continent(owners, continent, player_id)` answer "how much / does
+player P fully own continent C" directly from a state's `owners` array —
+added so that question (asked by `Environment`, the heuristic agents, and
+`self_play`'s summary printer) has one definition instead of four
+reimplementations of the same loop.
 
 ## What It Is *Not*
 
-- Not a renderer. Polygons and visual data are still owned by
-  `RiskMapRenderer` in `risk/graphics/`.
+- Not a renderer. Polygons and visual data are owned by `RiskMapRenderer`
+  in `risk/ui/render/risk_map.py`.
 - Not stateful. It never changes after construction.
 - Not a rules engine. It answers "are A and B adjacent?" but never
   "can player P attack from A to B?" — that belongs to `Environment`.

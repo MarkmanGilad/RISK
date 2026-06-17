@@ -375,8 +375,10 @@ files instead of each test file hand-rolling its own.
   `risk_map_data.json` (territory names, adjacency, continents/bonuses,
   label/army-marker coordinates) that `BoardTopology` and
   `RiskMapRenderer` both load from.
-- **`Docs/`** — design/planning notes and a running log of larger changes
-  (`RL-Prep-Changes.md`, `ProjectStructure.md`, `plan.md`, ...).
+- **`Docs/`** — reference docs for specific subsystems
+  ([`BoardTopology.md`](Docs/BoardTopology.md), [`Action.md`](Docs/Action.md),
+  [`GraphAdapter.md`](Docs/GraphAdapter.md)) plus a running changelog of
+  larger changes ([`RL-Prep-Changes.md`](Docs/RL-Prep-Changes.md)).
 - **`demos/`** — standalone renderer-only scripts kept as graphics
   references; not part of the playable game or its import graph.
 
