@@ -28,7 +28,7 @@ from risk.game.actions import (
     TradeInAction,
 )
 from risk.game.card import is_valid_set
-from risk.game.constants import card_set_value
+from risk.game.constants import card_set_value, MAX_CARDS_IN_HAND
 from risk.game.environment import Environment
 from risk.game.phase import Phase
 from risk.game.settings import GameSettings
@@ -346,10 +346,19 @@ class HumanInputController:
         placed = sum(self.pending_placements.values())
         if placed == 0 or placed != state.reinforcement_budget:
             return
+        # The UI builds a *mixed* placement (armies spread across several owned
+        # territories). `legal_actions()` only enumerates the canonical
+        # one-territory-gets-all form, so an exact match check would reject a
+        # valid spread. Validate structurally instead: every target owned by
+        # the current player and the total equal to the budget.
+        pid = state.current_player_index
+        for terr in self.pending_placements:
+            idx = self.topology.index_of(terr)
+            if state.owners[idx] != pid:
+                return
         action = ReinforcementAction(placements=dict(self.pending_placements))
-        if self._is_legal(action):
-            self.agent.submit(action)
-            self.pending_placements = {}
+        self.agent.submit(action)
+        self.pending_placements = {}
 
     def _toggle_card(self, state: State, idx: int) -> None:
         hand = state.hands[self.agent.player_id]
@@ -433,17 +442,24 @@ class HumanInputController:
             return
         if self.selected_from is None or self.selected_to is None:
             return
-        limit = state.armies[self.selected_from] - 1
+        pid = state.current_player_index
+        fi, ti = self.selected_from, self.selected_to
+        if state.owners[fi] != pid or state.owners[ti] != pid:
+            return
+        limit = state.armies[fi] - 1
         if limit < 1:
+            return
+        from_terr = self.topology.territory_at(fi)
+        to_terr = self.topology.territory_at(ti)
+        if not self._connected_through_owned(state, pid, fi, ti):
             return
         count = max(1, min(self.fortify_count, limit))
         action = FortifyAction(
-            from_territory=self.topology.territory_at(self.selected_from),
-            to_territory=self.topology.territory_at(self.selected_to),
+            from_territory=from_terr,
+            to_territory=to_terr,
             count=count,
         )
-        if self._is_legal(action):
-            self.agent.submit(action)
+        self.agent.submit(action)
 
     def _submit_skip_fortify(self, state: State) -> None:
         if state.phase != Phase.FORTIFY:
@@ -471,12 +487,20 @@ class HumanInputController:
             return model
         hand = state.hands[self.agent.player_id]
         can_trade = state.phase == Phase.REINFORCE
+        must_trade = can_trade and len(hand) >= MAX_CARDS_IN_HAND
+        # When a trade is mandatory, force the card panel open and keep it open.
+        if must_trade:
+            self.show_cards = True
         toggle_label = (
             f"Hide Cards ({len(hand)})" if self.show_cards else f"Cards ({len(hand)})"
         )
-        buttons = model.buttons + (
-            HudButton(id="toggle_cards", label=toggle_label, enabled=True),
-        )
+        # Hide the toggle button when trading is forced (panel is locked open).
+        if not must_trade:
+            buttons = model.buttons + (
+                HudButton(id="toggle_cards", label=toggle_label, enabled=True),
+            )
+        else:
+            buttons = model.buttons
         if not self.show_cards:
             return replace(model, buttons=buttons)
 
@@ -517,6 +541,15 @@ class HumanInputController:
             placed = sum(self.pending_placements.values())
             budget = state.reinforcement_budget
             rows = tuple(self.pending_placements.items())
+            hand = state.hands[self.agent.player_id]
+            must_trade = len(hand) >= MAX_CARDS_IN_HAND
+            if must_trade:
+                return HudActionPanelModel(
+                    header="Your Turn (REINFORCE)",
+                    info_lines=(
+                        f"You have {len(hand)} cards — you must trade a set before placing.",
+                    ),
+                )
             return HudActionPanelModel(
                 header="Your Turn (REINFORCE)",
                 info_lines=(f"Armies to place: {placed} / {budget}",),

@@ -179,6 +179,35 @@ def test_reinforce_left_click_increments_and_button_submits():
     assert controller.pending_placements == {}
 
 
+def test_reinforce_mixed_placement_across_territories_submits():
+    # Regression: a placement spread over several owned territories must be
+    # accepted even though `legal_actions()` only enumerates the canonical
+    # one-territory form. The agent must hand the action to the loop.
+    env, agents, controller = _build(human_ids={0})
+    s = env.current_state()
+    budget = s.reinforcement_budget
+    if budget < 2:
+        pytest.skip("Budget too small to split across two territories.")
+    owned = _own_indices(env, 0)
+    t0 = env.topology.territory_at(owned[0])
+    t1 = env.topology.territory_at(owned[1])
+    half = budget // 2
+    controller.pending_placements = {t0: half, t1: budget - half}
+
+    controller.on_hud_button("place_armies")
+    pending = agents[0]._pending
+    assert isinstance(pending, ReinforcementAction)
+    assert pending.placements == {t0: half, t1: budget - half}
+    assert controller.pending_placements == {}
+
+    # The agent's own legality gate must also pass it through to the loop.
+    returned = agents[0].act((), env.current_state())
+    assert returned is pending
+    # And the environment accepts it, advancing to ATTACK.
+    env.step(returned)
+    assert env.current_state().phase is Phase.ATTACK
+
+
 def test_reinforce_left_click_caps_at_budget():
     env, agents, controller = _build(human_ids={0})
     s = env.current_state()

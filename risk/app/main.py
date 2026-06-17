@@ -47,7 +47,7 @@ def _run_headless(max_ticks: Optional[int], players: int, seed: int) -> int:
     return 0
 
 
-def run(width: int = 1600, height: int = 1000, seed: int = 0, players: int = 3,
+def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0, players: int = 3,
         max_ticks: Optional[int] = None, skip_menu: bool = False,
         mode: str = "play",
         ai_delay_ms: Optional[int] = None,
@@ -76,6 +76,22 @@ def run(width: int = 1600, height: int = 1000, seed: int = 0, players: int = 3,
 
     pygame.init()
     try:
+        if width is None or height is None:
+            info = pygame.display.Info()
+            max_w = int(info.current_w * 0.90)
+            max_h = int(info.current_h * 0.90)
+            # The HUD panel is a fixed 360px. Preserve the board (map) area
+            # aspect ratio (1240×1000 from the original 1600×1000 design),
+            # then add the HUD width back to get the total window width.
+            _HUD_W = 360
+            _BOARD_ASPECT = (1600 - _HUD_W) / 1000  # 1.24
+            height = min(max_h, 1000)
+            board_w = int(height * _BOARD_ASPECT)
+            width = board_w + _HUD_W
+            if width > max_w:
+                width = max_w
+                board_w = width - _HUD_W
+                height = int(board_w / _BOARD_ASPECT)
         screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption(f"Risk ({mode})")
 
@@ -109,8 +125,10 @@ def run(width: int = 1600, height: int = 1000, seed: int = 0, players: int = 3,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--width", type=int, default=1600)
-    parser.add_argument("--height", type=int, default=1000)
+    parser.add_argument("--width", type=int, default=None,
+                        help="Window width in pixels (default: 90%% of screen).")
+    parser.add_argument("--height", type=int, default=None,
+                        help="Window height in pixels (default: 90%% of screen).")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--players", type=int, default=3)
     parser.add_argument(

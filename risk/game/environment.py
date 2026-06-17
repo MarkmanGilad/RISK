@@ -24,7 +24,7 @@ from risk.game.actions import (
     TradeInAction,
 )
 from risk.game.board_topology import BoardTopology
-from risk.game.card import Card, find_valid_set, is_valid_set
+from risk.game.card import Card, is_valid_set
 from risk.game.constants import (
     CARD_SYMBOLS,
     DIE_SIDES,
@@ -175,7 +175,11 @@ class Environment:
         """
         s = self.current_state()
         if s.phase is Phase.REINFORCE:
-            return list(self._legal_reinforce(s)) + list(self._legal_trade_ins(s))
+            trades = list(self._legal_trade_ins(s))
+            # If the player must trade (hand >= limit), only offer trade actions.
+            if len(s.hands[s.current_player_index]) >= MAX_CARDS_IN_HAND:
+                return trades
+            return list(self._legal_reinforce(s)) + trades
         if s.phase is Phase.ATTACK:
             return list(self._legal_attack(s))
         if s.phase is Phase.OCCUPY:
@@ -221,8 +225,8 @@ class Environment:
 
     def _apply_reinforce(self, s: State, action: ReinforcementAction) -> dict:
         pid = s.current_player_index
-        # Forced trade-ins (classic: hand > MAX_CARDS_IN_HAND, i.e. 6+) are
-        # already resolved on entry to REINFORCE (see _enter_reinforce_for).
+        # Human players are blocked by the UI from placing until they trade
+        # down to < MAX_CARDS_IN_HAND. AI agents trade via legal_actions().
         # Validate territory ownership and shape.
         for terr, count in action.placements.items():
             if terr not in self.topology.territories:
@@ -370,15 +374,9 @@ class Environment:
                 s.hands[pid].extend(taken)
                 s.hands[defender_pid] = []
                 info["eliminated"] = defender_pid
-                # Forced trade-ins while hand >= MAX_CARDS_IN_HAND.
-                while len(s.hands[pid]) > MAX_CARDS_IN_HAND:
-                    trio = find_valid_set(s.hands[pid])
-                    if trio is None:
-                        break
-                    value = self._trade_in_set(s, pid, trio)
-                    # Mid-turn forced trade-ins add to current turn's budget
-                    # only if still in REINFORCE; here we're attacking, so
-                    # just discard the cards (classic rule).
+                # Cards transfer to the winner. They must trade down to < 5
+                # before placing armies — the UI enforces this at reinforce.
+                # (AI agents pick TradeInAction from legal_actions naturally.)
 
             # Park the attack so the next step is an OccupyAction.
             s.pending_attack = PendingAttack(
@@ -526,13 +524,9 @@ class Environment:
         s.phase = Phase.REINFORCE
         s.reinforcement_budget = self._compute_reinforcement(s, pid)
         self._conquered_this_turn = False
-        # Forced trade-ins (hand > MAX_CARDS_IN_HAND): auto-resolve and add
-        # the set value to the reinforcement budget.
-        while len(s.hands[pid]) > MAX_CARDS_IN_HAND:
-            trio = find_valid_set(s.hands[pid])
-            if trio is None:
-                break
-            s.reinforcement_budget += self._trade_in_set(s, pid, trio)
+        # No auto-trading here. Human players are blocked by the UI until they
+        # trade down to < MAX_CARDS_IN_HAND. AI agents pick TradeInAction from
+        # legal_actions() naturally before being offered placement actions.
 
 
 __all__ = ["Environment", "StepResult"]

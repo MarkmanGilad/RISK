@@ -9,6 +9,7 @@ from typing import Optional
 
 import pygame
 
+from risk.game.constants import card_set_value
 from risk.game.phase import Phase
 from risk.game.player import Player
 from risk.game.settings import GameSettings
@@ -97,6 +98,15 @@ class HudPanel:
             )
             target.blit(line, (x + 16, y))
             y += line_h
+
+        # Persistent next-trade value.
+        y += 6
+        next_trade = card_set_value(state.cards_traded_in_count)
+        trade_surf = self.font.render(
+            f"Next trade: {next_trade} armies", True, self.ACCENT
+        )
+        target.blit(trade_surf, (x, y))
+        y += line_h
 
         # Message footer.
         if message:

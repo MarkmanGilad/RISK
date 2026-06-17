@@ -1,2 +1,19 @@
 pygame>=2.5
 svg.path>=6.3
+
+# CUDA 12.4 PyTorch wheels
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+torchaudio==2.5.1+cu124
+
+# PyG wheels matching torch 2.5.1 + cu124
+--find-links https://data.pyg.org/whl/torch-2.5.1+cu124.html
+
+pyg_lib==0.4.0+pt25cu124
+torch_scatter==2.1.2+pt25cu124
+torch_sparse==0.6.18+pt25cu124
+torch_cluster==1.6.3+pt25cu124
+torch_spline_conv==1.2.2+pt25cu124
+torch-geometric==2.8.0

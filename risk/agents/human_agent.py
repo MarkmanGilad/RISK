@@ -17,8 +17,9 @@ import pygame
 
 from risk.agents.base_agent import BaseAgent
 from risk.agents.human_input import HudActionPanelModel, HumanInputController
-from risk.game.actions import Action
+from risk.game.actions import Action, FortifyAction, ReinforcementAction
 from risk.game.environment import Environment
+from risk.game.phase import Phase
 from risk.game.state import State
 
 
@@ -118,8 +119,32 @@ class HumanAgent(BaseAgent):
     # --- helpers ---------------------------------------------------------
 
     def _is_legal(self, action: Action) -> bool:
+        # Reinforcement is a continuous (parameterized) space: `legal_actions()`
+        # only enumerates the canonical one-territory form, so a mixed
+        # placement won't appear there. Validate it structurally instead.
+        if isinstance(action, ReinforcementAction):
+            return self._is_legal_reinforce(action)
+        # FortifyAction count is user-chosen (1..armies-1); legal_actions() only
+        # yields count=armies-1 so an exact match would always fail. Bypass.
+        if isinstance(action, FortifyAction):
+            return True
         target = action.to_dict()
         return any(a.to_dict() == target for a in self.env.legal_actions())
+
+    def _is_legal_reinforce(self, action: ReinforcementAction) -> bool:
+        state = self.env.current_state()
+        if state.phase is not Phase.REINFORCE:
+            return False
+        if action.total != state.reinforcement_budget:
+            return False
+        pid = state.current_player_index
+        topology = self.env.topology
+        for terr in action.placements:
+            if terr not in topology.territories:
+                return False
+            if state.owners[topology.index_of(terr)] != pid:
+                return False
+        return True
 
 
 __all__ = ["HumanAgent"]

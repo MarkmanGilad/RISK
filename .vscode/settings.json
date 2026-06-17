@@ -4,5 +4,6 @@
     "python.analysis.extraPaths": ["${workspaceFolder}"],
     "python.testing.pytestEnabled": true,
     "python.testing.pytestArgs": ["Temp/tests"],
-    "terminal.integrated.cwd": "${workspaceFolder}"
+    "terminal.integrated.cwd": "${workspaceFolder}",
+    "python-envs.defaultEnvManager": "ms-python.python:pipenv"
 }
