@@ -259,14 +259,16 @@ def main() -> None:
     Run it with:  python -m risk.learning.self_play
     """
     from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
+    from risk.agents.random_agent import RandomAgent
     from risk.app.factory import GameFactory
     from risk.app.setup import SetupStage
 
-    # 1) Roster: Raider vs Sentinel vs Empire. Change `seed` to rematch.
-    ctx = GameFactory.build(SetupStage.default_settings(n=3))
+    # 1) Roster: Raider vs Sentinel vs Empire vs Random. Change `seed` to rematch.
+    ctx = GameFactory.build(SetupStage.default_settings(n=4))
     ctx.agents[0] = RaiderAgent(player_id=0, env=ctx.env)
     ctx.agents[1] = SentinelAgent(player_id=1, env=ctx.env)
     ctx.agents[2] = EmpireAgent(player_id=2, env=ctx.env)
+    ctx.agents[3] = SentinelAgent(player_id=3, env=ctx.env)
     _print_roster(ctx)
 
     # 2) To test your learner, replace one seat:
@@ -281,6 +283,9 @@ def main() -> None:
 
     # 4) Run one episode. Use SelfPlay.play_rendered(ctx, fps=30) to watch it.
     winner = SelfPlay.play_headless(ctx, max_steps=150_000, on_step=collect)
+    # winner = SelfPlay.play_rendered(ctx, fps=30, on_step=collect)
+
+    
     terminated = ctx.env.is_terminal()
 
     print(f"winner = {_winner_text(ctx, winner)}")
