@@ -611,3 +611,69 @@ This keeps the same masking behavior (`phase == stage`) and output shape,
 but makes the routing order explicit and independent of which phase labels
 happen to appear in a particular minibatch. `NetworkArchitectures.md` was
 updated to describe the fixed five-slot loop.
+
+## Follow-up pass: `GCN_DQN_Agent` (inference path only)
+
+Added `risk/learning/gcn_dqn_agent.py` implementing the not-yet-built
+agent wrapper described in `Docs/NetworkArchitectures.md`.
+
+Implemented now:
+
+- `act(events, state)` for `BaseAgent` compatibility.
+- Legal action enumeration from `env.legal_actions(state)`.
+- Per-action graph row build:
+  - `ActionGraphBuilder` for graph-based stages.
+  - unmodified base graph rows for `TRADE_IN` (no injection).
+- `(phase, t1, t2, n)` batching via `ActionEncoder`.
+- One batched `GCN_DQN` forward call + argmax selection.
+- Optional epsilon exploration (`train_mode` + `epsilon`).
+- Owned `ReplayBuffer` and a `remember(...)` helper for transition storage.
+- Agent always constructs its own `GCN_DQN` from the current graph dimensions.
+- `load_params(path)` restores a saved net `state_dict` via `torch.load(...)`.
+
+Deferred intentionally:
+
+- `train_step(...)` currently raises `NotImplementedError`; update logic,
+  losses, and target-net synchronization are for a later pass.
+
+Regression coverage added in `Temp/tests/test_agents.py` for:
+
+- argmax action selection against a stub net.
+- `TRADE_IN` handling without action-graph injection errors.
+
+## Follow-up pass: learner-elimination early stop in self-play
+
+Added an opt-in early-stop control for training episodes where "my learner
+lost" should end the rollout immediately, without waiting for full game
+termination:
+
+- `SelfPlay.play_headless(..., stop_when_player_eliminated=pid)`
+- `SelfPlay.play_rendered(..., stop_when_player_eliminated=pid)`
+
+When this argument is set, the loop exits as soon as `pid` appears in
+`state.eliminated` (checked both at loop start and right after each step).
+Return type is unchanged (`env.winner()`), so early-stopped episodes usually
+return `None` while `env.is_terminal()` stays `False`.
+
+Regression coverage added in `Temp/tests/test_self_play.py`.
+
+## Follow-up pass: self-play scratch-pad learner seat
+
+Updated `risk/learning/self_play.py`'s `main()` scratch-pad roster to use
+five players, with seat 4 now assigned an untrained `GCN_DQN_Agent`.
+The scratch-pad step-2 comment now matches that flow directly ("add your
+agent to the list") so you can run the learner seat as-is and swap in a
+different learner class by editing a single line.
+
+## Follow-up pass: runtime device selection/check for learner
+
+`GCN_DQN_Agent` now resolves device in the learning layer (not global
+constants): explicit override if provided, otherwise `cuda` when available,
+else `cpu`.
+
+Added `GCN_DQN_Agent.device_report(...)` to verify runtime placement for
+model and tensors (`batch`, `phase`, `card_indices`), and `self_play.py`
+prints that report in `main()` when constructing the learner seat.
+
+`score_actions(...)` now asserts model/tensors are on the selected device,
+failing fast on CPU/GPU mismatch instead of silently mixing devices.

@@ -32,3 +32,24 @@ def test_self_play_reaches_a_winner(seed: int) -> None:
 
     assert ctx.env.is_terminal()
     assert winner in {0, 1, 2, 3}
+
+
+def test_self_play_can_stop_when_tracked_player_eliminated() -> None:
+    seed = 7
+    ctx = GameFactory.build(SetupStage.default_settings(n=4, seed=seed))
+    ctx.agents[0] = RaiderAgent(player_id=0, env=ctx.env)
+    ctx.agents[1] = SentinelAgent(player_id=1, env=ctx.env)
+    ctx.agents[2] = EmpireAgent(player_id=2, env=ctx.env)
+    ctx.agents[3] = RandomAgent(player_id=3, env=ctx.env, seed=seed)
+
+    # Simulate learner already being out before the rollout starts.
+    ctx.env.current_state().eliminated.add(0)
+
+    winner = SelfPlay.play_headless(
+        ctx,
+        max_steps=5000,
+        stop_when_player_eliminated=0,
+    )
+
+    assert winner is None
+    assert ctx.env.is_terminal() is False

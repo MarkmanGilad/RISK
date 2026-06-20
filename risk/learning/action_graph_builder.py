@@ -58,10 +58,7 @@ class ActionGraphBuilder:
     def __call__(self, base: Data, action: Action, state: Optional[State] = None) -> Data:
         stage, t1, t2, n = action.dqn_index(self.topology, state)
         if stage == Phase.TRADE_IN:
-            raise ValueError(
-                "ActionGraphBuilder doesn't inject TRADE_IN actions — "
-                "its head reads card-hand embeddings, not the graph (Docs/Action.md)"
-            )
+            return self._copy_base(base)
 
         x = base.x.clone()
         edge_attr = base.edge_attr.clone()
@@ -76,9 +73,12 @@ class ActionGraphBuilder:
         elif stage == Phase.FORTIFY and t1 != Action.NONE_INDEX:
             x[t1, self._armies_col] -= n
             x[t2, self._armies_col] += n
-        # ATTACK's StopAttackAction / FORTIFY's skip sentinel: no perturbation.
 
         return Data(x=x, edge_index=base.edge_index, edge_attr=edge_attr, u=base.u)
+
+    @staticmethod
+    def _copy_base(base: Data) -> Data:
+        return Data(x=base.x, edge_index=base.edge_index, edge_attr=base.edge_attr, u=base.u)
 
 
 __all__ = ["ActionGraphBuilder", "EDGE_ATTR_DIM"]

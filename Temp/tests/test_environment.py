@@ -12,10 +12,12 @@ from risk.game.actions import (
     ReinforcementAction,
     SkipTradeAction,
     StopAttackAction,
+    TradeInAction,
 )
 from .conftest import make_env, make_settings
 from risk.game.board_topology import BoardTopology
 from risk.constants import MIN_REINFORCEMENT
+from risk.game.card import Card
 from risk.game.environment import Environment
 from risk.game.phase import Phase
 from risk.game.player import Player
@@ -34,8 +36,9 @@ def _fresh_env(n: int = 3, seed: int = 1234) -> Environment:
 
 
 def _skip_to_reinforce_place(env: Environment) -> None:
-    """Every fresh turn starts in TRADE_IN; skip it to reach REINFORCE_PLACE."""
-    env.step(SkipTradeAction())
+    """Reach REINFORCE_PLACE whether TRADE_IN was auto-skipped or not."""
+    if env.current_state().phase is Phase.TRADE_IN:
+        env.step(SkipTradeAction())
 
 
 # --- reset ----------------------------------------------------------------
@@ -73,10 +76,10 @@ def test_reset_starting_armies_correct_per_player() -> None:
             assert total == expected, f"player {pid} of {n}: got {total} expected {expected}"
 
 
-def test_reset_phase_is_trade_in_for_player_zero() -> None:
+def test_reset_phase_is_reinforce_place_when_no_trade_sets() -> None:
     env = _fresh_env()
     s = env.current_state()
-    assert s.phase is Phase.TRADE_IN
+    assert s.phase is Phase.REINFORCE_PLACE
     assert s.current_player_index == 0
     assert s.reinforcement_budget >= MIN_REINFORCEMENT
 
@@ -89,6 +92,18 @@ def test_skip_trade_advances_to_reinforce_place() -> None:
     assert s.phase is Phase.REINFORCE_PLACE
     assert s.current_player_index == 0
     assert s.reinforcement_budget == budget_before
+
+
+def test_reset_phase_is_trade_in_when_player_has_valid_set() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    s.hands[0] = [
+        Card(territory_id="Alaska", symbol="infantry"),
+        Card(territory_id="Alberta", symbol="cavalry"),
+        Card(territory_id="Ontario", symbol="artillery"),
+    ]
+    env._begin_turn_for(s, 0)
+    assert s.phase is Phase.TRADE_IN
 
 
 # --- reinforcement counts -------------------------------------------------
@@ -168,6 +183,10 @@ def test_reinforce_rejects_total_over_budget() -> None:
 def test_reinforce_rejects_outside_reinforce_place() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
+    pid = s.current_player_index
+    owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
+    env.step(ReinforcementAction(placements={owned[0]: s.reinforcement_budget}))
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
     with pytest.raises(ValueError):
         env.step(ReinforcementAction(placements={owned[0]: 1}))
@@ -195,9 +214,32 @@ def test_legal_reinforce_offers_one_half_all_buckets() -> None:
 
 def test_legal_actions_in_trade_in_only_trade_in() -> None:
     env = _fresh_env()
+    s = env.current_state()
+    s.hands[s.current_player_index] = [
+        Card(territory_id="Alaska", symbol="infantry"),
+        Card(territory_id="Alberta", symbol="cavalry"),
+        Card(territory_id="Ontario", symbol="artillery"),
+    ]
+    s.phase = Phase.TRADE_IN
     acts = env.legal_actions()
     assert all(a.phase is Phase.TRADE_IN for a in acts)
     assert len(acts) > 0
+
+
+def test_trade_in_auto_advances_when_no_more_sets() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    s.hands[s.current_player_index] = [
+        Card(territory_id="Alaska", symbol="infantry"),
+        Card(territory_id="Alberta", symbol="cavalry"),
+        Card(territory_id="Ontario", symbol="artillery"),
+    ]
+    env._begin_turn_for(s, s.current_player_index)
+    budget_before = s.reinforcement_budget
+    result = env.step(TradeInAction(card_indices=(0, 1, 2)))
+    assert s.phase is Phase.REINFORCE_PLACE
+    assert result.info["auto_skipped_trade"] is True
+    assert s.reinforcement_budget == budget_before + 4
 
 
 def test_legal_actions_in_reinforce_place_only_reinforce() -> None:
@@ -491,7 +533,7 @@ def test_fortify_skip_advances_turn() -> None:
     env.step(FortifyAction(from_territory=None, to_territory=None, count=0))
     s2 = env.current_state()
     assert s2.current_player_index != pid
-    assert s2.phase is Phase.TRADE_IN
+    assert s2.phase is Phase.REINFORCE_PLACE
 
 
 def test_fortify_requires_connected_owned_chain() -> None:

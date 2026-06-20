@@ -25,7 +25,9 @@ graphs = [builder(base, action, env.current_state()) for action in legal_actions
 The base graph is never mutated — every action needs its own copy to
 diverge from. `state` is only required for `OccupyAction` (its `from`/`to`
 live on `state.pending_attack`, not the action itself — same reason
-`Action.dqn_index()` needs it).
+`Action.dqn_index()` needs it). `TRADE_IN` is handled internally by
+returning an unmodified copy of the base graph, so callers can hand every
+legal action to this builder and let it decide whether injection is needed.
 
 ## How each stage is injected
 
@@ -37,13 +39,13 @@ live on `state.pending_attack`, not the action itself — same reason
 | `OCCUPY` | `x[from, armies_col] -= n`, `x[to, armies_col] += n` (`from`/`to` from `state.pending_attack`). |
 | `FORTIFY` (real move) | `x[from, armies_col] -= n`, `x[to, armies_col] += n`. |
 | `FORTIFY` (skip, `count == 0`) | No perturbation — same as `StopAttackAction`. |
-| `TRADE_IN` | **Raises `ValueError`.** Its head reads card-hand embeddings, never the graph (`Action.md`), so silently returning an unperturbed graph would be misleading — callers should route `TRADE_IN` actions around this class entirely. |
+| `TRADE_IN` | Returns an unmodified copy of the base graph. Its head reads card-hand embeddings, never the graph (`Action.md`), so there is nothing to inject. |
 
 `edge_attr` is already present on every base graph (`GraphAdapter`,
 `Docs/GraphAdapter.md`, all-zero) — this class clones and overwrites it
 rather than building one from scratch, so it ends up on **every** action's
 graph, even ones that don't touch an edge (`REINFORCE_PLACE`/`OCCUPY`/
-`FORTIFY`, and the unmodified sentinels). PyG's `Batch.from_data_list`
+`FORTIFY`, and the unmodified `TRADE_IN` copy). PyG's `Batch.from_data_list`
 concatenates `x`/`edge_attr` across graphs, so every graph in a batch
 needs the same fields/widths regardless of which stage it came from. This
 is the same "zero `edge_attr` degrades gracefully" reasoning

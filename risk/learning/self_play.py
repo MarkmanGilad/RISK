@@ -76,18 +76,18 @@ class SelfPlay:
                 )
 
     @classmethod
-    def play_headless(
-        cls,
-        ctx: GameContext,
-        *,
-        max_steps: int = 100_000,
-        on_step: Optional[StepHook] = None,
-    ) -> Optional[int]:
-        """Play one full game with no rendering. Returns the winner id (or None).
+    def play_headless( cls, ctx: GameContext, *, max_steps: int = 100_000,
+        on_step: Optional[StepHook] = None, stop_when_player_eliminated: Optional[int] = None,) -> Optional[int]:
+        """Play one game with no rendering. Returns the winner id (or None).
 
         This is the bare ask -> step loop, the same one the GUI runs, minus
         the window. `on_step(state_before, action, result)` is called after
         every applied action for experience collection.
+
+        If `stop_when_player_eliminated` is set, the rollout ends as soon as
+        that player id appears in `state.eliminated`, even if the full game is
+        not terminal yet. This is useful for learner-centric episodes where
+        "my agent lost" should end training for the current game.
         """
         cls._reject_humans(ctx)
         env, agents = ctx.env, ctx.agents
@@ -96,6 +96,9 @@ class SelfPlay:
         for _ in range(max_steps):
             if env.is_terminal():
                 break
+            if stop_when_player_eliminated is not None:
+                if stop_when_player_eliminated in env.current_state().eliminated:
+                    break
             state = env.current_state()
             player = agents[state.current_player_index]
             action = player((), state)      # AI agents ignore the events arg
@@ -109,6 +112,11 @@ class SelfPlay:
                 # handing it to the trainer, or every stored transition would
                 # alias the final state once the episode ends.
                 on_step(before, action, StepResult(state=result.state.snapshot(), info=result.info))
+            if stop_when_player_eliminated is not None:
+                if stop_when_player_eliminated in result.state.eliminated:
+                    steps += 1
+                    print(f"steps = {steps}", end="\r", flush=True)
+                    break
             steps += 1
             print(f"steps = {steps}", end="\r", flush=True)
 
@@ -117,23 +125,18 @@ class SelfPlay:
         return env.winner()
 
     @classmethod
-    def play_rendered(
-        cls,
-        ctx: GameContext,
-        *,
-        width: int = 1280,
-        height: int = 800,
-        max_steps: int = 100_000,
-        fps: int = 0,
-        caption: str = "Risk (training)",
-        on_step: Optional[StepHook] = None,
-    ) -> Optional[int]:
+    def play_rendered(cls, ctx: GameContext, *, width: int = 1280, height: int = 800,
+        max_steps: int = 100_000, fps: int = 0, caption: str = "Risk (training)",
+        on_step: Optional[StepHook] = None, stop_when_player_eliminated: Optional[int] = None,) -> Optional[int]:
         """Play one full game in a window, drawing every move but never pacing.
 
         Same loop as `play_headless`, plus a `GameView` render each frame so
         you can watch training. `fps <= 0` runs as fast as possible; set e.g.
         `fps=30` to slow it to a watchable speed without adding per-move
         delays. Closing the window or pressing ESC stops early.
+
+        If `stop_when_player_eliminated` is set, the rollout ends as soon as
+        that player id appears in `state.eliminated`.
         """
         cls._reject_humans(ctx)
 
@@ -155,6 +158,9 @@ class SelfPlay:
             steps = 0
             running = True
             while running and steps < max_steps:
+                if stop_when_player_eliminated is not None:
+                    if stop_when_player_eliminated in env.current_state().eliminated:
+                        break
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
@@ -175,6 +181,11 @@ class SelfPlay:
                                 action,
                                 StepResult(state=result.state.snapshot(), info=result.info),
                             )
+                        if stop_when_player_eliminated is not None:
+                            if stop_when_player_eliminated in result.state.eliminated:
+                                steps += 1
+                                print(f"steps = {steps}", end="\r", flush=True)
+                                break
                         steps += 1
                         print(f"steps = {steps}", end="\r", flush=True)
 
@@ -262,18 +273,20 @@ def main() -> None:
     from risk.agents.random_agent import RandomAgent
     from risk.app.factory import GameFactory
     from risk.app.setup import SetupStage
+    from risk.learning.gcn_dqn_agent import GCN_DQN_Agent
 
-    # 1) Roster: Raider vs Sentinel vs Empire vs Random. Change `seed` to rematch.
-    ctx = GameFactory.build(SetupStage.default_settings(n=4))
+    # 1) Roster: four fixed AI seats + one untrained GCN+DQN learner.
+    ctx = GameFactory.build(SetupStage.default_settings(n=5))
     ctx.agents[0] = RaiderAgent(player_id=0, env=ctx.env)
     ctx.agents[1] = SentinelAgent(player_id=1, env=ctx.env)
     ctx.agents[2] = EmpireAgent(player_id=2, env=ctx.env)
     ctx.agents[3] = SentinelAgent(player_id=3, env=ctx.env)
+    
+    # 2) To test your learner, add your agent to the list:
+    learner = GCN_DQN_Agent(player_id=4, env=ctx.env)
+    ctx.agents[4] = learner
+    print(f"learner device report = {learner.device_report(ctx.env.current_state())}")
     _print_roster(ctx)
-
-    # 2) To test your learner, replace one seat:
-    #    from risk.learning.my_agent import MyAgent
-    #    ctx.agents[0] = MyAgent(player_id=0, env=ctx.env)
 
     # 3) (Optional) collect transitions for training.
     transitions: list = []

@@ -250,13 +250,14 @@ classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
     `N=1` (`Batch.from_data_list([one_graph])`) — same convention as
     carrying a batch dimension of 1 in any other PyTorch net; `forward`
     doesn't detect/special-case a bare single `Data`, that's the caller's
-    job. *Injected* (`ActionGraphBuilder`) for the 4 graph-based stages;
-    for `TRADE_IN` it's just `GraphAdapter`'s bare base graph (repeated
-    once per candidate in that decision, since none of them perturb the
-    graph) — `GraphAdapter` already gives every base graph a zero-filled
-    `edge_attr` of its own (`Docs/GraphAdapter.md`), so `forward` doesn't
-    need to default anything; every graph that reaches it already has the
-    same fields regardless of stage.
+   job. *Injected* (`ActionGraphBuilder`) for the 4 graph-based stages;
+   for `TRADE_IN` the builder returns an unmodified copy of
+   `GraphAdapter`'s base graph (repeated once per candidate in that
+   decision, since none of them perturb the graph) — `GraphAdapter`
+   already gives every base graph a zero-filled `edge_attr` of its own
+   (`Docs/GraphAdapter.md`), so `forward` doesn't need to default
+   anything; every graph that reaches it already has the same fields
+   regardless of stage.
   - `phase` — `[N]` long, one `Phase` value per row, same convention as
     `ReplayBuffer`'s `stage`/`next_stage`.
   - `card_indices` — `[N, 3]` long, **not optional**: each row's
@@ -297,7 +298,7 @@ classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
 base Data(state)
    │  + one legal action (per action)            <- the agent's job from here down
    ▼
-ActionGraphBuilder  ──▶  N graphs (injected, or bare for TRADE_IN), phase + card_indices tensors
+ActionGraphBuilder  ──▶  N graphs (injected, or base copy for TRADE_IN), phase + card_indices tensors
    ▼
 Batch.from_data_list
    ▼

@@ -542,13 +542,14 @@ def test_after_occupy_selected_from_carries_to_conquered_square():
 
 
 def _give_set(env, pid: int) -> None:
-    """Replace pid's hand with one tradeable set (one of each symbol)."""
+    """Give pid one valid set and refresh turn state for that player."""
     s = env.current_state()
     s.hands[pid] = [
         Card(territory_id="Alaska", symbol="infantry"),
         Card(territory_id="Alberta", symbol="cavalry"),
         Card(territory_id="Ontario", symbol="artillery"),
     ]
+    env._begin_turn_for(s, pid)
 
 
 def test_cards_button_present_on_human_turn():
@@ -630,21 +631,25 @@ def test_invalid_set_does_not_enable_trade():
         Card(territory_id="Alberta", symbol="infantry"),
         Card(territory_id="Ontario", symbol="cavalry"),
     ]
-    controller.on_hud_button("toggle_cards")
-    for i in range(3):
-        controller.on_hud_field("card_toggle", str(i))
+    env._begin_turn_for(s, 0)
     m = controller.widgets(env.current_state())
-    assert m.trade_value is None
-    trade_btn = next(b for b in m.buttons if b.id == "trade_cards")
-    assert trade_btn.enabled is False
+    assert env.current_state().phase is Phase.REINFORCE_PLACE
+    assert all(b.id != "trade_cards" for b in m.buttons)
 
 
-def test_skip_trade_button_submits_skip():
+def test_skip_trade_button_submits_skip_when_trade_phase_exists():
     env, agents, controller = _build(human_ids={0})
+    _give_set(env, pid=0)
     m = controller.widgets(env.current_state())
     assert any(b.id == "skip_trade" for b in m.buttons)
     controller.on_hud_button("skip_trade")
     assert isinstance(agents[0]._pending, SkipTradeAction)
+
+
+def test_skip_trade_button_hidden_when_trade_auto_skipped():
+    env, agents, controller = _build(human_ids={0})
+    m = controller.widgets(env.current_state())
+    assert all(b.id != "skip_trade" for b in m.buttons)
 
 
 def test_cards_button_absent_when_not_human_turn():

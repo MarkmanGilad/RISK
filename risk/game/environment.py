@@ -292,7 +292,14 @@ class Environment:
             raise ValueError("Selected cards are not a valid set")
         value = self._trade_in_set(s, pid, trio)  # type: ignore[arg-type]
         s.reinforcement_budget += value
-        return {"traded": value, "cards": len(hand) - 3}
+        auto_skipped = not any(self._legal_trade_ins(s))
+        if auto_skipped:
+            s.phase = Phase.REINFORCE_PLACE
+        return {
+            "traded": value,
+            "cards": len(hand) - 3,
+            "auto_skipped_trade": auto_skipped,
+        }
 
     def _apply_skip_trade(self, s: State) -> dict:
         s.phase = Phase.REINFORCE_PLACE
@@ -558,11 +565,10 @@ class Environment:
         s.phase = Phase.TRADE_IN
         s.reinforcement_budget = self._compute_reinforcement(s, pid)
         self._conquered_this_turn = False
-        # Every turn starts in TRADE_IN, even with nothing to trade — the
-        # player (human or AI) explicitly ends it via a TradeInAction-less
-        # SkipTradeAction, then moves on to REINFORCE_PLACE. Human players
-        # are additionally blocked by the UI from skipping while hand size
-        # is >= MAX_CARDS_IN_HAND (forced trade).
+        # If no valid set exists, there is no trade decision to make, so the
+        # turn starts directly in REINFORCE_PLACE.
+        if not any(self._legal_trade_ins(s)):
+            s.phase = Phase.REINFORCE_PLACE
 
 
 __all__ = ["Environment", "StepResult"]
