@@ -11,6 +11,10 @@ python -m risk.learning.self_play    # watch/train AI-only self-play
 python -m pytest Temp/tests -q       # run the test suite
 ```
 
+Repository hygiene note: common local artifacts (virtualenvs, caches,
+coverage output, editor folders, and model checkpoints like `*.pt`) are
+ignored by the project `.gitignore`.
+
 ---
 
 ## Table of contents
