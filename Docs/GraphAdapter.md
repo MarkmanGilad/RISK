@@ -139,7 +139,7 @@ data.validate(raise_on_error=True)   # passes: well-formed Data object
 - `torch_geometric.data.Batch.from_data_list([...])` on 3 separate game
   snapshots produced `x: [126, 13]`, `u: [3, 34]`, `edge_index: [2, 498]` —
   confirms `u`'s `[1, F]` shape batches the way a `DataLoader` will use it.
-- Full test suite (`Temp/tests`): 215 passed, 1 skipped.
+- Full test suite (`Temp/tests`): 225 passed, 1 skipped.
 
 ## Open extension points
 

@@ -366,10 +366,12 @@ rules:
 
 ### `Temp/tests/` — the test suite
 
-215 tests (plus one platform-conditional skip) covering board topology, state/actions round-tripping,
+225 tests (plus one platform-conditional skip) covering board topology, state/actions round-tripping,
 environment rules (reinforcement math, combat resolution, conquest,
 elimination, winner detection, illegal-action rejection), agents, the human
-input controller, hit-testing, and app-level smoke tests. `conftest.py`
+input controller, hit-testing, app-level smoke tests, and a 10-seed
+`SelfPlay.play_headless` fuzz test that plays full AI-only games to an
+actual winner. `conftest.py`
 holds the shared `make_settings()` / `make_env()` builders used across
 files instead of each test file hand-rolling its own.
 
