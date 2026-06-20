@@ -74,7 +74,7 @@ def test_human_agent_returns_submitted_legal_action() -> None:
 def test_human_agent_drops_illegal_submission() -> None:
     env = _fresh_env()
     h = HumanAgent(player_id=0, env=env, settings=_settings())
-    # Submit a clearly out-of-phase action: a StopAttackAction during REINFORCE.
+    # Submit a clearly out-of-phase action: a StopAttackAction during TRADE_IN.
     h.submit(StopAttackAction())
     assert h.act([], env.current_state()) is None
 

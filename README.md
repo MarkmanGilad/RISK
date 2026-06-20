@@ -78,6 +78,8 @@ already own.
 A tradeable set is three-of-a-kind or one-of-each, with wilds substituting
 for anything. Trade-in values follow the classic progression
 **4, 6, 8, 10, 12, 15**, then **+5** per set after that (20, 25, 30, ...).
+On top of that, any non-wild card in the set whose territory you currently
+occupy grants **+2 armies placed on that territory immediately**.
 
 **Winning.** A player who loses their last territory is eliminated. The game
 ends when only one player remains.
@@ -356,15 +358,15 @@ rules:
 - **`action_encoder.py` — `ActionEncoder`.** `ActionEncoder(env)` then
   `encoder()` converts the env's current `legal_actions()` into a `[N, 4]`
   long tensor of `(stage, t1, t2, n)` rows for scoring `Q(s, a)` per
-  candidate — the encoding each `Action` subclass exposes itself via
+  legal action — the encoding each `Action` subclass exposes itself via
   `Action.dqn_index()` in `risk/game/actions.py`. See
   [Docs/Action.md](Docs/Action.md)'s "Representing actions for DQN"
-  section for why this shape (score legal candidates, not a fixed
+  section for why this shape (score legal actions, not a fixed
   flat action-ID table) and the full per-stage tuple layout.
 
 ### `Temp/tests/` — the test suite
 
-204 tests (plus one platform-conditional skip) covering board topology, state/actions round-tripping,
+215 tests (plus one platform-conditional skip) covering board topology, state/actions round-tripping,
 environment rules (reinforcement math, combat resolution, conquest,
 elimination, winner detection, illegal-action rejection), agents, the human
 input controller, hit-testing, and app-level smoke tests. `conftest.py`
@@ -403,12 +405,12 @@ addition rather than a rewrite. Done so far:
 - ✅ A graph adapter (`risk.learning.graph_adapter.GraphAdapter`) turning a
   game snapshot into a `torch_geometric.data.Data` object for a GCN.
 - ✅ An action representation (`risk.learning.action_encoder.ActionEncoder`)
-  scoring legal candidates rather than indexing a fixed action-ID table —
+  scoring legal actions rather than indexing a fixed action-ID table —
   the piece that makes a huge, variable-shaped action space tractable for
   DQN.
 - ✅ Multi-step reinforcement — the engine now allows placing part of a
   turn's budget and continuing later, which was the one combinatorial
-  action standing in the way of a clean per-candidate `Q(s, a)` design
+  action standing in the way of a clean per-action `Q(s, a)` design
   (see [Docs/RL-Prep-Changes.md](Docs/RL-Prep-Changes.md)).
 
 Still open:

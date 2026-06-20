@@ -133,7 +133,7 @@ class HumanAgent(BaseAgent):
 
     def _is_legal_reinforce(self, action: ReinforcementAction) -> bool:
         state = self.env.current_state()
-        if state.phase is not Phase.REINFORCE:
+        if state.phase is not Phase.REINFORCE_PLACE:
             return False
         if action.total > state.reinforcement_budget:
             return False

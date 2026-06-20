@@ -11,7 +11,9 @@ from risk.game.actions import (
     AttackAction,
     FortifyAction,
     ReinforcementAction,
+    SkipTradeAction,
     StopAttackAction,
+    TradeInAction,
 )
 from risk.game.board_topology import BoardTopology
 from risk.game.phase import Phase
@@ -26,7 +28,9 @@ def topo() -> BoardTopology:
 
 
 def test_action_phase_attributes() -> None:
-    assert ReinforcementAction.phase is Phase.REINFORCE
+    assert ReinforcementAction.phase is Phase.REINFORCE_PLACE
+    assert TradeInAction.phase is Phase.TRADE_IN
+    assert SkipTradeAction.phase is Phase.TRADE_IN
     assert AttackAction.phase is Phase.ATTACK
     assert StopAttackAction.phase is Phase.ATTACK
     assert FortifyAction.phase is Phase.FORTIFY
@@ -105,6 +109,13 @@ def test_stop_attack_ok() -> None:
     StopAttackAction()
 
 
+# --- SkipTradeAction --------------------------------------------------------
+
+
+def test_skip_trade_ok() -> None:
+    SkipTradeAction()
+
+
 # --- FortifyAction --------------------------------------------------------
 
 
@@ -148,6 +159,8 @@ def test_fortify_validate_unknown_territory(topo: BoardTopology) -> None:
     "action",
     [
         ReinforcementAction(placements={"Alaska": 3, "Alberta": 2}),
+        TradeInAction(card_indices=(0, 1, 2)),
+        SkipTradeAction(),
         AttackAction(from_territory="Alaska", to_territory="Alberta", dice=2),
         StopAttackAction(),
         FortifyAction(from_territory="Alaska", to_territory="Alberta", count=3),

@@ -46,14 +46,15 @@ def test_dice_rules() -> None:
 # --- Phase enum ------------------------------------------------------------
 
 
-def test_phase_has_five_members() -> None:
+def test_phase_has_seven_members() -> None:
     assert {p.name for p in Phase} == {
         "SETUP",
-        "REINFORCE",
+        "TRADE_IN",
+        "REINFORCE_PLACE",
         "ATTACK",
+        "OCCUPY",
         "FORTIFY",
         "GAME_OVER",
-        "OCCUPY",
     }
 
 
@@ -66,7 +67,15 @@ def test_phase_values_are_stable_for_serialization() -> None:
 
 def test_phase_is_ordered() -> None:
     # The natural play-order. GAME_OVER is the terminal sink.
-    assert Phase.SETUP < Phase.REINFORCE < Phase.ATTACK < Phase.FORTIFY < Phase.GAME_OVER
+    assert (
+        Phase.SETUP
+        < Phase.TRADE_IN
+        < Phase.REINFORCE_PLACE
+        < Phase.ATTACK
+        < Phase.OCCUPY
+        < Phase.FORTIFY
+        < Phase.GAME_OVER
+    )
 
 
 # --- Cards -----------------------------------------------------------------

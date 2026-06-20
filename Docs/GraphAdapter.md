@@ -12,7 +12,7 @@ from risk.learning.graph_adapter import GraphAdapter
 
 adapter = GraphAdapter(env.topology, ctx.settings)
 data = adapter(env.current_state())
-# Data(x=[42, 13], edge_index=[2, 166], u=[1, 33])
+# Data(x=[42, 13], edge_index=[2, 166], u=[1, 34])
 ```
 
 It lives in `risk/learning/`, not `risk/game/`, so the core rules engine
@@ -73,7 +73,7 @@ on top would be redundant (every edge present means `1`; absence means
 sea routes like Alaska↔Kamchatka differently from land borders), that's a
 one-line addition: an `edge_attr: [num_edges, 1]` tensor.
 
-## `u` — global attributes, shape `[1, 33]`
+## `u` — global attributes, shape `[1, 34]`
 
 Not a built-in PyG concept — just a plain tensor attribute, named `u` after
 the usual graph-network convention (Battaglia et al.). Shaping it `[1, F]`
@@ -85,17 +85,18 @@ into `[batch_size, F]` for free (verified — see below).
 | `u[0]` | 1 | Number of players in this game | `settings.player_count` |
 | `u[1]` | 1 | Value of the **next** card trade-in (not the last one cashed) | `card_set_value(state.cards_traded_in_count)` |
 | `u[2:8]` | 6 | Cards currently in each player's hand, padded | `len(state.hands[p])` |
-| `u[8:14]` | 6 | Current phase, one-hot | `state.phase` against `Phase` (`SETUP, REINFORCE, ATTACK, FORTIFY, GAME_OVER, OCCUPY`) |
-| `u[14:20]` | 6 | Whose turn it is, one-hot, padded | `state.current_player_index` |
-| `u[20:26]` | 6 | Reinforcement bonus for each continent | `topology.continent_bonus(c)`, same order as the node continent one-hot |
-| `u[26]` | 1 | Current player's reinforcement budget | `state.reinforcement_budget` (already `0` outside `REINFORCE` — `Environment` zeroes it itself, so no phase check needed here) |
-| `u[27:33]` | 6 | Which players are eliminated, padded | `p in state.eliminated` |
+| `u[8:15]` | 7 | Current phase, one-hot | `state.phase` against `Phase` (`SETUP, TRADE_IN, REINFORCE_PLACE, ATTACK, OCCUPY, FORTIFY, GAME_OVER`) |
+| `u[15:21]` | 6 | Whose turn it is, one-hot, padded | `state.current_player_index` |
+| `u[21:27]` | 6 | Reinforcement bonus for each continent | `topology.continent_bonus(c)`, same order as the node continent one-hot |
+| `u[27]` | 1 | Current player's reinforcement budget | `state.reinforcement_budget` (already `0` outside `TRADE_IN`/`REINFORCE_PLACE` — it's being built up by trades during `TRADE_IN` and spent during `REINFORCE_PLACE`) |
+| `u[28:34]` | 6 | Which players are eliminated, padded | `p in state.eliminated` |
 
 The last two (`reinforcement_budget`, `eliminated`) weren't in the original
 ask but were added deliberately: budget directly bounds the legal action
-space during `REINFORCE`, and an explicit elimination flag lets the model
-recognize "this player is permanently out" instead of inferring it from
-zero territories (which looks identical to "just got wiped out this turn").
+space during `TRADE_IN`/`REINFORCE_PLACE`, and an explicit elimination flag
+lets the model recognize "this player is permanently out" instead of
+inferring it from zero territories (which looks identical to "just got
+wiped out this turn").
 
 ---
 
@@ -130,12 +131,15 @@ data = adapter(ctx.env.current_state())
 data.validate(raise_on_error=True)   # passes: well-formed Data object
 ```
 
-- `Data(x=[42, 13], edge_index=[2, 166], u=[1, 33])` — shapes match spec.
+- `Data(x=[42, 13], edge_index=[2, 166], u=[1, 34])` — shapes match spec
+  (`u`'s width grew 33→34 when `Phase.REINFORCE` split into `Phase.TRADE_IN`
+  + `Phase.REINFORCE_PLACE` — `phase_onehot`'s width is `len(Phase)`,
+  already dynamic, so this needed no code change, just a wider one-hot).
 - `Data.validate()` passes (edge indices in range, tensor shapes consistent).
 - `torch_geometric.data.Batch.from_data_list([...])` on 3 separate game
-  snapshots produced `x: [126, 13]`, `u: [3, 33]`, `edge_index: [2, 498]` —
+  snapshots produced `x: [126, 13]`, `u: [3, 34]`, `edge_index: [2, 498]` —
   confirms `u`'s `[1, F]` shape batches the way a `DataLoader` will use it.
-- Full test suite (`Temp/tests`) unaffected: 204 passed, 1 skipped.
+- Full test suite (`Temp/tests`): 215 passed, 1 skipped.
 
 ## Open extension points
 

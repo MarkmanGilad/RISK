@@ -20,6 +20,7 @@ from risk.game.actions import (
     FortifyAction,
     OccupyAction,
     ReinforcementAction,
+    SkipTradeAction,
     StopAttackAction,
     TradeInAction,
 )
@@ -102,11 +103,9 @@ class AttackAgent(BaseAgent):
         if not legal:
             return None
 
-        trade = self._choose_trade(legal)
-        if trade is not None:
-            return trade
-
-        if state.phase is Phase.REINFORCE:
+        if state.phase is Phase.TRADE_IN:
+            return self._choose_trade(legal) or SkipTradeAction()
+        if state.phase is Phase.REINFORCE_PLACE:
             return self._reinforce(state)
         if state.phase is Phase.ATTACK:
             return self._attack(state, legal)

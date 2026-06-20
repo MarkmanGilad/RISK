@@ -1,4 +1,4 @@
-"""Encodes `Action` candidates into tensors for DQN `Q(s, a)` scoring.
+"""Encodes legal `Action`s into tensors for DQN `Q(s, a)` scoring.
 
 Each `Action` subclass already knows how to encode itself as a
 `(stage, t1, t2, n)` integer tuple via `Action.dqn_index()` (see
@@ -20,13 +20,13 @@ from risk.game.state import State
 
 
 class ActionEncoder:
-    """Converts `Action` candidates into `(stage, t1, t2, n)` tensors.
+    """Converts legal `Action`s into `(stage, t1, t2, n)` tensors.
 
     Built around one `Environment` so it can always pull the current
     `topology`/`state` automatically:
 
         encoder = ActionEncoder(env)
-        candidates, tensor = encoder()   # == encoder.encode_legal()
+        legal_actions, tensor = encoder()   # == encoder.encode_legal()
     """
 
     def __init__(self, env: Environment) -> None:
@@ -62,14 +62,15 @@ class ActionEncoder:
         return torch.tensor(rows, dtype=torch.long)
 
     def encode_legal(self) -> tuple[list[Action], torch.Tensor]:
-        """`self.env.legal_actions()` for the current state -> `(candidates, tensor)`.
+        """`self.env.legal_actions()` for the current state -> `(legal_actions, tensor)`.
 
-        `tensor[i]` encodes `candidates[i]`; after scoring, index back into
-        `candidates` with the winning row to get the real `Action` to step.
+        `tensor[i]` encodes `legal_actions[i]`; after scoring, index back
+        into `legal_actions` with the winning row to get the real `Action`
+        to step.
         """
-        candidates = self.env.legal_actions()
-        tensor = self.encode_many(candidates, self.env.current_state())
-        return candidates, tensor
+        legal_actions = self.env.legal_actions()
+        tensor = self.encode_many(legal_actions, self.env.current_state())
+        return legal_actions, tensor
 
 
 __all__ = ["ActionEncoder"]

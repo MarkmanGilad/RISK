@@ -2,8 +2,10 @@
 
 Planning doc for the network(s) that sit on top of
 [`GraphAdapter`](GraphAdapter.md) and [`Action.md`](Action.md) to choose
-actions. Nothing here is implemented yet — no `risk/learning/encoder.py`,
-`q_network.py`, or `policy_network.py` exist. This supersedes the earlier
+actions. Shared-foundation pieces are being built incrementally — see
+[ActionGraphBuilder.md](ActionGraphBuilder.md) (implemented) — but
+none of the four nets themselves exist yet: no `risk/learning/encoder.py`,
+`q_network.py`, or `policy_network.py`. This supersedes the earlier
 split into `QNetwork.md` (DQN) and `PPOPolicy.md` (PPO) — those covered one
 combination each and would have repeated the shared structure twice; this
 doc covers all four combinations against one shared foundation instead.
@@ -18,19 +20,19 @@ Two separate design questions turned out to be orthogonal:
    vs. PPO (`π(a|s)` + `V(s)`, on-policy, rollout buffer, GAE + clipped
    surrogate).
 2. **How the action enters the network** — **inject** it into the graph
-   before the GNN runs (modify `x`/`edge_attr` per candidate, one GNN pass
-   per candidate), vs. **look it up** from one GNN pass over the
+   before the GNN runs (modify `x`/`edge_attr` per action, one GNN pass
+   per action), vs. **look it up** from one GNN pass over the
    unmodified state graph (read `H[t1]`/`H[t2]` after the fact, one GNN
-   pass per decision, regardless of how many candidates exist).
+   pass per decision, regardless of how many legal actions exist).
 
 Neither axis implies the other — the algorithm decides what the output
 scalar(s) mean and how training works; the action representation decides
-how a candidate gets *into* the network and at what cost. That's four nets:
+how an action gets *into* the network and at what cost. That's four nets:
 
 | | **Inject** | **Lookup** |
 |---|---|---|
-| **DQN** | **Net A** — `Q(s,a)` from a per-candidate modified graph | **Net B** — `Q(s,a)` from one shared graph + embedding lookup |
-| **PPO** | **Net C** — `logit(s,a)` from a per-candidate modified graph, `V(s)` from the base graph | **Net D** — `logit(s,a)` and `V(s)` both from one shared graph |
+| **DQN** | **Net A** — `Q(s,a)` from a per-action modified graph | **Net B** — `Q(s,a)` from one shared graph + embedding lookup |
+| **PPO** | **Net C** — `logit(s,a)` from a per-action modified graph, `V(s)` from the base graph | **Net D** — `logit(s,a)` and `V(s)` both from one shared graph |
 
 The plan is to build and train all four against the same self-play setup
 and find out empirically which fits Risk best, rather than deciding by
@@ -45,13 +47,13 @@ it once, in its own module(s), and have all four nets import it.
 
 ### Base graph — unchanged, from `GraphAdapter`
 
-`Data(x=[42,13], edge_index=[2,166], u=[1,33])`, exactly as documented in
+`Data(x=[42,13], edge_index=[2,166], u=[1,34])`, exactly as documented in
 [GraphAdapter.md](GraphAdapter.md). None of the four nets touch
 `GraphAdapter` itself — it stays the action-independent state encoding.
 
 **One addition all four nets benefit from:** append a `num_legal_actions`
 scalar (raw count, or `log1p`-scaled) to `u`. This was a real gap in the
-lookup-based design specifically — a per-candidate head reading `H[t1]`/
+lookup-based design specifically — a per-action head reading `H[t1]`/
 `H[t2]` has no way to know "is this one of 3 options or one of 40" unless
 that's surfaced somewhere global — but since it lives in `u`, every net
 gets it for free (pooled into the critic/Q-head for Nets A-C, and available
@@ -59,9 +61,13 @@ to Net D's lookup heads via the same `u` they already read). Goes in
 `GraphAdapter._global_features`, sourced from `len(env.legal_actions())` at
 adapter-call time — a small, deliberate exception to `GraphAdapter`'s
 "per-state, not per-action" framing, justified because it's a *property of
-the state* (how open the position is) rather than of any one candidate.
+the state* (how open the position is) rather than of any one action.
 
 ### `Encoder` — one shared module, `risk/learning/encoder.py`
+
+**Implemented**, exactly as planned below — `TransformerConv` is a graph
+*attention* layer, not a spectral GCN, so the class keeps the name
+`Encoder` rather than something GCN-flavored:
 
 ```python
 class Encoder(nn.Module):
@@ -79,14 +85,21 @@ class Encoder(nn.Module):
         return h   # [num_nodes, hidden_dim]
 ```
 
+Verified against real action batches from `ActionGraphBuilder`
+(`in_dim=13`, `edge_dim=2`, `hidden_dim=64`, `n_layers=4`): encodes a full
+74-action `ATTACK`-phase batch to `[3108, 64]` (3108 = sum of nodes
+across all action graphs), encodes a single base graph with zero
+`edge_attr` (the lookup-style call) to `[42, 64]`, and gradients flow back
+through every layer.
+
 Identical module for all four nets. What differs is only what gets passed
 in:
 
-- **Inject (A, C):** `edge_attr` carries the real per-candidate marker for
+- **Inject (A, C):** `edge_attr` carries the real per-action marker for
   `ATTACK` (`[selected_attack, dice_count]`, zero on every other edge —
-  see "Edge injection" below); `x` carries the per-candidate node
+  see "Edge injection" below); `x` carries the per-action node
   perturbation for `REINFORCE_PLACE`/`OCCUPY`/`FORTIFY`. Called once per
-  *candidate* (batched via `Batch.from_data_list`).
+  *action* (batched via `Batch.from_data_list`).
 - **Lookup (B, D):** `edge_attr` is zero-filled (or omitted, `edge_dim=0`)
   and `x` is the unmodified base graph's. Called once per *decision*.
   `TransformerConv`'s attention still runs — it just has nothing from the
@@ -100,9 +113,16 @@ applies the same way to "do we need different encoders for injection vs.
 lookup" (we don't; the encoder doesn't know or care where its `x`/`edge_attr`
 came from).
 
-### Action injection (used by Nets A, C only) — `CandidateGraphBuilder`
+### Action injection (used by Nets A, C only) — `ActionGraphBuilder`
 
-For a candidate `AttackAction(from=A, to=B, dice=d)`:
+**Implemented** — `risk/learning/action_graph_builder.py`, reference doc
+[ActionGraphBuilder.md](ActionGraphBuilder.md). One difference from
+the original plan below: the per-territory perturbation writes directly
+into `x`'s existing army-count column rather than a parallel
+`proposed_delta` column (see that doc's "Design decision" section for why,
+and when to revisit).
+
+For an `AttackAction(from=A, to=B, dice=d)`:
 
 ```python
 edge_attr.shape = [166, 2]                  # [selected_attack, dice_count]
@@ -119,17 +139,17 @@ into the real count — lean toward the parallel column, revisit
 empirically). `StopAttackAction`/skip-`FortifyAction` are the unmodified
 base graph itself — no perturbation, nothing to encode.
 
-`edge_index` never changes per candidate, only `edge_attr`/`x` do — and
+`edge_index` never changes per action, only `edge_attr`/`x` do — and
 `topology.edge_index()`'s row order is stable (`BoardTopology` sorts once
 at load time), so `index_of(A -> B)` can be precomputed once, not searched
-per candidate.
+per action.
 
-`CandidateGraphBuilder` never mutates the base `Data` — every candidate
+`ActionGraphBuilder` never mutates the base `Data` — every action
 needs its own unmodified copy to diverge from.
 
 ### Action lookup (used by Nets B, D only) — embedding heads
 
-For a candidate `(stage, t1, t2, n)` (from the already-implemented
+For one legal action's `(stage, t1, t2, n)` (from the already-implemented
 `Action.dqn_index()` / `ActionEncoder`, see [Action.md](Action.md)):
 
 ```python
@@ -148,12 +168,21 @@ d)` lookups concatenated with pooled global context instead.
 
 ### Per-stage heads (all four nets)
 
+**Implemented** — `risk/learning/heads.py`'s `Heads` class. One difference
+from the snippet below: `_make_head` is an instance method on `Heads`
+rather than a free function, and the `ModuleDict` is built from it in
+`__init__` rather than written out literally — same heads, built
+programmatically. Verified end-to-end (`Encoder` -> `pool` -> `Heads`)
+against a real 67-action `ATTACK` batch (graph-based head, gradients
+confirmed flowing) and a synthetic `TRADE_IN` case (pooled base-graph
+context + card-slot embeddings).
+
 Five small heads keyed by `ActionStage` (`TRADE_IN, REINFORCE_PLACE,
 ATTACK, OCCUPY, FORTIFY`), same reasoning in all four nets: the stages are
 different decisions with different `n`-semantics and value scales, so one
 head per stage avoids forcing a shared tail to disambiguate that
 implicitly. What differs per net is only the **input** to each head
-(pooled candidate-graph embedding for A/C, `head_input(...)` lookup for
+(pooled action-graph embedding for A/C, `head_input(...)` lookup for
 B/D) and the **output's meaning** (`Q` for A/B, `logit` for C/D).
 
 ```python
@@ -173,13 +202,18 @@ heads = nn.ModuleDict({
 })
 ```
 
-Mixed-stage batches (`TRADE_IN` + `REINFORCE_PLACE` candidates can appear
-together during `Phase.REINFORCE` — `Action.md` already notes this): split
-candidates by stage, run each group through its own head, merge the
-per-candidate scalars back into `legal_actions()`'s original order before
-the final `argmax` (A/B) or `softmax` (C/D).
+`Phase` and `ActionStage` are 1:1 (`Docs/Action.md`), so any one decision's
+legal actions are always a single stage now — grouping by stage before
+running heads is therefore always a single group in practice, but the code
+doesn't need to special-case that: split by stage, run each group through
+its own head, merge the per-action scalars back into `legal_actions()`'s
+original order before the final `argmax` (A/B) or `softmax` (C/D).
 
 ### Pooling (used wherever a whole-graph scalar is needed)
+
+**Implemented** — `risk/learning/pooling.py`'s `pool(h, batch, u)` function
+(needs the PyG `batch` index tensor too, to know which nodes belong to
+which graph — omitted from the snippet below for brevity).
 
 ```python
 g = torch.cat([global_mean_pool(H), global_max_pool(H), u], dim=-1)
@@ -193,11 +227,23 @@ message passing to refine, and pure node pooling alone is blind to it.
 
 ## Net A — DQN + injection
 
+**Implemented** — `risk/learning/gcn_dqn.py`'s `GCN_DQN` class, composing
+the shared `ActionGraphBuilder`/`Encoder`/`pool`/`Heads` pieces above
+into exactly the forward pass below: `GCN_DQN(topology, in_dim, hidden_dim,
+edge_dim, u_dim)(base, legal_actions, state) -> Q` (`[len(legal_actions)]`,
+same order as `legal_actions`). `Encoder`/`pool`/`Heads` deliberately stay
+in their own modules rather than living inside this class — they're
+shared, unmodified, by all four planned nets, not specific to Net A.
+Verified against a real 400-step rollout (predating the `Phase.TRADE_IN`/
+`Phase.REINFORCE_PLACE` split, back when one decision could still mix both
+stages — `Docs/Action.md`): every stage scored correctly, gradients
+confirmed flowing every step, `argmax` selects a real action.
+
 ```
 base Data(state)
-   │  + candidate action (per legal candidate)
+   │  + one legal action (per action)
    ▼
-CandidateGraphBuilder  ──▶  N modified Data graphs
+ActionGraphBuilder  ──▶  N modified Data graphs
    ▼
 Batch.from_data_list
    ▼
@@ -224,7 +270,7 @@ Encoder (once)          ──▶  H  [42, hidden_dim]
    │
    ├─ pool(H, u) ──▶ available if a head wants global context too
    ▼
-for each candidate (stage, t1, t2, n):
+for each legal action (stage, t1, t2, n):
    head_input(stage, t1, t2, n, H, none_vec)
    ▼
 heads[stage](head_input)  ──▶  Q(s, a)  [N]
@@ -241,9 +287,9 @@ degrade without the GNN seeing the action during message passing.
 
 ```
 base Data(state)                                    base Data(state)
-   │  + candidate action (per legal candidate)            │  (unmodified)
+   │  + one legal action (per action)                     │  (unmodified)
    ▼                                                       ▼
-CandidateGraphBuilder ──▶ N modified graphs          Encoder (once) ──▶ H_base
+ActionGraphBuilder ──▶ N modified graphs             Encoder (once) ──▶ H_base
    ▼                                                       ▼
 Batch.from_data_list                                pool(H_base, u) ──▶ g_base
    ▼                                                       ▼
@@ -257,8 +303,8 @@ softmax -> Categorical -> sample
 ```
 
 `N + 1` GNN forward passes per decision — the `+1` is real and worth
-calling out: `V(s)` doesn't depend on any candidate, so it has to come from
-a pass over the *unmodified* base graph, separate from the `N` candidate
+calling out: `V(s)` doesn't depend on any action, so it has to come from
+a pass over the *unmodified* base graph, separate from the `N` action
 passes the actor needs. This is the most expensive of the four nets.
 
 ## Net D — PPO + lookup
@@ -266,11 +312,11 @@ passes the actor needs. This is the most expensive of the four nets.
 ```
 base Data(state)
    ▼
-Encoder (once) ──▶ H  [42, hidden_dim]
+Encoder (once) ──▶  H  [42, hidden_dim]
    │
    ├──────────────────────────┬───────────────────────┐
    ▼                          ▼                         ▼
-for each candidate:      pool(H, u) ──▶ g          (g reused, no extra pass)
+for each legal action:   pool(H, u) ──▶ g          (g reused, no extra pass)
   head_input(...)              ▼
    ▼                     critic_head(g) ──▶ V(s)
 heads[stage](...)
@@ -290,10 +336,10 @@ originally in `PPOPolicy.md`.
 
 | | Algorithm | Action entry | GNN passes / decision | What the GNN "sees" |
 |---|---|---|---|---|
-| **A** | DQN | inject | `N` | board + this specific candidate, jointly, during message passing |
-| **B** | DQN | lookup | `1` | board only; candidate enters after, at the head |
-| **C** | PPO | inject | `N + 1` | board + candidate jointly (actor); board alone (critic) |
-| **D** | PPO | lookup | `1` | board only; candidate enters after, at the head |
+| **A** | DQN | inject | `N` | board + this specific action, jointly, during message passing |
+| **B** | DQN | lookup | `1` | board only; the action enters after, at the head |
+| **C** | PPO | inject | `N + 1` | board + action jointly (actor); board alone (critic) |
+| **D** | PPO | lookup | `1` | board only; the action enters after, at the head |
 
 The honest trade is expressiveness (inject) vs. throughput (lookup) — not
 "PPO vs. DQN" by itself, since both algorithms can pair with either action
@@ -308,7 +354,7 @@ kind of claim this experiment plan exists to check rather than assume.
 
 ## Experiment plan
 
-1. **Build the shared foundation first** — `Encoder`, `CandidateGraphBuilder`,
+1. **Build the shared foundation first** — `Encoder`, `ActionGraphBuilder`,
    the lookup `head_input`/`none_vec` helper, the per-stage `heads`
    `ModuleDict` pattern, and the `num_legal_actions` addition to
    `GraphAdapter`. Verify each in isolation against real `Environment`

@@ -29,12 +29,10 @@ if TYPE_CHECKING:
 
 
 class ActionStage(IntEnum):
-    """The DQN action-representation "stage" a candidate belongs to.
+    """The DQN action-representation "stage" a legal action belongs to.
 
-    Distinct from `Phase`: `REINFORCE` splits into two stages here
-    (trading cards vs. placing armies are different decisions that happen
-    to share one game `Phase`). `SETUP`/`GAME_OVER` aren't agent decisions
-    so they have no stage.
+    One stage per `Phase` (`risk/game/phase.py`), except `SETUP`/
+    `GAME_OVER` which aren't agent decisions so they have no stage.
     """
 
     TRADE_IN = 0
@@ -83,7 +81,7 @@ class ReinforcementAction(Action):
     """Place armies on owned territories. `placements: {territory_id: count}`."""
 
     placements: dict[str, int]
-    phase: ClassVar[Phase] = Phase.REINFORCE
+    phase: ClassVar[Phase] = Phase.REINFORCE_PLACE
     stage: ClassVar[ActionStage] = ActionStage.REINFORCE_PLACE
 
     def __post_init__(self) -> None:
@@ -201,7 +199,7 @@ class TradeInAction(Action):
     """
 
     card_indices: tuple[int, int, int]
-    phase: ClassVar[Phase] = Phase.REINFORCE
+    phase: ClassVar[Phase] = Phase.TRADE_IN
     stage: ClassVar[ActionStage] = ActionStage.TRADE_IN
 
     def __post_init__(self) -> None:
@@ -221,6 +219,23 @@ class TradeInAction(Action):
     def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
         i, j, k = self.card_indices
         return (int(self.stage), i, j, k)
+
+
+# --- skip trade -------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SkipTradeAction(Action):
+    """Decline trading this step. Transitions to REINFORCE_PLACE."""
+
+    phase: ClassVar[Phase] = Phase.TRADE_IN
+    stage: ClassVar[ActionStage] = ActionStage.TRADE_IN
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "skip_trade"}
+
+    def dqn_index(self, topology, state=None) -> tuple[int, int, int, int]:
+        return (int(self.stage), self.NONE_INDEX, self.NONE_INDEX, 0)
 
 
 # --- occupy ---------------------------------------------------------------
@@ -336,6 +351,8 @@ class ActionCodec:
             return StopAttackAction()
         if t == "trade_in":
             return TradeInAction(card_indices=tuple(int(i) for i in data["card_indices"]))
+        if t == "skip_trade":
+            return SkipTradeAction()
         if t == "occupy":
             return OccupyAction(count=int(data["count"]))
         if t == "fortify":
@@ -355,6 +372,7 @@ __all__ = [
     "AttackAction",
     "StopAttackAction",
     "TradeInAction",
+    "SkipTradeAction",
     "OccupyAction",
     "FortifyAction",
 ]

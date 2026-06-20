@@ -302,3 +302,92 @@ Updated [`Action.md`](Action.md) and [`README.md`](../README.md) (the
 `risk/learning/` folder tour and the Roadmap) to reference the real
 `ActionStage`/`Action.dqn_index`/`ActionEncoder` names instead of reading
 as an open proposal.
+
+## Follow-up pass: `Phase`/`ActionStage` made 1:1 (`TRADE_IN` / `REINFORCE_PLACE`)
+
+Context: while designing the RL replay buffer/agent on top of `Action.md`'s
+`(stage, t1, t2, n)` encoding, it became clear `ActionStage` (which head
+scores a candidate) wasn't actually a deterministic property of `Phase`
+(the state's turn-segment) — every phase except `REINFORCE` was already
+1:1, but `Environment.legal_actions()` could return `TRADE_IN` and
+`REINFORCE_PLACE` candidates *together* in one call whenever the hand
+wasn't full, and this was directly observed in a verification rollout
+(mixed decisions, 18-58 candidates, at multiple steps). The fix: a player
+is always in exactly one phase, and an explicit action ends it and
+advances to the next — the same discipline `StopAttackAction` and skip-
+`FortifyAction` already enforce for `ATTACK`/`FORTIFY`. This costs no
+expressiveness: a hand can only shrink during one continuous `REINFORCE`
+segment (new cards only arrive after a conquest, for a *future* turn), so
+forcing "resolve all desired trades first, then place" can't prevent any
+sequence of moves a player could already make.
+
+**`risk/game/phase.py`** — `Phase.REINFORCE` split into `Phase.TRADE_IN` +
+`Phase.REINFORCE_PLACE`. Every value except `SETUP` changed (a one-time
+break to the "stable for serialization" guarantee; no persisted save files
+exist in the repo). New order mirrors `ActionStage` with `SETUP`/
+`GAME_OVER` bookends: `SETUP, TRADE_IN, REINFORCE_PLACE, ATTACK, OCCUPY,
+FORTIFY, GAME_OVER`.
+
+**`risk/game/actions.py`** — `TradeInAction.phase` → `TRADE_IN`,
+`ReinforcementAction.phase` → `REINFORCE_PLACE`. New `SkipTradeAction`
+(modeled exactly on `StopAttackAction`): no fields, `phase=TRADE_IN`,
+`dqn_index()` returns the same `(-1, -1, 0)` sentinel pattern as the other
+skip/stop actions. Registered in `ActionCodec.from_dict` (`"skip_trade"`).
+
+**`risk/game/environment.py`**:
+- `legal_actions()`'s old combined `REINFORCE` branch split in two:
+  `TRADE_IN` returns every valid `TradeInAction` plus a `SkipTradeAction`
+  (omitted only when the hand is full and trading is mandatory);
+  `REINFORCE_PLACE` returns `_legal_reinforce(s)` alone.
+- New `_apply_skip_trade`: `phase = REINFORCE_PLACE`.
+- `_apply_trade_in`'s phase guard: `REINFORCE` → `TRADE_IN` (still doesn't
+  auto-advance — multiple trades stay legal within `TRADE_IN`).
+- **`_apply_reinforce` gained a phase guard it didn't have before**
+  (`REINFORCE_PLACE` required). This goes a little beyond a pure rename:
+  under the old combined phase there was no separate stage to bypass, but
+  once `TRADE_IN` became a real phase you're meant to explicitly leave,
+  *not* guarding `_apply_reinforce` would let a `ReinforcementAction`
+  silently skip `TRADE_IN` entirely — exactly the loophole this pass exists
+  to close.
+- `_enter_reinforce_for` renamed to `_begin_turn_for` (now sets
+  `Phase.TRADE_IN`; every turn starts there, even with nothing to trade).
+
+**Agents/UI** — `risk/agents/heuristic_agent.py` (trade-or-skip on
+`TRADE_IN`, separately from `_reinforce()` on `REINFORCE_PLACE`),
+`risk/agents/human_agent.py`, `risk/ui/render/panels.py`, and
+`risk/agents/human_input.py` (split the single REINFORCE HUD panel into a
+`TRADE_IN` panel with a new "Skip Trading" button and a `REINFORCE_PLACE`
+panel with the existing placement UI) all updated to the new phase names
+and the new button.
+
+**`risk/learning/graph_adapter.py`** needed no code change — `u`'s phase
+one-hot is already `[0.0] * len(Phase)`, so it grew 6→7 wide (`u`: 33→34)
+for free. `risk/learning/gcn_dqn.py`'s `TRADE_IN` path (predates this
+pass) does `a.card_indices for a in trade_actions`, which breaks once a
+`SkipTradeAction` (no `card_indices`) appears in that list — flagged, not
+fixed, since that file is already slated for the "pure net + agent"
+redesign from a separate, not-yet-built piece of work; it'll naturally use
+`action.dqn_index(...)`'s sentinel instead of raw `.card_indices` when that
+redesign happens, fixing this for free.
+
+Updated [`Action.md`](Action.md) (new `SkipTradeAction` rows, the
+now-accurate "`Phase`/`ActionStage` are 1:1" framing, removed the
+no-longer-true "mixed-stage batches" notes), [`NetworkArchitectures.md`
+](NetworkArchitectures.md), and [`GraphAdapter.md`](GraphAdapter.md) (`u`
+width/slice table) to match.
+
+**Verified:**
+- `python -m pytest Temp/tests -q` → 215 passed, 1 skipped (up from 208 —
+  7 new tests: `SkipTradeAction` construction/round-trip, a
+  `TRADE_IN -> REINFORCE_PLACE` transition test mirroring
+  `test_fortify_skip_advances_turn`, a `_apply_reinforce` out-of-phase
+  rejection test, a `TRADE_IN`-only `legal_actions()` test split out
+  alongside the existing `REINFORCE_PLACE`-only one, and the new
+  "Skip Trading" HUD button test).
+- A real 500-step `RandomAgent` self-play rollout: every single
+  `legal_actions()` call returned candidates of exactly one `ActionStage`
+  (asserted explicitly, not just exercised) — confirms the mixing is
+  actually gone, not just in the unit tests. All 5 stages were exercised.
+- `GraphAdapter` re-verified end-to-end: single snapshot and a 3-game
+  `Batch.from_data_list` both produce the new `u` width (`[1, 34]` /
+  `[3, 34]`), `Data.validate()` passes.

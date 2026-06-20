@@ -76,6 +76,10 @@ MAX_CARDS_IN_HAND: Final[int] = 5
 CARD_SET_VALUES: Final[tuple[int, ...]] = (4, 6, 8, 10, 12, 15)
 CARD_SET_INCREMENT_AFTER_FIXED: Final[int] = 5
 
+# Extra armies placed immediately on a territory when a traded-in card
+# depicts a territory the trading player currently occupies.
+CARD_TERRITORY_BONUS_ARMIES: Final[int] = 2
+
 
 def card_set_value(trade_in_index: int) -> int:
     """Reinforcement bonus awarded for the n-th card set traded in (0-based).
@@ -117,6 +121,7 @@ __all__ = [
     "MAX_CARDS_IN_HAND",
     "CARD_SET_VALUES",
     "CARD_SET_INCREMENT_AFTER_FIXED",
+    "CARD_TERRITORY_BONUS_ARMIES",
     "card_set_value",
     "starting_armies_for",
 ]

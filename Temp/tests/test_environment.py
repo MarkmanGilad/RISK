@@ -6,10 +6,12 @@ import copy as _copy
 import pytest
 
 from risk.game.actions import (
+    ActionStage,
     AttackAction,
     FortifyAction,
     OccupyAction,
     ReinforcementAction,
+    SkipTradeAction,
     StopAttackAction,
 )
 from .conftest import make_env, make_settings
@@ -30,6 +32,11 @@ def _settings(n: int = 3, seed: int = 1234) -> GameSettings:
 
 def _fresh_env(n: int = 3, seed: int = 1234) -> Environment:
     return make_env(n=n, seed=seed, agent_kind="human")
+
+
+def _skip_to_reinforce_place(env: Environment) -> None:
+    """Every fresh turn starts in TRADE_IN; skip it to reach REINFORCE_PLACE."""
+    env.step(SkipTradeAction())
 
 
 # --- reset ----------------------------------------------------------------
@@ -67,12 +74,22 @@ def test_reset_starting_armies_correct_per_player() -> None:
             assert total == expected, f"player {pid} of {n}: got {total} expected {expected}"
 
 
-def test_reset_phase_is_reinforce_for_player_zero() -> None:
+def test_reset_phase_is_trade_in_for_player_zero() -> None:
     env = _fresh_env()
     s = env.current_state()
-    assert s.phase is Phase.REINFORCE
+    assert s.phase is Phase.TRADE_IN
     assert s.current_player_index == 0
     assert s.reinforcement_budget >= MIN_REINFORCEMENT
+
+
+def test_skip_trade_advances_to_reinforce_place() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    budget_before = s.reinforcement_budget
+    _skip_to_reinforce_place(env)
+    assert s.phase is Phase.REINFORCE_PLACE
+    assert s.current_player_index == 0
+    assert s.reinforcement_budget == budget_before
 
 
 # --- reinforcement counts -------------------------------------------------
@@ -109,13 +126,14 @@ def test_reinforcement_includes_continent_bonus() -> None:
 def test_reinforce_partial_placement_stays_in_reinforce() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     pid = s.current_player_index
     budget = s.reinforcement_budget
     assert budget >= 2, "test needs a budget of at least 2 to split"
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
 
     env.step(ReinforcementAction(placements={owned[0]: 1}))
-    assert s.phase is Phase.REINFORCE
+    assert s.phase is Phase.REINFORCE_PLACE
     assert s.current_player_index == pid
     assert s.reinforcement_budget == budget - 1
 
@@ -130,6 +148,7 @@ def test_reinforce_full_budget_in_one_step_still_ends_phase() -> None:
     exactly as before — multi-step is optional, not required."""
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
     budget = s.reinforcement_budget
 
@@ -141,14 +160,24 @@ def test_reinforce_full_budget_in_one_step_still_ends_phase() -> None:
 def test_reinforce_rejects_total_over_budget() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
     with pytest.raises(ValueError):
         env.step(ReinforcementAction(placements={owned[0]: s.reinforcement_budget + 1}))
 
 
+def test_reinforce_rejects_outside_reinforce_place() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
+    with pytest.raises(ValueError):
+        env.step(ReinforcementAction(placements={owned[0]: 1}))
+
+
 def test_legal_reinforce_offers_one_half_all_buckets() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     budget = s.reinforcement_budget
     assert budget >= 4, "test needs a budget where one/half/all are distinct"
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == s.current_player_index]
@@ -165,8 +194,16 @@ def test_legal_reinforce_offers_one_half_all_buckets() -> None:
 # --- legal actions per phase ----------------------------------------------
 
 
-def test_legal_actions_in_reinforce_only_reinforce() -> None:
+def test_legal_actions_in_trade_in_only_trade_in() -> None:
     env = _fresh_env()
+    acts = env.legal_actions()
+    assert all(a.stage is ActionStage.TRADE_IN for a in acts)
+    assert len(acts) > 0
+
+
+def test_legal_actions_in_reinforce_place_only_reinforce() -> None:
+    env = _fresh_env()
+    _skip_to_reinforce_place(env)
     acts = env.legal_actions()
     assert all(isinstance(a, ReinforcementAction) for a in acts)
     assert len(acts) > 0
@@ -175,6 +212,7 @@ def test_legal_actions_in_reinforce_only_reinforce() -> None:
 def test_legal_actions_in_attack_include_stop_and_adjacency() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     # Place all reinforcements on one owned territory and step to ATTACK.
     pid = 0
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
@@ -195,6 +233,7 @@ def test_legal_actions_in_attack_include_stop_and_adjacency() -> None:
 def test_legal_actions_in_fortify_includes_skip() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     pid = s.current_player_index
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
     env.step(ReinforcementAction(placements={owned[0]: s.reinforcement_budget}))
@@ -214,6 +253,7 @@ def _snapshot(s):
 def test_illegal_reinforce_does_not_mutate() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     before = _snapshot(s)
     bad_terr = next(
         env.topology.territory_at(i)
@@ -228,6 +268,7 @@ def test_illegal_reinforce_does_not_mutate() -> None:
 def test_illegal_attack_does_not_mutate() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     pid = 0
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
     env.step(ReinforcementAction(placements={owned[0]: s.reinforcement_budget}))
@@ -255,6 +296,7 @@ def test_dice_resolution_bounds_over_many_rolls() -> None:
     to 1 (1v1), 2 (3v2 etc.) per battle."""
     env = _fresh_env(seed=7)
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     pid = 0
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
     # Pour all reinforcements into one strong territory.
@@ -300,6 +342,7 @@ def test_conquest_transfers_owner_and_armies() -> None:
     ti = env.topology.index_of(target)
     s.armies[ai] = 50
     s.armies[ti] = 1
+    _skip_to_reinforce_place(env)
     env.step(ReinforcementAction(placements={attacker: s.reinforcement_budget}))
     # Hammer until conquered.
     for _ in range(50):
@@ -332,6 +375,7 @@ def test_card_drawn_on_first_conquest_of_turn() -> None:
     s.armies[ai] = 50
     s.armies[ti] = 1
     hand_before = len(s.hands[pid])
+    _skip_to_reinforce_place(env)
     env.step(ReinforcementAction(placements={attacker: s.reinforcement_budget}))
     for _ in range(50):
         if s.owners[ti] == pid:
@@ -365,6 +409,7 @@ def _force_conquest(env: Environment, pid: int) -> tuple[str, str, int]:
     ti = env.topology.index_of(target)
     s.armies[ai] = 50
     s.armies[ti] = 1
+    _skip_to_reinforce_place(env)
     env.step(ReinforcementAction(placements={attacker: s.reinforcement_budget}))
     while s.phase is not Phase.OCCUPY:
         env.step(AttackAction(from_territory=attacker, to_territory=target, dice=3))
@@ -439,6 +484,7 @@ def test_occupy_rejects_count_above_available() -> None:
 def test_fortify_skip_advances_turn() -> None:
     env = _fresh_env()
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     pid = s.current_player_index
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
     env.step(ReinforcementAction(placements={owned[0]: s.reinforcement_budget}))
@@ -446,12 +492,13 @@ def test_fortify_skip_advances_turn() -> None:
     env.step(FortifyAction(from_territory=None, to_territory=None, count=0))
     s2 = env.current_state()
     assert s2.current_player_index != pid
-    assert s2.phase is Phase.REINFORCE
+    assert s2.phase is Phase.TRADE_IN
 
 
 def test_fortify_requires_connected_owned_chain() -> None:
     env = _fresh_env(seed=0)
     s = env.current_state()
+    _skip_to_reinforce_place(env)
     pid = s.current_player_index
     owned = [env.topology.territory_at(i) for i, o in enumerate(s.owners) if o == pid]
     env.step(ReinforcementAction(placements={owned[0]: s.reinforcement_budget}))

@@ -16,6 +16,18 @@ from risk.game.settings import GameSettings
 from risk.game.state import State
 
 
+def armies_column_index(topology: BoardTopology) -> int:
+    """Column of `x` holding the raw army count (see `_node_features` below).
+
+    A plain function, not a `GraphAdapter` method, so `ActionGraphBuilder`
+    (which perturbs that same column to inject `REINFORCE_PLACE`/`OCCUPY`/
+    `FORTIFY` actions — `Docs/NetworkArchitectures.md`) can reuse this
+    layout without needing a `GraphAdapter` instance or duplicating the
+    offset math.
+    """
+    return len(topology.continents) + MAX_PLAYERS
+
+
 class GraphAdapter:
     """Builds one `Data` graph snapshot of a `State` for a GCN.
 
@@ -51,7 +63,7 @@ class GraphAdapter:
         n = len(topology)
         continents = topology.continents
         continent_col = {c: i for i, c in enumerate(continents)}
-        armies_col = len(continents) + MAX_PLAYERS
+        armies_col = armies_column_index(topology)
 
         x = torch.zeros((n, armies_col + 1), dtype=torch.float32)
         for i in range(n):
@@ -98,4 +110,4 @@ class GraphAdapter:
         return torch.tensor([values], dtype=torch.float32)
 
 
-__all__ = ["GraphAdapter"]
+__all__ = ["GraphAdapter", "armies_column_index"]

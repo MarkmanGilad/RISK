@@ -14,6 +14,7 @@ from risk.game.actions import (
     FortifyAction,
     OccupyAction,
     ReinforcementAction,
+    SkipTradeAction,
     StopAttackAction,
     TradeInAction,
 )
@@ -56,6 +57,12 @@ def _build(human_ids: set[int], seed: int = 1, n: int = 3):
     return env, agents, controller
 
 
+def _skip_trade(env) -> None:
+    """Every fresh turn starts in TRADE_IN; skip it to reach REINFORCE_PLACE."""
+    if env.current_state().phase == Phase.TRADE_IN:
+        env.step(SkipTradeAction())
+
+
 def _own_indices(env, pid: int) -> list[int]:
     s = env.current_state()
     return [i for i, o in enumerate(s.owners) if o == pid]
@@ -70,7 +77,10 @@ def _drive_to_attack_phase(env, agents, controller) -> None:
     """Submit a valid reinforce so the env transitions to ATTACK for the
     current human seat."""
     s = env.current_state()
-    assert s.phase == Phase.REINFORCE
+    if s.phase == Phase.TRADE_IN:
+        env.step(SkipTradeAction())
+        controller.on_turn_change(env.current_state())
+    assert s.phase == Phase.REINFORCE_PLACE
     pid = s.current_player_index
     owned = _own_indices(env, pid)
     assert owned
@@ -130,6 +140,7 @@ def test_widgets_inactive_for_ai_turn():
 
 def test_widgets_reinforce_shape():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     s = env.current_state()
     m = controller.widgets(s)
     assert m.header == "Your Turn (REINFORCE)"
@@ -147,6 +158,7 @@ def test_widgets_reinforce_shape():
 
 def test_reinforce_left_click_increments_and_button_submits():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     s = env.current_state()
     budget = s.reinforcement_budget
     owned = _own_indices(env, 0)[0]
@@ -183,6 +195,7 @@ def test_reinforce_mixed_placement_across_territories_submits():
     # accepted even though `legal_actions()` only enumerates the canonical
     # one-territory form. The agent must hand the action to the loop.
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     s = env.current_state()
     budget = s.reinforcement_budget
     if budget < 2:
@@ -209,6 +222,7 @@ def test_reinforce_mixed_placement_across_territories_submits():
 
 def test_reinforce_left_click_caps_at_budget():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     s = env.current_state()
     owned = _own_indices(env, 0)[0]
     for _ in range(s.reinforcement_budget + 5):
@@ -218,6 +232,7 @@ def test_reinforce_left_click_caps_at_budget():
 
 def test_reinforce_right_click_decrements_and_never_negative():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     owned = _own_indices(env, 0)[0]
     controller.on_territory_click(owned, button=1)
     controller.on_territory_click(owned, button=1)
@@ -231,6 +246,7 @@ def test_reinforce_right_click_decrements_and_never_negative():
 
 def test_reinforce_enemy_click_is_ignored():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     enemy = next(i for i in _enemy_indices(env, 0))
     controller.on_territory_click(enemy, button=1)
     assert controller.pending_placements == {}
@@ -239,6 +255,7 @@ def test_reinforce_enemy_click_is_ignored():
 
 def test_reinforce_clear_all_button_empties_pending():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     owned = _own_indices(env, 0)[0]
     controller.on_territory_click(owned, button=1)
     controller.on_territory_click(owned, button=1)
@@ -250,6 +267,7 @@ def test_reinforce_clear_all_button_empties_pending():
 
 def test_reinforce_place_armies_does_nothing_until_budget_matched():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     owned = _own_indices(env, 0)[0]
     controller.on_territory_click(owned, button=1)  # 1 placed, budget > 1
     controller.on_hud_button("place_armies")
@@ -258,6 +276,7 @@ def test_reinforce_place_armies_does_nothing_until_budget_matched():
 
 def test_reinforce_via_hud_field_increments():
     env, agents, controller = _build(human_ids={0})
+    _skip_trade(env)
     s = env.current_state()
     owned = _own_indices(env, 0)[0]
     terr = env.topology.territory_at(owned)
@@ -276,7 +295,10 @@ def test_reinforce_via_hud_field_increments():
 def _advance_to_attack(env, agents, controller, pid: int) -> None:
     """Step env directly: submit a legal reinforce so it transitions."""
     s = env.current_state()
-    assert s.current_player_index == pid and s.phase == Phase.REINFORCE
+    if s.phase == Phase.TRADE_IN:
+        env.step(SkipTradeAction())
+        controller.on_turn_change(env.current_state())
+    assert s.current_player_index == pid and s.phase == Phase.REINFORCE_PLACE
     owned = _own_indices(env, pid)[0]
     terr = env.topology.territory_at(owned)
     env.step(ReinforcementAction(placements={terr: s.reinforcement_budget}))
@@ -448,6 +470,7 @@ def _force_conquest_for_pid(env, pid: int) -> tuple[int, int]:
     ti = env.topology.index_of(target)
     s.armies[ai] = 50
     s.armies[ti] = 1
+    _skip_trade(env)
     env.step(ReinforcementAction(placements={attacker: s.reinforcement_budget}))
     from risk.game.phase import Phase as _Phase
     while s.phase is not _Phase.OCCUPY:
@@ -614,6 +637,14 @@ def test_invalid_set_does_not_enable_trade():
     assert m.trade_value is None
     trade_btn = next(b for b in m.buttons if b.id == "trade_cards")
     assert trade_btn.enabled is False
+
+
+def test_skip_trade_button_submits_skip():
+    env, agents, controller = _build(human_ids={0})
+    m = controller.widgets(env.current_state())
+    assert any(b.id == "skip_trade" for b in m.buttons)
+    controller.on_hud_button("skip_trade")
+    assert isinstance(agents[0]._pending, SkipTradeAction)
 
 
 def test_cards_button_absent_when_not_human_turn():

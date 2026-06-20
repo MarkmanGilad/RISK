@@ -87,7 +87,7 @@ class HudPanel:
         phase_label = Phase(state.phase).name
         target.blit(self.font.render(f"Phase: {phase_label}", True, self.FG), (x, y))
         y += line_h
-        if state.phase is Phase.REINFORCE:
+        if state.phase is Phase.REINFORCE_PLACE:
             target.blit(
                 self.font.render(f"Reinforce: {state.reinforcement_budget}", True, self.ACCENT),
                 (x, y),

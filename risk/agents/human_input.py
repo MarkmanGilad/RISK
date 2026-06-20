@@ -24,6 +24,7 @@ from risk.game.actions import (
     FortifyAction,
     OccupyAction,
     ReinforcementAction,
+    SkipTradeAction,
     StopAttackAction,
     TradeInAction,
 )
@@ -170,7 +171,7 @@ class HumanInputController:
         if not (0 <= territory_index < len(self.topology.territories)):
             return
         phase = state.phase
-        if phase == Phase.REINFORCE:
+        if phase == Phase.REINFORCE_PLACE:
             self._reinforce_click(state, territory_index, button)
         elif phase == Phase.ATTACK:
             self._attack_click(state, territory_index, button)
@@ -272,6 +273,8 @@ class HumanInputController:
                 self.selected_cards = set()
         elif button_id == "trade_cards":
             self._submit_trade(state)
+        elif button_id == "skip_trade":
+            self._submit_skip_trade(state)
         elif button_id == "attack":
             self._submit_attack(state)
         elif button_id == "end_attack":
@@ -341,7 +344,7 @@ class HumanInputController:
         return False
 
     def _submit_reinforce(self, state: State) -> None:
-        if state.phase != Phase.REINFORCE:
+        if state.phase != Phase.REINFORCE_PLACE:
             return
         placed = sum(self.pending_placements.values())
         if placed == 0 or placed != state.reinforcement_budget:
@@ -370,7 +373,7 @@ class HumanInputController:
             self.selected_cards.add(idx)
 
     def _submit_trade(self, state: State) -> None:
-        if state.phase != Phase.REINFORCE:
+        if state.phase != Phase.TRADE_IN:
             return
         if len(self.selected_cards) != 3:
             return
@@ -382,6 +385,13 @@ class HumanInputController:
         if self._is_legal(action):
             self.agent.submit(action)
             self.selected_cards = set()
+
+    def _submit_skip_trade(self, state: State) -> None:
+        if state.phase != Phase.TRADE_IN:
+            return
+        action = SkipTradeAction()
+        if self._is_legal(action):
+            self.agent.submit(action)
 
     def _submit_attack(self, state: State) -> None:
         if state.phase != Phase.ATTACK:
@@ -486,7 +496,7 @@ class HumanInputController:
         if not model.is_active:
             return model
         hand = state.hands[self.agent.player_id]
-        can_trade = state.phase == Phase.REINFORCE
+        can_trade = state.phase == Phase.TRADE_IN
         must_trade = can_trade and len(hand) >= MAX_CARDS_IN_HAND
         # When a trade is mandatory, force the card panel open and keep it open.
         if must_trade:
@@ -537,19 +547,33 @@ class HumanInputController:
         if not self.is_human_turn(state):
             return HudActionPanelModel()
 
-        if state.phase == Phase.REINFORCE:
-            placed = sum(self.pending_placements.values())
-            budget = state.reinforcement_budget
-            rows = tuple(self.pending_placements.items())
+        if state.phase == Phase.TRADE_IN:
             hand = state.hands[self.agent.player_id]
             must_trade = len(hand) >= MAX_CARDS_IN_HAND
             if must_trade:
                 return HudActionPanelModel(
-                    header="Your Turn (REINFORCE)",
+                    header="Your Turn (TRADE IN)",
                     info_lines=(
                         f"You have {len(hand)} cards — you must trade a set before placing.",
                     ),
                 )
+            return HudActionPanelModel(
+                header="Your Turn (TRADE IN)",
+                info_lines=("Trade a card set for armies, or skip trading.",),
+                buttons=(
+                    HudButton(
+                        id="skip_trade",
+                        label="Skip Trading",
+                        enabled=True,
+                        primary=True,
+                    ),
+                ),
+            )
+
+        if state.phase == Phase.REINFORCE_PLACE:
+            placed = sum(self.pending_placements.values())
+            budget = state.reinforcement_budget
+            rows = tuple(self.pending_placements.items())
             return HudActionPanelModel(
                 header="Your Turn (REINFORCE)",
                 info_lines=(f"Armies to place: {placed} / {budget}",),

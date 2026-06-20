@@ -20,12 +20,14 @@ from risk.game.actions import (
     FortifyAction,
     OccupyAction,
     ReinforcementAction,
+    SkipTradeAction,
     StopAttackAction,
     TradeInAction,
 )
 from risk.game.board_topology import BoardTopology
 from risk.constants import (
     CARD_SYMBOLS,
+    CARD_TERRITORY_BONUS_ARMIES,
     DIE_SIDES,
     MAX_ATTACK_DICE,
     MAX_CARDS_IN_HAND,
@@ -106,10 +108,10 @@ class Environment:
                 idx = self._rng.choice(owned_by[p])
                 state.armies[idx] += 1
 
-        # 3) Enter player 0's REINFORCE phase.
+        # 3) Begin player 0's turn (TRADE_IN phase first).
         state.current_player_index = 0
         self._state = state
-        self._enter_reinforce_for(state, 0)
+        self._begin_turn_for(state, 0)
         return state
 
     # --- read-only views --------------------------------------------------
@@ -143,6 +145,8 @@ class Environment:
             info = self._apply_reinforce(s, action)
         elif isinstance(action, TradeInAction):
             info = self._apply_trade_in(s, action)
+        elif isinstance(action, SkipTradeAction):
+            info = self._apply_skip_trade(s)
         elif isinstance(action, AttackAction):
             info = self._apply_attack(s, action)
         elif isinstance(action, OccupyAction):
@@ -163,8 +167,14 @@ class Environment:
 
     # --- legal actions ----------------------------------------------------
 
-    def legal_actions(self) -> list[Action]:
+    def legal_actions(self, state: Optional[State] = None) -> list[Action]:
         """Return a representative list of legal actions for the current phase.
+
+        `state` defaults to `self.current_state()`; pass an explicit snapshot
+        to enumerate legal actions for a state other than the live one (e.g.
+        a replay-buffer transition's `next_state` during training) — every
+        `_legal_*` helper below is already a pure function of `(state,
+        self.topology)`, so this never reads or mutates `self._state`.
 
         Note: ReinforcementAction is parameterized; enumerating *all* possible
         placements is exponential. For attacks/fortify we enumerate exactly.
@@ -174,13 +184,15 @@ class Environment:
         a specific split should construct their own ReinforcementAction and
         let `step` validate it.
         """
-        s = self.current_state()
-        if s.phase is Phase.REINFORCE:
+        s = state if state is not None else self.current_state()
+        if s.phase is Phase.TRADE_IN:
             trades = list(self._legal_trade_ins(s))
             # If the player must trade (hand >= limit), only offer trade actions.
             if len(s.hands[s.current_player_index]) >= MAX_CARDS_IN_HAND:
                 return trades
-            return list(self._legal_reinforce(s)) + trades
+            return trades + [SkipTradeAction()]
+        if s.phase is Phase.REINFORCE_PLACE:
+            return list(self._legal_reinforce(s))
         if s.phase is Phase.ATTACK:
             return list(self._legal_attack(s))
         if s.phase is Phase.OCCUPY:
@@ -224,9 +236,9 @@ class Environment:
         return base + bonus
 
     def _apply_reinforce(self, s: State, action: ReinforcementAction) -> dict:
+        if s.phase is not Phase.REINFORCE_PLACE:
+            raise ValueError("Reinforcement only allowed during REINFORCE_PLACE")
         pid = s.current_player_index
-        # Human players are blocked by the UI from placing until they trade
-        # down to < MAX_CARDS_IN_HAND. AI agents trade via legal_actions().
         # Validate territory ownership and shape.
         for terr, count in action.placements.items():
             if terr not in self.topology.territories:
@@ -239,8 +251,8 @@ class Environment:
                 f"Reinforcement total {action.total} exceeds budget {s.reinforcement_budget}"
             )
         # Apply. Reinforcement is multi-step: a player may place part of the
-        # budget and stay in REINFORCE to place the rest in a later action;
-        # the phase only advances once the whole budget is placed.
+        # budget and stay in REINFORCE_PLACE to place the rest in a later
+        # action; the phase only advances once the whole budget is placed.
         for terr, count in action.placements.items():
             idx = self.topology.index_of(terr)
             s.armies[idx] += count
@@ -256,11 +268,20 @@ class Environment:
             self._discard.append(c)
         value = card_set_value(s.cards_traded_in_count)
         s.cards_traded_in_count += 1
+        # Territory bonus: a card depicting a territory the trading player
+        # currently occupies grants 2 armies placed on it immediately, on
+        # top of the set's reinforcement value.
+        for c in trio:
+            if c.is_wild:
+                continue
+            idx = self.topology.index_of(c.territory_id)
+            if s.owners[idx] == pid:
+                s.armies[idx] += CARD_TERRITORY_BONUS_ARMIES
         return value
 
     def _apply_trade_in(self, s: State, action: TradeInAction) -> dict:
-        if s.phase is not Phase.REINFORCE:
-            raise ValueError("Trade-in only allowed during REINFORCE")
+        if s.phase is not Phase.TRADE_IN:
+            raise ValueError("Trade-in only allowed during TRADE_IN")
         pid = s.current_player_index
         hand = s.hands[pid]
         idxs = action.card_indices
@@ -272,6 +293,10 @@ class Environment:
         value = self._trade_in_set(s, pid, trio)  # type: ignore[arg-type]
         s.reinforcement_budget += value
         return {"traded": value, "cards": len(hand) - 3}
+
+    def _apply_skip_trade(self, s: State) -> dict:
+        s.phase = Phase.REINFORCE_PLACE
+        return {}
 
     def _legal_trade_ins(self, s: State) -> Iterable[Action]:
         pid = s.current_player_index
@@ -286,8 +311,8 @@ class Environment:
     def trade_in_cards(self, cards: Sequence[Card]) -> int:
         """Optional explicit trade-in (callable during reinforcement)."""
         s = self.current_state()
-        if s.phase is not Phase.REINFORCE:
-            raise ValueError("Trade-in only allowed during REINFORCE")
+        if s.phase is not Phase.TRADE_IN:
+            raise ValueError("Trade-in only allowed during TRADE_IN")
         if not CardRules.is_valid_set(cards):
             raise ValueError("Not a valid trade-in set")
         pid = s.current_player_index
@@ -527,15 +552,17 @@ class Environment:
                 break
         else:
             return  # only one alive — winner handles termination
-        self._enter_reinforce_for(s, s.current_player_index)
+        self._begin_turn_for(s, s.current_player_index)
 
-    def _enter_reinforce_for(self, s: State, pid: int) -> None:
-        s.phase = Phase.REINFORCE
+    def _begin_turn_for(self, s: State, pid: int) -> None:
+        s.phase = Phase.TRADE_IN
         s.reinforcement_budget = self._compute_reinforcement(s, pid)
         self._conquered_this_turn = False
-        # No auto-trading here. Human players are blocked by the UI until they
-        # trade down to < MAX_CARDS_IN_HAND. AI agents pick TradeInAction from
-        # legal_actions() naturally before being offered placement actions.
+        # Every turn starts in TRADE_IN, even with nothing to trade — the
+        # player (human or AI) explicitly ends it via a TradeInAction-less
+        # SkipTradeAction, then moves on to REINFORCE_PLACE. Human players
+        # are additionally blocked by the UI from skipping while hand size
+        # is >= MAX_CARDS_IN_HAND (forced trade).
 
 
 __all__ = ["Environment", "StepResult"]
