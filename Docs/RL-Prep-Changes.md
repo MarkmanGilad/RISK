@@ -391,3 +391,223 @@ width/slice table) to match.
 - `GraphAdapter` re-verified end-to-end: single snapshot and a 3-game
   `Batch.from_data_list` both produce the new `u` width (`[1, 34]` /
   `[3, 34]`), `Data.validate()` passes.
+
+## Follow-up pass: merge `ActionStage` into `Phase`, and `Action.stage` into `Action.phase`
+
+Context: building the replay buffer's `stage`/`next_stage` tensors (previous
+entry) surfaced that `Phase` and `ActionStage` had become pure duplicates —
+once `REINFORCE` split into `TRADE_IN`/`REINFORCE_PLACE`, `ActionStage`
+stopped encoding anything `Phase` doesn't already carry; it was just
+"`Phase` minus `SETUP`/`GAME_OVER`," kept as a separate `IntEnum` numerically
+offset by 1 from `Phase` (`Phase.ATTACK=3` vs. old `ActionStage.ATTACK=2`)
+— exactly the kind of silent-bug-prone duplication this file's other
+entries have been trimming. Checking further found every `Action` subclass
+already carried **both** `phase: ClassVar[Phase]` (the original attribute,
+documented in `Action.md`'s opening paragraph) **and**
+`stage: ClassVar[ActionStage]` (added for DQN encoding) set to the same
+conceptual value — identical once the types merge.
+
+**`risk/game/phase.py`** — renumbered a second time:
+`TRADE_IN=0, REINFORCE_PLACE=1, ATTACK=2, OCCUPY=3, FORTIFY=4, GAME_OVER=5,
+SETUP=6` (previously `SETUP=0, TRADE_IN=1, ..., GAME_OVER=6`). Chosen so
+`done == (phase == GAME_OVER)` is a clean invariant; `SETUP` sits last since
+it's never actually observed during play — only via `State.initial()`
+directly (confirmed via `Grep` before making the change: `state.py`'s
+`State.initial()` and `test_state.py` are the only two hits).
+
+**`risk/game/actions.py`** — deleted `ActionStage`, `_PHASE_TO_STAGE`, and
+`stage_for_phase()` entirely. Every `Action` subclass's `stage:
+ClassVar[ActionStage] = ActionStage.X` line removed, keeping only
+`phase: ClassVar[Phase]`; every `dqn_index()` method's `int(self.stage)` →
+`int(self.phase)`. Confirmed via `Grep` before changing: no runtime code
+read `action.phase`/`action.stage` outside tests — `Environment`/agents
+dispatch on `isinstance`, never on these — so repurposing `.phase` as the
+sole attribute was safe.
+
+**`risk/learning/{heads,action_graph_builder,gcn_dqn}.py`** — mechanical:
+`ActionStage` imports/references → `Phase`, `a.stage` → `a.phase`.
+
+**`risk/learning/replay_buffer.py`** — deleted `_stage_or_sentinel()` and
+the `stage_for_phase` import; `push()` now stores `int(action.phase)`/
+`int(next_state.phase)` directly, no sentinel needed at all — `GAME_OVER`'s
+own value (`5`) already distinguishes it from every real decision phase,
+and those rows are `done` anyway.
+
+Updated [`Action.md`](Action.md) (the `(phase, t1, t2, n)` tuple — renamed
+from `(stage, ...)` — and the stage table's prose, table *numbers*
+unchanged since the new `Phase` 0-4 values match the old `ActionStage` 0-4
+exactly by construction), [`NetworkArchitectures.md`](NetworkArchitectures.md),
+[`GraphAdapter.md`](GraphAdapter.md) (phase one-hot column order), and
+[`README.md`](../README.md) (its `Phase` description line was still
+showing the *original pre-split* values — `SETUP, REINFORCE, ATTACK,
+FORTIFY, GAME_OVER, OCCUPY` — missed during the `TRADE_IN`/
+`REINFORCE_PLACE` split two entries up; fixed now too).
+
+**Verified:**
+- `python -m pytest Temp/tests -q` → 225 passed, 1 skipped (one test
+  rewritten: `test_phase_is_ordered`'s old single `<` chain across all 7
+  values no longer holds — `SETUP` deliberately sorts last now, not
+  chronologically first — split into "the 6 in-game-flow values are
+  ordered" plus a separate assertion that `SETUP` sorts after `GAME_OVER`).
+- A real 5000-step mixed heuristic/`RandomAgent` rollout to an actual
+  `GAME_OVER` (752 steps): every `legal_actions()` call asserted
+  single-stage, `stage`/`next_stage` cross-checked row-for-row against
+  `action.phase`/`next_state.phase`, and the one `GAME_OVER` row's
+  `next_stage` (`5`) lines up with `done=True` — confirms the sentinel
+  removal is correct, not just type-checked.
+
+## Follow-up pass: `GCN_DQN` split into a pure net + (not yet built) agent
+
+Context: `GCN_DQN` originally owned `ActionGraphBuilder`, built/batched
+candidate graphs, looped over legal actions, and dispatched to a stage-
+keyed `Heads` `ModuleDict` — all inside `nn.Module.forward`. That's game
+logic and Python-level branching/looping living inside a PyTorch network,
+which doesn't belong there (mirrors `Temp/Examples/DQN_Agent.py`'s own
+split: a bare `DQN` network wrapped by a `DQN_Agent` that owns epsilon-
+greedy, batching, and argmax — the network itself never sees an "action").
+
+**`risk/learning/heads.py`** — replaced the single `Heads` class (a
+`ModuleDict` keyed by stage name, with a `forward(stage, g)` dispatch
+method) with two classes, each a `g_dim`-only constructor:
+- `ScoringHead` — the generic 3-layer MLP, instantiated 4 times under
+  named attributes (`reinforce_place_head`, `attack_head`, `occupy_head`,
+  `fortify_head`) rather than 4 near-duplicate class bodies.
+- `TradeInHead` — kept separate (different input shape: pooled base
+  context + card embeddings, not a per-candidate `g`). Its embedding table
+  gained one extra row for the `SkipTradeAction` sentinel — `dqn_index()`'s
+  `(-1, -1, 0)` was previously fed straight into `nn.Embedding`, which
+  raised (`-1` is an invalid index) the moment a real game state offered a
+  `SkipTradeAction` alongside `TradeInAction`s (always, except when trading
+  is mandatory). Detected per *row* (`t1 < 0`), not per element — `n == 0`
+  is `SkipTradeAction`'s placeholder but a real card-slot index for
+  `TradeInAction`, so per-element masking would have silently mis-embedded
+  that slot instead of raising. This was flagged as a known gap two
+  entries up ("flagged, not fixed") and surfaced for real the moment this
+  pass's own verification script exercised a `TRADE_IN` decision.
+
+**`risk/learning/gcn_dqn.py`** — `GCN_DQN.forward` settled on
+`(state, phase, card_indices) -> Q`, all 5 stages in one call:
+- `state` — always a `Batch`, one graph per row, even for `N=1`
+  (`Batch.from_data_list([one_graph])`) — same convention as carrying a
+  batch dimension of 1 in any other PyTorch net; `forward` doesn't
+  detect/special-case a bare single `Data` (an earlier version did, via a
+  `getattr(state, "batch", None)` fallback — removed by request: "let the
+  agent deal with it," not the net). *Injected* (`ActionGraphBuilder`) for
+  the 4 graph-based stages; for `TRADE_IN` it's just `GraphAdapter`'s bare
+  base graph, since none of its candidates perturb the graph — `forward`
+  still defaults a missing `edge_attr` to zero itself, so the caller
+  doesn't have to build one just for `TRADE_IN`'s graph shape.
+- `phase` — `[N]` long, one `Phase` value per row, same convention as
+  `ReplayBuffer`'s `stage`/`next_stage`.
+- `card_indices` — `[N, 3]` long, each row's `dqn_index()` `(t1, t2, n)`;
+  needed whenever any row is `TRADE_IN`. No explicit guard for a missing
+  `card_indices` — trusts the caller, same as the rest of this codebase's
+  internal call sites; omitting it with a `TRADE_IN` row present fails
+  naturally (`TypeError` indexing `None`) rather than via a custom check.
+
+Internally: `Encoder` + `pool` once for the whole batch regardless of
+stage mix, then a plain `dict` lookup (built once in `__init__`, aliasing
+the same submodule instances already registered as named attributes — not
+a second registration) over the fixed 5 decision phase/head slots, scoring
+only rows whose mask is present.
+
+This went through two intermediate states first: initially `forward` did
+only `(x, edge_index, edge_attr, batch, u) -> g` with zero `Phase`
+awareness, heads called externally; then `(state_action, phase) -> Q` for
+the 4 graph-based stages only, with `TRADE_IN` rejected and still scored
+via a separate `trade_in_head(...)` call. Folding `TRADE_IN` in too (so
+the agent never special-cases it) needed only a `card_indices` parameter
+and the `edge_attr` default — `state_action` was renamed to `state` in
+the same pass, since for `TRADE_IN` rows it's never actually an injected
+"state+action" graph, just the bare state. `state`'s type also briefly
+accepted `Union[Batch, Data]` with a `getattr(state, "batch", None)`
+fallback for a bare single graph — removed in favor of always requiring a
+`Batch` (even `Batch.from_data_list([one_graph])` for `N=1`), matching how
+every other PyTorch net carries a batch dimension unconditionally rather
+than detecting and special-casing the unbatched case itself. The only
+game-adjacent import
+stays the one leaf `Phase` enum (no dependencies of its own) — not
+`Action`/`ActionGraphBuilder`/`Environment` — same category of import
+`heads.py` already makes for `MAX_CARDS_IN_HAND`. The *agent*'s job
+shrinks further: build the graphs/`phase`/`card_indices` tensors, one
+`forward` call, merge results back, `argmax` — no head-picking by hand
+for any stage anymore.
+
+The `edge_attr` default itself (zero-filled when missing, needed because
+`GraphAdapter`'s bare base graph had no `edge_attr` of its own) was also
+removed, by the same "let the builder deal with it, not the net" request
+— **`risk/learning/graph_adapter.py`** now gives every base graph a
+zero-filled `edge_attr` (`EDGE_ATTR_DIM` wide) up front, instead of
+`forward` synthesizing one lazily every call. `EDGE_ATTR_DIM` moved from
+`action_graph_builder.py` to `graph_adapter.py` (the "lower" module in the
+dependency graph — `action_graph_builder.py` already imports
+`armies_column_index` from it, so the reverse import would've been
+circular) and `ActionGraphBuilder` now clones `base.edge_attr` instead of
+building a fresh zero tensor itself. Net effect: `edge_attr` exists on
+*every* graph from the moment `GraphAdapter` builds it, so neither
+`ActionGraphBuilder` nor `GCN_DQN.forward` ever has to construct or
+default one — each just inherits/overwrites what's already there.
+
+One more simplification on top, by request: **`card_indices` made
+required, not `Optional`** — every row carries `[N, 3]` `card_indices`
+unconditionally now, zeros (or anything; ignored) for rows that aren't
+`TRADE_IN`, rather than `None` whenever no `TRADE_IN` row happens to be
+present. That, plus giving **`risk/learning/heads.py`'s `ScoringHead`** a
+`(g, card_indices)` signature (ignoring the second argument — kept purely
+so it matches `TradeInHead`'s), let `GCN_DQN.forward`'s two-path dispatch
+(a `TRADE_IN`-specific branch, then a loop over the other 4) collapse into
+**one loop, no branching**: `TRADE_IN` joins `_heads_by_phase` like every
+other stage, and `self._heads_by_phase[stage](g[mask], card_indices[mask])`
+is the entire dispatch, regardless of which of the 5 heads `stage` picks
+out. The motivating idea: once every head shares one call shape, "which
+head" becomes a plain dict lookup keyed by the `phase` tensor, with
+nothing left for `forward` to special-case.
+
+Updated [`NetworkArchitectures.md`](NetworkArchitectures.md)'s "Per-stage
+heads" and "Net A" sections to match (split into "the net" vs. "the
+not-yet-built agent" explicitly, rather than describing one class that
+does both).
+
+**Verified:** no checked-in tests exist for `risk/learning/` yet
+(`Docs/Testing.md`), so this was exercised via ad-hoc rollout scripts
+(`Docs/Testing.md`'s documented practice for these still-shifting
+modules):
+- `GraphAdapter`'s bare output: `edge_attr` present and all-zero
+  (`Data.validate()` passes), confirming the new field exists from the
+  moment a base graph is built, not just after injection.
+- A real 400-step game, manually playing the agent's role (build graphs
+  via `ActionGraphBuilder` for graph-based stages, the bare base graph for
+  `TRADE_IN`, batch, call `net(state, phase, card_indices=...)`, `argmax`)
+  — every stage scored correctly including the `TRADE_IN` sentinel row
+  through `TradeInHead`'s dedicated "none" embedding, gradients confirmed
+  flowing every step.
+- A fabricated **fully mixed batch** — `TRADE_IN` rows (including a
+  `SkipTradeAction` sentinel) *and* graph-based rows from a different
+  decision, scored together in one `forward` call, the shape a sampled
+  replay-buffer minibatch would actually be — confirms the per-label
+  routing handles a genuine mix, not just one stage at a time.
+- An `N=1` call via `Batch.from_data_list([one_graph])` (the one-decision
+  "play" shape) — confirms scoring a single candidate needs no special
+  casing now that `state` is unconditionally a `Batch`.
+- The fully mixed batch above and the 400-step rollout both pass
+  `card_indices` unconditionally — real `(t1, t2, n)` values for `TRADE_IN`
+  rows, all-zero `(0, 0, 0)` placeholders for every graph-based row —
+  confirming the uniform `(g, card_indices)` head call shape scores
+  correctly either way, with the same loop, no branch on which kind of row
+  it is.
+
+Full suite re-run after each step: 225 passed, 1 skipped, unaffected (no
+existing test touches these modules).
+
+## Follow-up pass: fixed five-stage `GCN_DQN` routing loop
+
+Per a later cleanup request, `risk/learning/gcn_dqn.py` now routes rows by
+looping over `range(5)` instead of `phase.unique().tolist()`. The `5` is
+the fixed count of DQN decision phases/heads (`TRADE_IN`,
+`REINFORCE_PLACE`, `ATTACK`, `OCCUPY`, `FORTIFY`), and each iteration skips
+the head call when that phase is absent from the batch.
+
+This keeps the same masking behavior (`phase == stage`) and output shape,
+but makes the routing order explicit and independent of which phase labels
+happen to appear in a particular minibatch. `NetworkArchitectures.md` was
+updated to describe the fixed five-slot loop.

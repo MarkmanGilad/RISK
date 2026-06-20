@@ -251,8 +251,10 @@ imports pygame.
   object (symbol + optional territory id, wilds have neither).
   `CardRules.is_valid_set()` / `find_valid_set()` / `validate_against_topology()`
   implement the trade-in rules.
-- **`phase.py` — `Phase`.** The turn-phase `IntEnum`: `SETUP, REINFORCE,
-  ATTACK, FORTIFY, GAME_OVER, OCCUPY`.
+- **`phase.py` — `Phase`.** The turn-phase `IntEnum`: `TRADE_IN,
+  REINFORCE_PLACE, ATTACK, OCCUPY, FORTIFY, GAME_OVER, SETUP`. Also doubles
+  as the DQN action-representation "stage" directly (`Docs/Action.md`) —
+  no separate enum for that.
 - **`player.py` — `Player`.** Immutable seat description: id, name, color,
   `agent_kind` (`human` / `random` / `raider` / `sentinel` / `empire`).
 - **`settings.py` — `GameSettings`.** Immutable match config: the player
@@ -383,8 +385,9 @@ files instead of each test file hand-rolling its own.
   `RiskMapRenderer` both load from.
 - **`Docs/`** — reference docs for specific subsystems
   ([`BoardTopology.md`](Docs/BoardTopology.md), [`Action.md`](Docs/Action.md),
-  [`GraphAdapter.md`](Docs/GraphAdapter.md)) plus a running changelog of
-  larger changes ([`RL-Prep-Changes.md`](Docs/RL-Prep-Changes.md)).
+  [`GraphAdapter.md`](Docs/GraphAdapter.md)), how the test suite is organized
+  ([`Testing.md`](Docs/Testing.md)), plus a running changelog of larger
+  changes ([`RL-Prep-Changes.md`](Docs/RL-Prep-Changes.md)).
 
 ---
 

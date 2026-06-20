@@ -12,7 +12,7 @@ from risk.learning.graph_adapter import GraphAdapter
 
 adapter = GraphAdapter(env.topology, ctx.settings)
 data = adapter(env.current_state())
-# Data(x=[42, 13], edge_index=[2, 166], u=[1, 34])
+# Data(x=[42, 13], edge_index=[2, 166], edge_attr=[166, 2], u=[1, 34])
 ```
 
 It lives in `risk/learning/`, not `risk/game/`, so the core rules engine
@@ -66,12 +66,22 @@ method already returns `(src, dst)` parallel tuples covering both
 directions of every adjacent pair (the board JSON's adjacency is validated
 symmetric at load time), which is exactly the format PyG expects.
 
-There's no `edge_attr`. An edge's mere presence in `edge_index` already
-means "these two territories border each other" — a `0/1 has-border` flag
-on top would be redundant (every edge present means `1`; absence means
-`0`). If multiple edge *types* are ever needed (e.g. flagging the handful of
-sea routes like Alaska↔Kamchatka differently from land borders), that's a
-one-line addition: an `edge_attr: [num_edges, 1]` tensor.
+An edge's mere presence in `edge_index` already means "these two
+territories border each other" — a `0/1 has-border` flag on top would be
+redundant (every edge present means `1`; absence means `0`).
+
+## `edge_attr` — reserved for action injection, shape `[166, 2]`
+
+All-zero here — the base graph carries no action, so there's nothing to
+mark. Exists at all (rather than being added later by whoever needs it)
+so every consumer can rely on it: `ActionGraphBuilder`
+(`Docs/ActionGraphBuilder.md`) clones and overwrites specific rows to
+inject an `AttackAction` candidate, and `Encoder`/`GCN_DQN` never have to
+special-case "this graph doesn't have `edge_attr` yet" — every graph
+flowing through the pipeline, injected or bare, has the same fields.
+Width (`EDGE_ATTR_DIM`, currently `2`: `[selected_attack, dice_count]`) is
+defined here and imported by `ActionGraphBuilder` rather than duplicated,
+since it's a property of the graph's shape, not the injection logic.
 
 ## `u` — global attributes, shape `[1, 34]`
 
@@ -85,7 +95,7 @@ into `[batch_size, F]` for free (verified — see below).
 | `u[0]` | 1 | Number of players in this game | `settings.player_count` |
 | `u[1]` | 1 | Value of the **next** card trade-in (not the last one cashed) | `card_set_value(state.cards_traded_in_count)` |
 | `u[2:8]` | 6 | Cards currently in each player's hand, padded | `len(state.hands[p])` |
-| `u[8:15]` | 7 | Current phase, one-hot | `state.phase` against `Phase` (`SETUP, TRADE_IN, REINFORCE_PLACE, ATTACK, OCCUPY, FORTIFY, GAME_OVER`) |
+| `u[8:15]` | 7 | Current phase, one-hot | `state.phase` against `Phase` (`TRADE_IN, REINFORCE_PLACE, ATTACK, OCCUPY, FORTIFY, GAME_OVER, SETUP`) |
 | `u[15:21]` | 6 | Whose turn it is, one-hot, padded | `state.current_player_index` |
 | `u[21:27]` | 6 | Reinforcement bonus for each continent | `topology.continent_bonus(c)`, same order as the node continent one-hot |
 | `u[27]` | 1 | Current player's reinforcement budget | `state.reinforcement_budget` (already `0` outside `TRADE_IN`/`REINFORCE_PLACE` — it's being built up by trades during `TRADE_IN` and spent during `REINFORCE_PLACE`) |
@@ -113,8 +123,13 @@ wiped out this turn").
 - **Reused `topology.edge_index()` instead of rebuilding adjacency** — it
   already existed for exactly this purpose (`BoardTopology`'s docstring
   calls it out as "ready for GNN use").
-- **No `edge_attr`** — would have encoded information edge *presence*
-  already carries.
+- **`edge_attr` always present, zero-filled** — originally omitted
+  entirely (border presence already lives in `edge_index`), but
+  `ActionGraphBuilder` needs *somewhere* to mark an injected `AttackAction`,
+  and giving every base graph a zero-filled `edge_attr` up front means
+  `ActionGraphBuilder` clones and overwrites instead of building one from
+  scratch, and `Encoder`/`GCN_DQN` never need a "missing `edge_attr`"
+  fallback (`Docs/RL-Prep-Changes.md`).
 
 ---
 
@@ -131,14 +146,13 @@ data = adapter(ctx.env.current_state())
 data.validate(raise_on_error=True)   # passes: well-formed Data object
 ```
 
-- `Data(x=[42, 13], edge_index=[2, 166], u=[1, 34])` — shapes match spec
-  (`u`'s width grew 33→34 when `Phase.REINFORCE` split into `Phase.TRADE_IN`
-  + `Phase.REINFORCE_PLACE` — `phase_onehot`'s width is `len(Phase)`,
-  already dynamic, so this needed no code change, just a wider one-hot).
+- `Data(x=[42, 13], edge_index=[2, 166], edge_attr=[166, 2], u=[1, 34])` —
+  shapes match spec; `edge_attr` confirmed all-zero.
 - `Data.validate()` passes (edge indices in range, tensor shapes consistent).
 - `torch_geometric.data.Batch.from_data_list([...])` on 3 separate game
-  snapshots produced `x: [126, 13]`, `u: [3, 34]`, `edge_index: [2, 498]` —
-  confirms `u`'s `[1, F]` shape batches the way a `DataLoader` will use it.
+  snapshots produced `x: [126, 13]`, `edge_attr: [498, 2]`, `u: [3, 34]`,
+  `edge_index: [2, 498]` — confirms `u`'s `[1, F]` shape batches the way a
+  `DataLoader` will use it.
 - Full test suite (`Temp/tests`): 225 passed, 1 skipped.
 
 ## Open extension points

@@ -66,16 +66,21 @@ def test_phase_values_are_stable_for_serialization() -> None:
 
 
 def test_phase_is_ordered() -> None:
-    # The natural play-order. GAME_OVER is the terminal sink.
+    # One turn's in-game flow, in order. GAME_OVER is the terminal sink.
     assert (
-        Phase.SETUP
-        < Phase.TRADE_IN
+        Phase.TRADE_IN
         < Phase.REINFORCE_PLACE
         < Phase.ATTACK
         < Phase.OCCUPY
         < Phase.FORTIFY
         < Phase.GAME_OVER
     )
+    # SETUP sorts *last* (6), not first — deliberately, so `done == (phase
+    # == GAME_OVER)` stays a clean invariant for the 6 in-game-flow values.
+    # SETUP itself is never observed during play (only via State.initial()
+    # directly, before the first turn begins), so it doesn't need to fit
+    # the chronological ordering above.
+    assert Phase.SETUP > Phase.GAME_OVER
 
 
 # --- Cards -----------------------------------------------------------------

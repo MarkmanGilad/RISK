@@ -16,6 +16,9 @@ from risk.game.settings import GameSettings
 from risk.game.state import State
 
 
+EDGE_ATTR_DIM = 2   # [selected_attack, dice_count] — see ActionGraphBuilder
+
+
 def armies_column_index(topology: BoardTopology) -> int:
     """Column of `x` holding the raw army count (see `_node_features` below).
 
@@ -38,7 +41,11 @@ class GraphAdapter:
         data = adapter(state)
 
     Node feature layout: continent one-hot | owner one-hot (padded to
-    MAX_PLAYERS) | army count.
+    MAX_PLAYERS) | army count. `edge_attr` is always present — all-zero
+    here, since the base graph carries no action — so every consumer
+    (`Encoder`, `ActionGraphBuilder`) can rely on it existing rather than
+    defaulting it themselves. `ActionGraphBuilder` clones and overwrites it
+    per candidate instead of building its own from scratch.
     """
 
     def __init__(self, topology: BoardTopology, settings: GameSettings) -> None:
@@ -55,8 +62,9 @@ class GraphAdapter:
         """
         x = self._node_features(state)
         edge_index = self._edge_index()
+        edge_attr = torch.zeros((edge_index.shape[1], EDGE_ATTR_DIM), dtype=torch.float32)
         u = self._global_features(state)
-        return Data(x=x, edge_index=edge_index, u=u)
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, u=u)
 
     def _node_features(self, state: State) -> torch.Tensor:
         topology = self.topology
@@ -110,4 +118,4 @@ class GraphAdapter:
         return torch.tensor([values], dtype=torch.float32)
 
 
-__all__ = ["GraphAdapter", "armies_column_index"]
+__all__ = ["GraphAdapter", "armies_column_index", "EDGE_ATTR_DIM"]

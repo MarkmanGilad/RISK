@@ -1,61 +1,40 @@
-"""Net A — DQN + injection (`Docs/NetworkArchitectures.md`).
+"""Net A's network — DQN + injection (`Docs/NetworkArchitectures.md`).
 
-`GCN_DQN` wires the shared building blocks together into the full forward
-pass from that doc's Net A diagram:
+`GCN_DQN` is the graph network: `(state graph(s), phase label per graph,
+card_indices) -> Q(s, a)`, all 5 stages in one call, one uniform loop. It
+owns no game logic beyond the one leaf `Phase` enum (`risk/game/phase.py`,
+no dependencies of its own — not `Action`/`ActionGraphBuilder`/
+`Environment`) needed to pick which head scores each row. Building the
+per-candidate graphs, batching them, and merging scores back into
+`legal_actions()`'s order is still the *agent's* job (the not-yet-built
+`GCN_DQN_Agent`), the same split `Temp/Examples/DQN_Agent.py` uses around
+its bare `DQN` network — this class just goes one step further than a
+bare encoder by also routing each row to its head internally.
 
-    base Data(state)
-       |  + one legal action (per action)
-       v
-    ActionGraphBuilder  -->  N modified Data graphs
-       v
-    Batch.from_data_list
-       v
-    Encoder (batched)      -->  H per graph
-       v
-    pool(H, u)              -->  g  [N, g_dim]
-       v
-    heads[stage](g)          -->  Q(s, a)  [N]
+    net = GCN_DQN(in_dim=13, hidden_dim=64, edge_dim=2, u_dim=34)
+    q = net(state, phase, card_indices)   # state: always a Batch, even for N=1
 
-`TRADE_IN` actions skip `ActionGraphBuilder` entirely (it refuses them —
-see `Docs/ActionGraphBuilder.md`) and instead score off the *unmodified*
-base graph's pooled context plus `Heads.trade_in`'s card-slot embeddings.
-`forward` always splits the legal actions by stage (`TRADE_IN` vs. the
-rest), scores each group through its own path, and merges the
-per-action scalars back into the caller's original order.
-
-`Encoder`/`pool`/`Heads` stay in their own modules (`encoder.py`,
-`pooling.py`, `heads.py`) rather than being merged into this class — they're
-shared, unmodified, by all four planned nets (DQN/PPO x inject/lookup), not
-specific to this one.
+`Encoder`/`pool` stay in their own modules (`encoder.py`, `pooling.py`)
+rather than being merged into this class — they're shared, unmodified, by
+all four planned nets (DQN/PPO x inject/lookup), not specific to this one.
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
-
 import torch
 from torch import nn
-from torch_geometric.data import Batch, Data
+from torch_geometric.data import Batch
 
-from risk.game.actions import Action, ActionStage
-from risk.game.board_topology import BoardTopology
-from risk.game.state import State
-from risk.learning.action_graph_builder import ActionGraphBuilder
+from risk.game.phase import Phase
 from risk.learning.encoder import Encoder
-from risk.learning.heads import Heads
+from risk.learning.heads import ScoringHead, TradeInHead
 from risk.learning.pooling import pool
 
 
 class GCN_DQN(nn.Module):
-    """`(base state graph, legal actions) -> Q(s, a)` for every legal action.
-
-        net = GCN_DQN(topology, in_dim=13, hidden_dim=64, edge_dim=2, u_dim=33)
-        q = net(base, legal_actions, state)   # [len(legal_actions)], same order
-        best = legal_actions[q.argmax()]
-    """
+    """`(state graph(s), phase per graph, card_indices) -> Q(s, a)`."""
 
     def __init__(
         self,
-        topology: BoardTopology,
         in_dim: int,
         hidden_dim: int,
         edge_dim: int,
@@ -64,45 +43,56 @@ class GCN_DQN(nn.Module):
         card_embed_dim: int = 8,
     ) -> None:
         super().__init__()
-        self.edge_dim = edge_dim
-        self.action_builder = ActionGraphBuilder(topology)
+        g_dim = 2 * hidden_dim + u_dim
         self.encoder = Encoder(in_dim, hidden_dim, edge_dim, n_layers)
-        self.heads = Heads(g_dim=2 * hidden_dim + u_dim, card_embed_dim=card_embed_dim)
+        self.reinforce_place_head = ScoringHead(g_dim)
+        self.attack_head = ScoringHead(g_dim)
+        self.occupy_head = ScoringHead(g_dim)
+        self.fortify_head = ScoringHead(g_dim)
+        self.trade_in_head = TradeInHead(g_dim, card_embed_dim)
+        # Plain dict, not a ModuleDict — the heads are already registered
+        # as submodules via the named attributes above; this is just an
+        # internal alias map for `forward`'s row-routing, not a second
+        # registration. All 5 heads share one call signature
+        # `(g, card_indices) -> Q` now (`ScoringHead` ignores the second
+        # arg), so `TRADE_IN` needs no special-casing here either.
+        self._heads_by_phase = {
+            int(Phase.TRADE_IN): self.trade_in_head,
+            int(Phase.REINFORCE_PLACE): self.reinforce_place_head,
+            int(Phase.ATTACK): self.attack_head,
+            int(Phase.OCCUPY): self.occupy_head,
+            int(Phase.FORTIFY): self.fortify_head,
+        }
 
-    def forward(
-        self, base: Data, legal_actions: Sequence[Action], state: Optional[State] = None
-    ) -> torch.Tensor:
-        q = [torch.empty(())] * len(legal_actions)
+    def forward(self, state: Batch, phase: torch.Tensor, card_indices: torch.Tensor) -> torch.Tensor:
+        """`state`: one graph per row being scored, always a `Batch` —
+        even scoring a single candidate is `Batch.from_data_list([one_graph])`,
+        same convention as carrying a batch dimension of 1 in any other
+        PyTorch net; the caller's job, not something `forward` detects and
+        special-cases. *Injected* (`ActionGraphBuilder`) for every stage
+        except `TRADE_IN`, where it's just the unmodified base state graph
+        (`GraphAdapter`'s bare output — already carries a zero-filled
+        `edge_attr` of its own, so there's nothing for `forward` to default
+        here) repeated once per `TRADE_IN` candidate in that decision, since
+        none of them perturb the graph. `phase`: `[N]` long, one `Phase`
+        value per row — same convention as `ReplayBuffer`'s `stage`/
+        `next_stage`. `card_indices`: `[N, 3]` long, each row's
+        `dqn_index()` `(t1, t2, n)` for `TRADE_IN` rows — not optional, just
+        zeros (or anything; ignored) where a row isn't `TRADE_IN`, so every
+        row can be routed through its head the same way, with no branching
+        on which kind of head it is. Returns `[N]`.
+        """
+        h = self.encoder(state.x, state.edge_index, state.edge_attr)
+        g = pool(h, state.batch, state.u)
 
-        graph_idx = [i for i, a in enumerate(legal_actions) if a.stage != ActionStage.TRADE_IN]
-        trade_idx = [i for i, a in enumerate(legal_actions) if a.stage == ActionStage.TRADE_IN]
-
-        if graph_idx:
-            graph_actions = [legal_actions[i] for i in graph_idx]
-            graphs = [self.action_builder(base, a, state) for a in graph_actions]
-            batch = Batch.from_data_list(graphs)
-            h = self.encoder(batch.x, batch.edge_index, batch.edge_attr)
-            g = pool(h, batch.batch, batch.u)
-
-            stages = {a.stage for a in graph_actions}
-            for stage in stages:
-                rows = [j for j, a in enumerate(graph_actions) if a.stage == stage]
-                scores = self.heads(stage, g[rows])
-                for k, j in enumerate(rows):
-                    q[graph_idx[j]] = scores[k]
-
-        if trade_idx:
-            trade_actions = [legal_actions[i] for i in trade_idx]
-            zero_edge_attr = torch.zeros((base.edge_index.shape[1], self.edge_dim))
-            node_batch = torch.zeros(base.x.shape[0], dtype=torch.long)
-            h_base = self.encoder(base.x, base.edge_index, zero_edge_attr)
-            g_base = pool(h_base, node_batch, base.u).expand(len(trade_actions), -1)
-            card_idx = torch.tensor([a.card_indices for a in trade_actions], dtype=torch.long)
-            scores = self.heads.trade_in(g_base, card_idx)
-            for k, i in enumerate(trade_idx):
-                q[i] = scores[k]
-
-        return torch.stack(q)
+        q = torch.empty(g.shape[0], dtype=g.dtype, device=g.device)
+        # Risk exposes 5 DQN phases/heads: trade-in, reinforce-place,
+        # attack, occupy, and fortify.
+        for stage in range(5):
+            mask = phase == stage
+            if mask.any():
+                q[mask] = self._heads_by_phase[stage](g[mask], card_indices[mask])
+        return q
 
 
 __all__ = ["GCN_DQN"]

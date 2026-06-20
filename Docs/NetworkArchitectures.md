@@ -168,46 +168,59 @@ d)` lookups concatenated with pooled global context instead.
 
 ### Per-stage heads (all four nets)
 
-**Implemented** — `risk/learning/heads.py`'s `Heads` class. One difference
-from the snippet below: `_make_head` is an instance method on `Heads`
-rather than a free function, and the `ModuleDict` is built from it in
-`__init__` rather than written out literally — same heads, built
-programmatically. Verified end-to-end (`Encoder` -> `pool` -> `Heads`)
-against a real 67-action `ATTACK` batch (graph-based head, gradients
-confirmed flowing) and a synthetic `TRADE_IN` case (pooled base-graph
-context + card-slot embeddings).
-
-Five small heads keyed by `ActionStage` (`TRADE_IN, REINFORCE_PLACE,
-ATTACK, OCCUPY, FORTIFY`), same reasoning in all four nets: the stages are
-different decisions with different `n`-semantics and value scales, so one
-head per stage avoids forcing a shared tail to disambiguate that
-implicitly. What differs per net is only the **input** to each head
-(pooled action-graph embedding for A/C, `head_input(...)` lookup for
-B/D) and the **output's meaning** (`Q` for A/B, `logit` for C/D).
+**Implemented** — `risk/learning/heads.py`'s `ScoringHead`/`TradeInHead`
+classes, one *named submodule per stage* rather than a `ModuleDict` with
+internal stage-keyed dispatch:
 
 ```python
-def make_head(in_dim: int) -> nn.Module:
-    return nn.Sequential(
-        nn.Linear(in_dim, 256), nn.ReLU(),
-        nn.Linear(256, 128), nn.ReLU(),
-        nn.Linear(128, 1),
-    )
+class ScoringHead(nn.Module):       # REINFORCE_PLACE/ATTACK/OCCUPY/FORTIFY —
+    def __init__(self, g_dim):      # identical shape, 4 separate instances
+        self.net = _mlp(g_dim)      # (independent weights, shared class)
 
-heads = nn.ModuleDict({
-    "REINFORCE_PLACE": make_head(in_dim),
-    "ATTACK":          make_head(in_dim),
-    "OCCUPY":          make_head(in_dim),
-    "FORTIFY":         make_head(in_dim),
-    "TRADE_IN":        make_head(in_dim + 3 * card_embed_dim),
-})
+    def forward(self, g, card_indices):   # card_indices unused — kept only
+        return self.net(g).squeeze(-1)    # so every head shares one call shape
+
+class TradeInHead(nn.Module):       # different input shape -> its own class
+    def __init__(self, g_dim, card_embed_dim=8):
+        self.card_embedding = nn.Embedding(MAX_CARDS_IN_HAND + 1, card_embed_dim)
+        self.net = _mlp(g_dim + 3 * card_embed_dim)
+
+    def forward(self, g, card_indices):
+        ...
 ```
 
-`Phase` and `ActionStage` are 1:1 (`Docs/Action.md`), so any one decision's
-legal actions are always a single stage now — grouping by stage before
-running heads is therefore always a single group in practice, but the code
-doesn't need to special-case that: split by stage, run each group through
-its own head, merge the per-action scalars back into `legal_actions()`'s
-original order before the final `argmax` (A/B) or `softmax` (C/D).
+Both heads now share one call signature, `(g, card_indices) -> Q`, even
+though `ScoringHead` ignores the second argument — purely so
+`GCN_DQN.forward` (see Net A below) can route *every* row through
+`self._heads_by_phase[stage](g[mask], card_indices[mask])` in a single
+uniform loop, with no `if`/branch distinguishing `TRADE_IN` from the rest.
+`card_indices` itself is `[N, 3]` long and not optional at that call site
+— rows that aren't `TRADE_IN` just carry zeros (or anything; ignored), so
+the tensor's shape never depends on which stages are actually present.
+Each head class is still just `(its input) -> scalar` with no dispatch
+logic of its own — deciding *which* head scores a given row stays
+`GCN_DQN.forward`'s job, not something the agent has to do by hand. Five
+small heads, same reasoning in all four nets: the stages are different
+decisions with different
+`n`-semantics and value scales, so one head per stage avoids forcing a
+shared tail to disambiguate that implicitly. What differs per net is only
+the **input** to each head (pooled action-graph embedding for A/C,
+`head_input(...)` lookup for B/D) and the **output's meaning** (`Q` for
+A/B, `logit` for C/D).
+
+`TradeInHead`'s embedding table has one extra row reserved for the
+`SkipTradeAction` sentinel (`dqn_index()`'s `(-1, -1, 0)`) — detected per
+*row* (`t1 < 0`), not per element, since `n == 0` is `SkipTradeAction`'s
+placeholder but a legitimate real card-slot index for `TradeInAction`;
+per-element masking would silently mis-embed that slot. Verified directly:
+a real rollout exercising the sentinel row through `TradeInHead` produces
+the dedicated "none" embedding rather than colliding with card slot 0.
+
+`Phase` doubles as the DQN action-representation stage directly
+(`Docs/Action.md`), so any one decision's legal actions are always a
+single stage now — the agent never needs to handle a mixed-stage batch
+*within one decision* (it still will across a sampled replay-buffer
+minibatch, which spans many decisions — `Docs/RL-Prep-Changes.md`).
 
 ### Pooling (used wherever a whole-graph scalar is needed)
 
@@ -227,33 +240,70 @@ message passing to refine, and pure node pooling alone is blind to it.
 
 ## Net A — DQN + injection
 
-**Implemented** — `risk/learning/gcn_dqn.py`'s `GCN_DQN` class, composing
-the shared `ActionGraphBuilder`/`Encoder`/`pool`/`Heads` pieces above
-into exactly the forward pass below: `GCN_DQN(topology, in_dim, hidden_dim,
-edge_dim, u_dim)(base, legal_actions, state) -> Q` (`[len(legal_actions)]`,
-same order as `legal_actions`). `Encoder`/`pool`/`Heads` deliberately stay
-in their own modules rather than living inside this class — they're
-shared, unmodified, by all four planned nets, not specific to Net A.
-Verified against a real 400-step rollout (predating the `Phase.TRADE_IN`/
-`Phase.REINFORCE_PLACE` split, back when one decision could still mix both
-stages — `Docs/Action.md`): every stage scored correctly, gradients
-confirmed flowing every step, `argmax` selects a real action.
+The network and the game-logic orchestration around it are two separate
+classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
+
+- **`risk/learning/gcn_dqn.py`'s `GCN_DQN`** — **implemented**, all 5
+  stages in one call, one uniform loop: `forward(state, phase,
+  card_indices) -> Q`.
+  - `state` — always a `Batch`, one graph per row being scored, even for
+    `N=1` (`Batch.from_data_list([one_graph])`) — same convention as
+    carrying a batch dimension of 1 in any other PyTorch net; `forward`
+    doesn't detect/special-case a bare single `Data`, that's the caller's
+    job. *Injected* (`ActionGraphBuilder`) for the 4 graph-based stages;
+    for `TRADE_IN` it's just `GraphAdapter`'s bare base graph (repeated
+    once per candidate in that decision, since none of them perturb the
+    graph) — `GraphAdapter` already gives every base graph a zero-filled
+    `edge_attr` of its own (`Docs/GraphAdapter.md`), so `forward` doesn't
+    need to default anything; every graph that reaches it already has the
+    same fields regardless of stage.
+  - `phase` — `[N]` long, one `Phase` value per row, same convention as
+    `ReplayBuffer`'s `stage`/`next_stage`.
+  - `card_indices` — `[N, 3]` long, **not optional**: each row's
+    `dqn_index()` `(t1, t2, n)` for `TRADE_IN` rows, zeros (or anything;
+    ignored) for every other row. Required unconditionally — not just
+    whenever a `TRADE_IN` row happens to be present — specifically so its
+    shape never depends on which stages are actually in the batch.
+
+  Internally: `Encoder` + `pool` once for the *whole* batch regardless of
+  stage mix, then **one loop, no branching**: over the 5 DQN phase/head
+  slots (`TRADE_IN`, `REINFORCE_PLACE`, `ATTACK`, `OCCUPY`, `FORTIFY`),
+  scoring only rows whose mask is present with
+  `self._heads_by_phase[stage](g[mask], card_indices[mask])`.
+  This only works because every head — `ScoringHead` and `TradeInHead`
+  alike — shares the same `(g, card_indices) -> Q` call signature now (see
+  "Per-stage heads" above); there's no separate `if is_trade_in` path
+  anymore. The dict lookup is built once in `__init__`, aliasing the same
+  submodule instances already registered as named attributes (not a
+  second registration). The only game-adjacent import is the leaf `Phase`
+  enum itself (no dependencies of its own) — not `Action`/
+  `ActionGraphBuilder`/`Environment`.
+
+  Verified against a real 400-step rollout (driven manually, playing the
+  agent's role by hand — see below, with a uniform `[N, 3]` `card_indices`
+  passed every call, zeros for non-`TRADE_IN` decisions) plus a fabricated,
+  fully mixed batch — `TRADE_IN` rows (including a `SkipTradeAction`
+  sentinel) *and* graph-based rows from a different decision, scored
+  together in one `forward` call through the same uniform loop, the shape
+  a sampled replay-buffer minibatch would actually be: every row scored
+  correctly, gradients confirmed flowing.
+- **`GCN_DQN_Agent`** — **not yet built**. Owns `ActionGraphBuilder`,
+  builds/batches the per-candidate graphs, builds the `phase`/
+  `card_indices` tensors, merges scores back to `legal_actions()`'s order,
+  `argmax`s. This is the piece that actually knows what a `State`/`Action`
+  is.
 
 ```
 base Data(state)
-   │  + one legal action (per action)
+   │  + one legal action (per action)            <- the agent's job from here down
    ▼
-ActionGraphBuilder  ──▶  N modified Data graphs
+ActionGraphBuilder  ──▶  N graphs (injected, or bare for TRADE_IN), phase + card_indices tensors
    ▼
 Batch.from_data_list
    ▼
-Encoder (batched)      ──▶  H per graph
+GCN_DQN.forward(state, phase, card_indices) ──▶ Q(s, a)  [N]   <- the net's job: encode + pool + route to head
    ▼
-pool(H, u)              ──▶  g  [N, g_dim]
-   ▼
-heads[stage](g)          ──▶  Q(s, a)  [N]
-   ▼
-argmax -> chosen action
+argmax -> chosen action                                          <- back to the agent
 ```
 
 `N` GNN forward passes per decision (batched into one call, but still `N`
@@ -355,8 +405,8 @@ kind of claim this experiment plan exists to check rather than assume.
 ## Experiment plan
 
 1. **Build the shared foundation first** — `Encoder`, `ActionGraphBuilder`,
-   the lookup `head_input`/`none_vec` helper, the per-stage `heads`
-   `ModuleDict` pattern, and the `num_legal_actions` addition to
+   the lookup `head_input`/`none_vec` helper, the per-stage scoring heads
+   (`ScoringHead`/`TradeInHead`), and the `num_legal_actions` addition to
    `GraphAdapter`. Verify each in isolation against real `Environment`
    states (same style as `GraphAdapter.md`'s/`Action.md`'s "Verified"
    sections) before any of the four nets are assembled — a bug shared by

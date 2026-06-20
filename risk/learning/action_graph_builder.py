@@ -4,11 +4,13 @@ See `Docs/NetworkArchitectures.md`'s "Action injection" section. Given the
 base `Data` graph for a state (`GraphAdapter`) and one legal `Action`,
 builds a *modified copy* carrying that action's perturbation — the base
 graph is never mutated, since every action needs its own copy to diverge
-from.
+from. `GraphAdapter` already gives every base graph a zero-filled
+`edge_attr` (`EDGE_ATTR_DIM` wide), so this clones and overwrites that
+instead of building one from scratch.
 
-- `AttackAction`s get an `edge_attr` marking the attacked edge
-  `[selected_attack, dice / MAX_ATTACK_DICE]`; every other edge (including
-  the reverse direction) stays `[0, 0]`.
+- `AttackAction`s mark the attacked edge `[selected_attack, dice /
+  MAX_ATTACK_DICE]`; every other edge (including the reverse direction)
+  stays `[0, 0]`.
 - `ReinforcementAction`/`OccupyAction`/`FortifyAction` write directly into
   `x`'s existing army-count column at the affected territory row(s) — the
   simpler of the two options `Docs/NetworkArchitectures.md` leaves open (vs.
@@ -29,12 +31,11 @@ import torch
 from torch_geometric.data import Data
 
 from risk.constants import MAX_ATTACK_DICE
-from risk.game.actions import Action, ActionStage
+from risk.game.actions import Action
 from risk.game.board_topology import BoardTopology
+from risk.game.phase import Phase
 from risk.game.state import State
-from risk.learning.graph_adapter import armies_column_index
-
-EDGE_ATTR_DIM = 2   # [selected_attack, dice_count]
+from risk.learning.graph_adapter import EDGE_ATTR_DIM, armies_column_index
 
 
 class ActionGraphBuilder:
@@ -56,23 +57,23 @@ class ActionGraphBuilder:
 
     def __call__(self, base: Data, action: Action, state: Optional[State] = None) -> Data:
         stage, t1, t2, n = action.dqn_index(self.topology, state)
-        if stage == ActionStage.TRADE_IN:
+        if stage == Phase.TRADE_IN:
             raise ValueError(
                 "ActionGraphBuilder doesn't inject TRADE_IN actions — "
                 "its head reads card-hand embeddings, not the graph (Docs/Action.md)"
             )
 
         x = base.x.clone()
-        edge_attr = torch.zeros((base.edge_index.shape[1], EDGE_ATTR_DIM), dtype=x.dtype)
+        edge_attr = base.edge_attr.clone()
 
-        if stage == ActionStage.ATTACK and t1 != Action.NONE_INDEX:
+        if stage == Phase.ATTACK and t1 != Action.NONE_INDEX:
             edge_attr[self._edge_row[(t1, t2)]] = torch.tensor([1.0, n / MAX_ATTACK_DICE])
-        elif stage == ActionStage.REINFORCE_PLACE:
+        elif stage == Phase.REINFORCE_PLACE:
             x[t1, self._armies_col] += n
-        elif stage == ActionStage.OCCUPY:
+        elif stage == Phase.OCCUPY:
             x[t1, self._armies_col] -= n
             x[t2, self._armies_col] += n
-        elif stage == ActionStage.FORTIFY and t1 != Action.NONE_INDEX:
+        elif stage == Phase.FORTIFY and t1 != Action.NONE_INDEX:
             x[t1, self._armies_col] -= n
             x[t2, self._armies_col] += n
         # ATTACK's StopAttackAction / FORTIFY's skip sentinel: no perturbation.

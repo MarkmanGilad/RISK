@@ -39,13 +39,15 @@ live on `state.pending_attack`, not the action itself — same reason
 | `FORTIFY` (skip, `count == 0`) | No perturbation — same as `StopAttackAction`. |
 | `TRADE_IN` | **Raises `ValueError`.** Its head reads card-hand embeddings, never the graph (`Action.md`), so silently returning an unperturbed graph would be misleading — callers should route `TRADE_IN` actions around this class entirely. |
 
-`edge_attr` is added to **every** action's graph, even ones that don't
-touch an edge (`REINFORCE_PLACE`/`OCCUPY`/`FORTIFY`, and the unmodified
-sentinels) — PyG's `Batch.from_data_list` concatenates `x`/`edge_attr`
-across graphs, so every graph in a batch needs the same fields/widths
-regardless of which stage it came from. This is the same "zero `edge_attr`
-degrades gracefully" reasoning `NetworkArchitectures.md` already applies to
-the shared `Encoder`.
+`edge_attr` is already present on every base graph (`GraphAdapter`,
+`Docs/GraphAdapter.md`, all-zero) — this class clones and overwrites it
+rather than building one from scratch, so it ends up on **every** action's
+graph, even ones that don't touch an edge (`REINFORCE_PLACE`/`OCCUPY`/
+`FORTIFY`, and the unmodified sentinels). PyG's `Batch.from_data_list`
+concatenates `x`/`edge_attr` across graphs, so every graph in a batch
+needs the same fields/widths regardless of which stage it came from. This
+is the same "zero `edge_attr` degrades gracefully" reasoning
+`NetworkArchitectures.md` already applies to the shared `Encoder`.
 
 `(from, to) -> edge row` is precomputed once in `__init__` from
 `topology.edge_index()` (`BoardTopology` sorts territories once at load
@@ -80,4 +82,4 @@ Exercised against real `Environment` rollouts (`SelfPlay`-style loop,
   unperturbed graph.
 - A full `ATTACK`-phase legal-action set (68 actions) built and
   `Batch.from_data_list`-ed together without shape errors:
-  `DataBatch(x=[2856, 13], edge_index=[2, 11288], edge_attr=[11288, 2], u=[68, 33], ...)`.
+  `DataBatch(x=[2856, 13], edge_index=[2, 11288], edge_attr=[11288, 2], u=[68, 34], ...)`.

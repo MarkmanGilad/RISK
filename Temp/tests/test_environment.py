@@ -6,7 +6,6 @@ import copy as _copy
 import pytest
 
 from risk.game.actions import (
-    ActionStage,
     AttackAction,
     FortifyAction,
     OccupyAction,
@@ -197,7 +196,7 @@ def test_legal_reinforce_offers_one_half_all_buckets() -> None:
 def test_legal_actions_in_trade_in_only_trade_in() -> None:
     env = _fresh_env()
     acts = env.legal_actions()
-    assert all(a.stage is ActionStage.TRADE_IN for a in acts)
+    assert all(a.phase is Phase.TRADE_IN for a in acts)
     assert len(acts) > 0
 
 

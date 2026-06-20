@@ -242,22 +242,21 @@ env.step(legal_actions[i])                          # the winning action is alre
 action itself. `ActionEncoder` holds the `env`, so it pulls
 `env.topology`/`env.current_state()` automatically every call.
 
-### The tuple: `(stage, t1, t2, n)`
+### The tuple: `(phase, t1, t2, n)`
 
 Four integers per legal action:
 
 | Field | Meaning |
 |---|---|
-| `stage` | which of the 5 decision stages this action belongs to (`ActionStage` enum in `actions.py`; selects which head scores it — see below) |
+| `phase` | `int(action.phase)` — the `Phase` value (`risk/game/phase.py`) this action belongs to; selects which head scores it — see below. `Phase` doubles as the DQN action-representation "stage" directly, no separate enum for it |
 | `t1` | a territory index (`topology.index_of(...)`, 0..41) — or, for `TRADE_IN`, a card-hand-slot index (0..4) |
 | `t2` | a second territory index, or card-hand-slot index — or `-1` (`Action.NONE_INDEX`, sentinel) if this stage doesn't use a second slot |
 | `n` | dice count, army count, a third card-hand-slot index, or `0`/unused depending on stage — see table |
 
-**5 stages** (`ActionStage`, one per `Phase` value except `SETUP`/
-`GAME_OVER`, which aren't agent decisions so they don't get a stage —
-`risk/game/phase.py`'s `Phase` and this enum are 1:1):
+**5 decision stages** — every `Phase` value except `SETUP`/`GAME_OVER`,
+which aren't agent decisions so no `Action` ever has those as its `phase`:
 
-| `stage` | Action class(es) | `t1` | `t2` | `n` |
+| `phase` | Action class(es) | `t1` | `t2` | `n` |
 |---|---|---|---|---|
 | 0 `TRADE_IN` | `TradeInAction`, `SkipTradeAction` | card-slot index (1st), or `-1` to skip | card-slot index (2nd), or `-1` to skip | card-slot index (3rd), or `0` to skip |
 | 1 `REINFORCE_PLACE` | `ReinforcementAction` | territory to place on | `-1` | amount placed (`1` / `budget // 2` / `budget` — see note) |
@@ -274,7 +273,7 @@ exactly like `legal_actions()` always includes them alongside the
 enumerated moves.
 
 This is a direct, mechanical mapping from each legal `Action` object
-(already produced by `legal_actions()`) to one `(stage, t1, t2, n)` tuple —
+(already produced by `legal_actions()`) to one `(phase, t1, t2, n)` tuple —
 no information is invented, nothing needs decoding back, because the
 action object itself is still what gets passed to `env.step(...)` once
 chosen. The tuple is purely the network's input encoding for scoring it.
