@@ -32,7 +32,7 @@ from .conftest import make_env, make_settings
 from risk.game.environment import Environment
 from risk.game.player import Player
 from risk.game.settings import GameSettings
-from risk.learning.gcn_dqn_agent import GCN_DQN_Agent
+from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 
 
 def _settings(n: int = 3, seed: int = 42) -> GameSettings:
@@ -174,9 +174,9 @@ def test_all_tiered_heuristic_agents_construct() -> None:
         assert action is not None
 
 
-def test_gcn_dqn_agent_picks_max_scored_legal_action() -> None:
+def test_gnn_dqn_agent_picks_max_scored_legal_action() -> None:
     env = _fresh_env(seed=9)
-    agent = GCN_DQN_Agent(
+    agent = GNN_DQN_Agent(
         player_id=0,
         env=env,
         train_mode=False,
@@ -195,7 +195,7 @@ def test_gcn_dqn_agent_picks_max_scored_legal_action() -> None:
     assert chosen.to_dict() == legal[-1].to_dict()
 
 
-def test_gcn_dqn_agent_handles_trade_in_rows_without_injection() -> None:
+def test_gnn_dqn_agent_handles_trade_in_rows_without_injection() -> None:
     env = _fresh_env(seed=13)
     s = env.current_state()
     s.hands[0] = [
@@ -206,7 +206,7 @@ def test_gcn_dqn_agent_handles_trade_in_rows_without_injection() -> None:
     env._begin_turn_for(s, 0)
     assert s.phase.name == "TRADE_IN"
 
-    agent = GCN_DQN_Agent(
+    agent = GNN_DQN_Agent(
         player_id=0,
         env=env,
         train_mode=False,
@@ -223,10 +223,10 @@ def test_gcn_dqn_agent_handles_trade_in_rows_without_injection() -> None:
     assert chosen.phase is s.phase
 
 
-def test_gcn_dqn_agent_save_and_load_params_round_trip(tmp_path: Path) -> None:
+def test_gnn_dqn_agent_save_and_load_params_round_trip(tmp_path: Path) -> None:
     env = _fresh_env(seed=5)
-    agent = GCN_DQN_Agent(player_id=0, env=env, train_mode=False)
-    saved_path = tmp_path / "gcn_dqn_state.pt"
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=False)
+    saved_path = tmp_path / "gnn_dqn_state.pt"
 
     saved_state = {
         key: value.clone()
@@ -244,16 +244,16 @@ def test_gcn_dqn_agent_save_and_load_params_round_trip(tmp_path: Path) -> None:
         assert torch.equal(value, saved_state[key])
 
 
-def test_gcn_dqn_agent_auto_device_selection() -> None:
+def test_gnn_dqn_agent_auto_device_selection() -> None:
     env = _fresh_env(seed=6)
-    agent = GCN_DQN_Agent(player_id=0, env=env, train_mode=False)
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=False)
     expected = "cuda" if torch.cuda.is_available() else "cpu"
     assert agent.device.type == expected
 
 
-def test_gcn_dqn_agent_device_report_matches_runtime_tensors() -> None:
+def test_gnn_dqn_agent_device_report_matches_runtime_tensors() -> None:
     env = _fresh_env(seed=8)
-    agent = GCN_DQN_Agent(player_id=0, env=env, train_mode=False)
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=False)
     report = agent.device_report(env.current_state())
 
     selected = torch.device(report["selected_device"])

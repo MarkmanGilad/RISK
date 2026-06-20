@@ -35,7 +35,7 @@ set it in the shell before running the suite).
 | `test_self_play.py` | `SelfPlay.play_headless` — multi-seed fuzz test, full AI-only games played to an actual winner |
 
 `risk/learning/` (the RL layer — `GraphAdapter`, `ActionGraphBuilder`,
-`Encoder`, `Heads`, `GCN_DQN`, `ReplayBuffer`, `ActionEncoder`) has **no
+`Encoder`, `Heads`, `GNN_DQN`, `ReplayBuffer`, `ActionEncoder`) has **no
 checked-in tests yet** — see "Ad-hoc verification" below for how it's been
 validated instead, and consider promoting some of those scripts into real
 tests once the training loop exists and these modules stop changing shape

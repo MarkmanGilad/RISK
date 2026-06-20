@@ -1,6 +1,6 @@
 # RL-prep pass: bug fix + class-based cleanup
 
-Context: preparing `risk/learning/` for a GCN+DQN training loop. The game
+Context: preparing `risk/learning/` for a GNN+DQN training loop. The game
 engine/UI was already solid and well-tested (204 tests, all passing before
 and after this pass); the changes below are a bug fix plus a consistency
 pass converting free-function modules into classes, per request.
@@ -362,7 +362,7 @@ and the new button.
 
 **`risk/learning/graph_adapter.py`** needed no code change — `u`'s phase
 one-hot is already `[0.0] * len(Phase)`, so it grew 6→7 wide (`u`: 33→34)
-for free. `risk/learning/gcn_dqn.py`'s `TRADE_IN` path (predates this
+for free. `risk/learning/gnn_dqn.py`'s `TRADE_IN` path (predates this
 pass) does `a.card_indices for a in trade_actions`, which breaks once a
 `SkipTradeAction` (no `card_indices`) appears in that list — flagged, not
 fixed, since that file is already slated for the "pure net + agent"
@@ -424,7 +424,7 @@ read `action.phase`/`action.stage` outside tests — `Environment`/agents
 dispatch on `isinstance`, never on these — so repurposing `.phase` as the
 sole attribute was safe.
 
-**`risk/learning/{heads,action_graph_builder,gcn_dqn}.py`** — mechanical:
+**`risk/learning/{heads,action_graph_builder,gnn_dqn}.py`** — mechanical:
 `ActionStage` imports/references → `Phase`, `a.stage` → `a.phase`.
 
 **`risk/learning/replay_buffer.py`** — deleted `_stage_or_sentinel()` and
@@ -456,9 +456,9 @@ FORTIFY, GAME_OVER, OCCUPY` — missed during the `TRADE_IN`/
   `next_stage` (`5`) lines up with `done=True` — confirms the sentinel
   removal is correct, not just type-checked.
 
-## Follow-up pass: `GCN_DQN` split into a pure net + (not yet built) agent
+## Follow-up pass: `GNN_DQN` split into a pure net + (not yet built) agent
 
-Context: `GCN_DQN` originally owned `ActionGraphBuilder`, built/batched
+Context: `GNN_DQN` originally owned `ActionGraphBuilder`, built/batched
 candidate graphs, looped over legal actions, and dispatched to a stage-
 keyed `Heads` `ModuleDict` — all inside `nn.Module.forward`. That's game
 logic and Python-level branching/looping living inside a PyTorch network,
@@ -485,7 +485,7 @@ method) with two classes, each a `g_dim`-only constructor:
   entries up ("flagged, not fixed") and surfaced for real the moment this
   pass's own verification script exercised a `TRADE_IN` decision.
 
-**`risk/learning/gcn_dqn.py`** — `GCN_DQN.forward` settled on
+**`risk/learning/gnn_dqn.py`** — `GNN_DQN.forward` settled on
 `(state, phase, card_indices) -> Q`, all 5 stages in one call:
 - `state` — always a `Batch`, one graph per row, even for `N=1`
   (`Batch.from_data_list([one_graph])`) — same convention as carrying a
@@ -545,7 +545,7 @@ dependency graph — `action_graph_builder.py` already imports
 circular) and `ActionGraphBuilder` now clones `base.edge_attr` instead of
 building a fresh zero tensor itself. Net effect: `edge_attr` exists on
 *every* graph from the moment `GraphAdapter` builds it, so neither
-`ActionGraphBuilder` nor `GCN_DQN.forward` ever has to construct or
+`ActionGraphBuilder` nor `GNN_DQN.forward` ever has to construct or
 default one — each just inherits/overwrites what's already there.
 
 One more simplification on top, by request: **`card_indices` made
@@ -554,7 +554,7 @@ unconditionally now, zeros (or anything; ignored) for rows that aren't
 `TRADE_IN`, rather than `None` whenever no `TRADE_IN` row happens to be
 present. That, plus giving **`risk/learning/heads.py`'s `ScoringHead`** a
 `(g, card_indices)` signature (ignoring the second argument — kept purely
-so it matches `TradeInHead`'s), let `GCN_DQN.forward`'s two-path dispatch
+so it matches `TradeInHead`'s), let `GNN_DQN.forward`'s two-path dispatch
 (a `TRADE_IN`-specific branch, then a loop over the other 4) collapse into
 **one loop, no branching**: `TRADE_IN` joins `_heads_by_phase` like every
 other stage, and `self._heads_by_phase[stage](g[mask], card_indices[mask])`
@@ -599,9 +599,9 @@ modules):
 Full suite re-run after each step: 225 passed, 1 skipped, unaffected (no
 existing test touches these modules).
 
-## Follow-up pass: fixed five-stage `GCN_DQN` routing loop
+## Follow-up pass: fixed five-stage `GNN_DQN` routing loop
 
-Per a later cleanup request, `risk/learning/gcn_dqn.py` now routes rows by
+Per a later cleanup request, `risk/learning/gnn_dqn.py` now routes rows by
 looping over `range(5)` instead of `phase.unique().tolist()`. The `5` is
 the fixed count of DQN decision phases/heads (`TRADE_IN`,
 `REINFORCE_PLACE`, `ATTACK`, `OCCUPY`, `FORTIFY`), and each iteration skips
@@ -612,9 +612,9 @@ but makes the routing order explicit and independent of which phase labels
 happen to appear in a particular minibatch. `NetworkArchitectures.md` was
 updated to describe the fixed five-slot loop.
 
-## Follow-up pass: `GCN_DQN_Agent` (inference path only)
+## Follow-up pass: `GNN_DQN_Agent` (inference path only)
 
-Added `risk/learning/gcn_dqn_agent.py` implementing the not-yet-built
+Added `risk/learning/gnn_dqn_agent.py` implementing the not-yet-built
 agent wrapper described in `Docs/NetworkArchitectures.md`.
 
 Implemented now:
@@ -625,10 +625,10 @@ Implemented now:
   - `ActionGraphBuilder` for graph-based stages.
   - unmodified base graph rows for `TRADE_IN` (no injection).
 - `(phase, t1, t2, n)` batching via `ActionEncoder`.
-- One batched `GCN_DQN` forward call + argmax selection.
+- One batched `GNN_DQN` forward call + argmax selection.
 - Optional epsilon exploration (`train_mode` + `epsilon`).
 - Owned `ReplayBuffer` and a `remember(...)` helper for transition storage.
-- Agent always constructs its own `GCN_DQN` from the current graph dimensions.
+- Agent always constructs its own `GNN_DQN` from the current graph dimensions.
 - `load_params(path)` restores a saved net `state_dict` via `torch.load(...)`.
 
 Deferred intentionally:
@@ -660,18 +660,18 @@ Regression coverage added in `Temp/tests/test_self_play.py`.
 ## Follow-up pass: self-play scratch-pad learner seat
 
 Updated `risk/learning/self_play.py`'s `main()` scratch-pad roster to use
-five players, with seat 4 now assigned an untrained `GCN_DQN_Agent`.
+five players, with seat 4 now assigned an untrained `GNN_DQN_Agent`.
 The scratch-pad step-2 comment now matches that flow directly ("add your
 agent to the list") so you can run the learner seat as-is and swap in a
 different learner class by editing a single line.
 
 ## Follow-up pass: runtime device selection/check for learner
 
-`GCN_DQN_Agent` now resolves device in the learning layer (not global
+`GNN_DQN_Agent` now resolves device in the learning layer (not global
 constants): explicit override if provided, otherwise `cuda` when available,
 else `cpu`.
 
-Added `GCN_DQN_Agent.device_report(...)` to verify runtime placement for
+Added `GNN_DQN_Agent.device_report(...)` to verify runtime placement for
 model and tensors (`batch`, `phase`, `card_indices`), and `self_play.py`
 prints that report in `main()` when constructing the learner seat.
 

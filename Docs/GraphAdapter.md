@@ -2,7 +2,7 @@
 
 Reference for [`risk/learning/graph_adapter.py`](../risk/learning/graph_adapter.py),
 which converts a game snapshot into a `torch_geometric.data.Data` object for
-the GCN+DQN trainer.
+the GNN+DQN trainer.
 
 `topology`/`settings` don't change during a match, so the normal usage is
 to build one adapter per game and call it every step with just the state:
@@ -26,7 +26,7 @@ implementation that stub was waiting for.
 
 `BoardTopology` is already a graph (42 territories, adjacency = borders);
 `State` is the dynamic data sitting on top of it (`owners[i]`, `armies[i]`,
-...). A GCN needs that combination expressed as PyTorch tensors —
+...). A GNN needs that combination expressed as PyTorch tensors —
 node features, edge connectivity, and whatever isn't naturally per-node
 ("global" state like whose turn it is). `GraphAdapter` does that mapping
 once per call, deterministically, so the same `State` always produces the
@@ -49,7 +49,7 @@ One row per territory:
 | `x[:, 6:12]` | 6 | Owner one-hot, **padded to `MAX_PLAYERS` (6)** regardless of how many players are actually in the game |
 | `x[:, 12]` | 1 | Army count on that territory, raw integer (no normalization) |
 
-**Why pad the owner one-hot to 6 instead of `n_players`?** So the same GCN
+**Why pad the owner one-hot to 6 instead of `n_players`?** So the same GNN
 architecture works unmodified for a 3-player game and a 6-player game — the
 input width never changes. Unused player slots (e.g. slots 4 and 5 in a
 4-player game) are always zero.
@@ -76,7 +76,7 @@ All-zero here — the base graph carries no action, so there's nothing to
 mark. Exists at all (rather than being added later by whoever needs it)
 so every consumer can rely on it: `ActionGraphBuilder`
 (`Docs/ActionGraphBuilder.md`) clones and overwrites specific rows to
-inject an `AttackAction` candidate, and `Encoder`/`GCN_DQN` never have to
+inject an `AttackAction` candidate, and `Encoder`/`GNN_DQN` never have to
 special-case "this graph doesn't have `edge_attr` yet" — every graph
 flowing through the pipeline, injected or bare, has the same fields.
 Width (`EDGE_ATTR_DIM`, currently `2`: `[selected_attack, dice_count]`) is
@@ -128,7 +128,7 @@ wiped out this turn").
   `ActionGraphBuilder` needs *somewhere* to mark an injected `AttackAction`,
   and giving every base graph a zero-filled `edge_attr` up front means
   `ActionGraphBuilder` clones and overwrites instead of building one from
-  scratch, and `Encoder`/`GCN_DQN` never need a "missing `edge_attr`"
+  scratch, and `Encoder`/`GNN_DQN` never need a "missing `edge_attr`"
   fallback (`Docs/RL-Prep-Changes.md`).
 
 ---

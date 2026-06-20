@@ -294,7 +294,7 @@ Five small heads (e.g. one 2-layer MLP each), each specialized to its
 stage's actual semantics — `Q(s, a) = head[stage](state_embedding, t1, t2, n)`:
 
 - `t1`/`t2` for territory-valued stages (`REINFORCE_PLACE`, `ATTACK`,
-  `OCCUPY`, `FORTIFY`) should be looked up against the **GCN's own per-node
+  `OCCUPY`, `FORTIFY`) should be looked up against the **GNN's own per-node
   embeddings** for this state (the same ones produced from `x` in
   [`GraphAdapter.md`](GraphAdapter.md)), not fed as raw integers or through
   a separate embedding table — the whole point of using a graph net is that

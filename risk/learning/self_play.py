@@ -18,7 +18,7 @@ snapshots — safe to keep in a replay buffer. (`Environment` mutates a single
 transition stored by a trainer would end up aliasing the same, fully-mutated
 final state once the episode ended.)
 
-A GCN+DQN trainer built on top of this should subclass `SelfPlay` and
+A GNN+DQN trainer built on top of this should subclass `SelfPlay` and
 override `on_step`/`make_collector` rather than reimplementing the loop.
 
 Typical use::
@@ -273,9 +273,9 @@ def main() -> None:
     from risk.agents.random_agent import RandomAgent
     from risk.app.factory import GameFactory
     from risk.app.setup import SetupStage
-    from risk.learning.gcn_dqn_agent import GCN_DQN_Agent
+    from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 
-    # 1) Roster: four fixed AI seats + one untrained GCN+DQN learner.
+    # 1) Roster: four fixed AI seats + one untrained GNN+DQN learner.
     ctx = GameFactory.build(SetupStage.default_settings(n=5))
     ctx.agents[0] = RaiderAgent(player_id=0, env=ctx.env)
     ctx.agents[1] = SentinelAgent(player_id=1, env=ctx.env)
@@ -283,7 +283,7 @@ def main() -> None:
     ctx.agents[3] = SentinelAgent(player_id=3, env=ctx.env)
     
     # 2) To test your learner, add your agent to the list:
-    learner = GCN_DQN_Agent(player_id=4, env=ctx.env)
+    learner = GNN_DQN_Agent(player_id=4, env=ctx.env)
     ctx.agents[4] = learner
     print(f"learner device report = {learner.device_report(ctx.env.current_state())}")
     _print_roster(ctx)

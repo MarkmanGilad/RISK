@@ -1,11 +1,11 @@
-"""GCN+DQN inference agent (Net A) for self-play/training rollouts.
+"""GNN+DQN inference agent (Net A) for self-play/training rollouts.
 
-This class is the game-logic wrapper around `GCN_DQN`:
+This class is the game-logic wrapper around `GNN_DQN`:
 
 - asks `env.legal_actions(state)`
 - builds one graph row per legal action (`ActionGraphBuilder` for graph
   stages; base graph for `TRADE_IN`)
-- batches and scores all rows with `GCN_DQN`
+- batches and scores all rows with `GNN_DQN`
 - returns the selected `Action`
 
 Training/update code is intentionally deferred; this class provides action
@@ -28,7 +28,7 @@ from risk.game.phase import Phase
 from risk.game.state import State
 from risk.learning.action_encoder import ActionEncoder
 from risk.learning.action_graph_builder import ActionGraphBuilder
-from risk.learning.gcn_dqn import GCN_DQN
+from risk.learning.gnn_dqn import GNN_DQN
 from risk.learning.graph_adapter import EDGE_ATTR_DIM, GraphAdapter
 from risk.learning.replay_buffer import ReplayBuffer
 
@@ -42,8 +42,8 @@ def resolve_device(device: Optional[torch.device] = None) -> torch.device:
     return torch.device("cpu")
 
 
-class GCN_DQN_Agent(BaseAgent):
-    """`BaseAgent` wrapper for `GCN_DQN` action scoring."""
+class GNN_DQN_Agent(BaseAgent):
+    """`BaseAgent` wrapper for `GNN_DQN` action scoring."""
 
     def __init__(self, player_id: int, env: Environment, *, 
                  replay_buffer: ReplayBuffer | None = None, device: torch.device | None = None,
@@ -59,7 +59,7 @@ class GCN_DQN_Agent(BaseAgent):
         self.action_encoder = ActionEncoder(env)
 
         sample = self.adapter(env.current_state())
-        self.net = GCN_DQN(
+        self.net = GNN_DQN(
             in_dim=sample.x.shape[1],
             hidden_dim=64,
             edge_dim=EDGE_ATTR_DIM,
@@ -159,7 +159,7 @@ class GCN_DQN_Agent(BaseAgent):
 
     def train_step(self, *args, **kwargs) -> None:
         """Training loop intentionally deferred; implemented in a later pass."""
-        raise NotImplementedError("GCN_DQN_Agent.train_step will be implemented later.")
+        raise NotImplementedError("GNN_DQN_Agent.train_step will be implemented later.")
 
 
-__all__ = ["GCN_DQN_Agent"]
+__all__ = ["GNN_DQN_Agent"]

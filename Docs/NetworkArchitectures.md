@@ -191,7 +191,7 @@ class TradeInHead(nn.Module):       # different input shape -> its own class
 
 Both heads now share one call signature, `(g, card_indices) -> Q`, even
 though `ScoringHead` ignores the second argument — purely so
-`GCN_DQN.forward` (see Net A below) can route *every* row through
+`GNN_DQN.forward` (see Net A below) can route *every* row through
 `self._heads_by_phase[stage](g[mask], card_indices[mask])` in a single
 uniform loop, with no `if`/branch distinguishing `TRADE_IN` from the rest.
 `card_indices` itself is `[N, 3]` long and not optional at that call site
@@ -199,7 +199,7 @@ uniform loop, with no `if`/branch distinguishing `TRADE_IN` from the rest.
 the tensor's shape never depends on which stages are actually present.
 Each head class is still just `(its input) -> scalar` with no dispatch
 logic of its own — deciding *which* head scores a given row stays
-`GCN_DQN.forward`'s job, not something the agent has to do by hand. Five
+`GNN_DQN.forward`'s job, not something the agent has to do by hand. Five
 small heads, same reasoning in all four nets: the stages are different
 decisions with different
 `n`-semantics and value scales, so one head per stage avoids forcing a
@@ -243,7 +243,7 @@ message passing to refine, and pure node pooling alone is blind to it.
 The network and the game-logic orchestration around it are two separate
 classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
 
-- **`risk/learning/gcn_dqn.py`'s `GCN_DQN`** — **implemented**, all 5
+- **`risk/learning/gnn_dqn.py`'s `GNN_DQN`** — **implemented**, all 5
   stages in one call, one uniform loop: `forward(state, phase,
   card_indices) -> Q`.
   - `state` — always a `Batch`, one graph per row being scored, even for
@@ -288,7 +288,7 @@ classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
   together in one `forward` call through the same uniform loop, the shape
   a sampled replay-buffer minibatch would actually be: every row scored
   correctly, gradients confirmed flowing.
-- **`GCN_DQN_Agent`** — **not yet built**. Owns `ActionGraphBuilder`,
+- **`GNN_DQN_Agent`** — **implemented**. Owns `ActionGraphBuilder`,
   builds/batches the per-candidate graphs, builds the `phase`/
   `card_indices` tensors, merges scores back to `legal_actions()`'s order,
   `argmax`s. This is the piece that actually knows what a `State`/`Action`
@@ -302,7 +302,7 @@ ActionGraphBuilder  ──▶  N graphs (injected, or base copy for TRADE_IN), p
    ▼
 Batch.from_data_list
    ▼
-GCN_DQN.forward(state, phase, card_indices) ──▶ Q(s, a)  [N]   <- the net's job: encode + pool + route to head
+GNN_DQN.forward(state, phase, card_indices) ──▶ Q(s, a)  [N]   <- the net's job: encode + pool + route to head
    ▼
 argmax -> chosen action                                          <- back to the agent
 ```

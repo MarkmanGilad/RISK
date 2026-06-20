@@ -44,7 +44,7 @@ class ScoringHead(nn.Module):
 
     `g`: `[N, g_dim]` -> `[N]`. Takes `card_indices` too, unused, purely so
     every head — this one and `TradeInHead` — shares one call signature:
-    `GCN_DQN.forward` then calls whichever head a row's `phase` picks out
+    `GNN_DQN.forward` then calls whichever head a row's `phase` picks out
     the same way regardless of which one it is, no per-head branching.
     """
 

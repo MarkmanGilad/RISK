@@ -1,17 +1,17 @@
 """Net A's network — DQN + injection (`Docs/NetworkArchitectures.md`).
 
-`GCN_DQN` is the graph network: `(state graph(s), phase label per graph,
+`GNN_DQN` is the graph network: `(state graph(s), phase label per graph,
 card_indices) -> Q(s, a)`, all 5 stages in one call, one uniform loop. It
 owns no game logic beyond the one leaf `Phase` enum (`risk/game/phase.py`,
 no dependencies of its own — not `Action`/`ActionGraphBuilder`/
 `Environment`) needed to pick which head scores each row. Building the
 per-candidate graphs, batching them, and merging scores back into
-`legal_actions()`'s order is still the *agent's* job (the not-yet-built
-`GCN_DQN_Agent`), the same split `Temp/Examples/DQN_Agent.py` uses around
+`legal_actions()`'s order is still the *agent's* job (`GNN_DQN_Agent`),
+the same split `Temp/Examples/DQN_Agent.py` uses around
 its bare `DQN` network — this class just goes one step further than a
 bare encoder by also routing each row to its head internally.
 
-    net = GCN_DQN(in_dim=13, hidden_dim=64, edge_dim=2, u_dim=34)
+    net = GNN_DQN(in_dim=13, hidden_dim=64, edge_dim=2, u_dim=34)
     q = net(state, phase, card_indices)   # state: always a Batch, even for N=1
 
 `Encoder`/`pool` stay in their own modules (`encoder.py`, `pooling.py`)
@@ -30,7 +30,7 @@ from risk.learning.heads import ScoringHead, TradeInHead
 from risk.learning.pooling import pool
 
 
-class GCN_DQN(nn.Module):
+class GNN_DQN(nn.Module):
     """`(state graph(s), phase per graph, card_indices) -> Q(s, a)`."""
 
     def __init__(
@@ -95,4 +95,4 @@ class GCN_DQN(nn.Module):
         return q
 
 
-__all__ = ["GCN_DQN"]
+__all__ = ["GNN_DQN"]

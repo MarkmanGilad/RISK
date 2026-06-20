@@ -1,7 +1,7 @@
 """Board-state -> PyTorch Geometric graph adapter.
 
 Converts `(State, BoardTopology, GameSettings)` into a `torch_geometric.data.Data`
-snapshot for the GCN+DQN trainer. Lives in `risk/learning/`, not `risk/game/`,
+snapshot for the GNN+DQN trainer. Lives in `risk/learning/`, not `risk/game/`,
 so the core rules engine stays torch-free (see `State.to_features`'s docstring).
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ def armies_column_index(topology: BoardTopology) -> int:
 
 
 class GraphAdapter:
-    """Builds one `Data` graph snapshot of a `State` for a GCN.
+    """Builds one `Data` graph snapshot of a `State` for a GNN.
 
     `topology`/`settings` don't change during a match, so build one
     instance per game and call it every step with just the `State`:
