@@ -61,6 +61,22 @@ class ActionEncoder:
         rows = [self.encode_one(a, state) for a in actions]
         return torch.tensor(rows, dtype=torch.long)
 
+    def encode_batch(
+        self, actions: Sequence[Action], states: Sequence[State]
+    ) -> torch.Tensor:
+        """Like `encode_many`, but each action has its own state.
+
+        For a replay-buffer minibatch, where every transition's action was
+        taken against a different state — unlike `encode_many`'s single
+        shared `state` for every candidate of one decision.
+
+        `tensor[i]` encodes `(actions[i], states[i])`; row order matches.
+        """
+        if not actions:
+            return torch.empty((0, 4), dtype=torch.long)
+        rows = [self.encode_one(a, s) for a, s in zip(actions, states)]
+        return torch.tensor(rows, dtype=torch.long)
+
     def encode_legal(self) -> tuple[list[Action], torch.Tensor]:
         """`self.env.legal_actions()` for the current state -> `(legal_actions, tensor)`.
 

@@ -677,3 +677,286 @@ prints that report in `main()` when constructing the learner seat.
 
 `score_actions(...)` now asserts model/tensors are on the selected device,
 failing fast on CPU/GPU mismatch instead of silently mixing devices.
+
+## Follow-up pass: `GNN_DQN_Agent.train_step` (Net A training)
+
+Implemented the previously-deferred DQN update, closing out Net A's
+"Confirm it plays a legal game, then train" step in
+`NetworkArchitectures.md`'s experiment plan.
+
+- `GNN_DQN_Agent.__init__` gained `gamma`, `lr`, `target_update_every`
+  kwargs and now owns an `Adam` optimizer over `self.net.parameters()`.
+- `train_step(batch_size)` samples a minibatch from `self.replay_buffer`,
+  computes `Q(s, a)` for the taken actions via the online net
+  (`_current_q`), computes `max_a' Q_target(s', a')` via the target net
+  (`_max_next_q`), and takes one Huber-loss gradient step. Target net is
+  hard-synced to the online net every `target_update_every` calls (chosen
+  over a soft/Polyak update, per request).
+- `_max_next_q`'s candidate count varies per transition (`next_state`'s
+  own `legal_actions()` count), so every transition's candidates are
+  built/batched/scored in **one** target-net forward pass across the whole
+  minibatch, then reduced to one max per transition via
+  `torch_geometric.utils.scatter(..., reduce="max")` keyed by a per-row
+  transition index — avoids one forward pass per transition. Rows for
+  `done` transitions are skipped entirely (their target contribution is
+  `0` by construction).
+- `_current_q` builds one graph row per `(state, action)` pair directly
+  (`ActionGraphBuilder`/`ActionEncoder.encode_one`), rather than going
+  through `ActionEncoder.encode_many`/`score_actions`'s "one state, many
+  candidate actions" shape — each replay transition has its own `state`,
+  not one shared state for the whole minibatch.
+
+**Verified** against two real self-play rollouts (untrained learner seat,
+`epsilon`-greedy exploration during collection): `train_step` runs
+end-to-end over five calls with a populated replay buffer, loss is a finite
+scalar each call; a second rollout explicitly checked that the online net's
+parameters change after `train_step` and that the target net's parameters
+exactly match the online net's immediately after a sync at
+`target_update_every`, confirming the hard-sync timing is correct rather
+than just not-erroring.
+
+## Follow-up pass: perspective-relative encoding + `Trainer` (multi-episode self-play)
+
+Context: the next step toward actually training Net A was a real
+multi-episode self-play loop — every episode reassigns the learner to a
+random seat among 3-6 `RandomAgent` opponents. That surfaced a real bug:
+`GraphAdapter`'s owner one-hot/`u` features (`Docs/GraphAdapter.md`) are
+keyed by **absolute** player id, so the same physical board position looks
+like a different input depending on which seat the learner happened to be
+assigned that episode — the net would have to re-learn "which absolute id
+is mine" every time its seat changed, instead of learning the game itself.
+
+**`GraphAdapter.__call__`/`_node_features`/`_global_features`** gained a
+`perspective: int = 0` parameter that rotates every player-indexed slot
+(owner one-hot, cards-per-player, current-player one-hot, eliminated) so
+`perspective` always lands in relative slot `0`, preserving turn order
+(`(p - perspective) % n_players`). Default `0` is a no-op, so this is fully
+backward compatible. Verified against the project's own example ordering
+(4-player game, training agent physically seated at `2`): absolute seats
+`(0,1,2,3)` → relative slots `(2,3,0,1)`, i.e. training agent first, then
+its turn order continuing around the table — exactly the "training, then
+the next 3 seats in order" reordering asked for.
+
+**Found and fixed a related latent bug while wiring this up:**
+`n_players` inside `GraphAdapter` was read from `self.settings.player_count`
+— harmless under the original "one adapter per game" assumption, but wrong
+the moment one `GraphAdapter` gets reused across episodes of different
+sizes (exactly what the new trainer does): scoring an older replay-buffer
+`state` against the *current* episode's `n_players` indexed the wrong
+number of hand/owner slots (`IndexError`, caught immediately by the
+verification rollout below). Fixed by reading `n_players` from
+`len(state.hands)` instead — a property of the state itself, not whichever
+episode the adapter instance currently happens to be bound to.
+
+**`GNN_DQN_Agent.remember`**, not `ReplayBuffer`, owns capturing
+`perspective` — needed because, unlike `stage` (derivable from
+`action.phase`), the learner's seat at push time isn't derivable from
+`state`/`action` at all, and isn't guaranteed to match the learner's
+*current* seat by the time a transition gets sampled for training (the
+trainer reassigns seats every episode), so it has to be captured eagerly,
+per transition. It isn't a `ReplayBuffer` column at all, though:
+`remember()` now does its own `state.snapshot()` (moved out of
+`ReplayBuffer.push`, which dropped its internal copy and just trusts its
+caller — `remember()` is the only real one) and tags the fresh copy with
+`state_snapshot.perspective = self.player_id` before handing it to
+`push()` (`State` is a plain, unfrozen dataclass, so this is just a normal
+attribute set, invisible to `to_dict()`/`__eq__`, not a declared field).
+The training loop reads it back as `state.perspective`/`next_state.perspective`
+per row rather than `sample()` returning a parallel `perspectives` array —
+`ReplayBuffer` itself ends up knowing nothing about "perspective" at all,
+staying a generic `(state, action, reward, next_state, done, stage,
+next_stage)` store, with the seat info co-located with the one `State` it
+actually describes instead of riding alongside it in the container.
+Confirmed this survives `ReplayBuffer.save`/`load` (`torch.save` pickles
+the attribute along with everything else).
+
+**`GNN_DQN_Agent`**:
+- `attach(player_id, env)` — rebinds `player_id`/`env`/`adapter`/`builder`/
+  `action_encoder` for a new episode/seat, while `net`/`target_net`/
+  `optimizer`/`replay_buffer` persist — lets one learner train across many
+  episodes instead of being rebuilt (and losing its weights) every time.
+- Every adapter call (`score_actions`, `device_report`, `_q_value`,
+  `_max_next_q`, the constructor's dimension probe) now passes
+  `perspective` — `self.player_id` for live inference, the buffer's
+  per-transition `perspective` tensor for training (`_q_value`/
+  `_max_next_q` build each row's graph from *that transition's* seat, not
+  whatever seat the agent currently happens to be attached to).
+- `remember(...)` captures `perspective=self.player_id` at push time.
+
+**`risk/learning/trainer.py`** (new) — `Trainer`, built on `SelfPlay`
+(composition, not subclassing — `SelfPlay`'s own `on_step`-callback shape
+already covers what a trainer needs, no override points to subclass).
+Each `run_episode()`:
+- random `n_players` (3-6) and a random seat, all-`RandomAgent` roster via
+  `GameFactory.build`/`SetupStage.default_settings`, learner `attach`ed
+  onto the chosen seat — no `HumanAgent` seats, ever.
+- plays to game-over or the learner's own elimination
+  (`stop_when_player_eliminated`) — once the learner is out, there's
+  nothing left for it to learn from that episode.
+- a sparse terminal reward on the episode's last transition only: `+1`
+  win, `-1` eliminated, `0` on a max-steps timeout (`done` stays `False`
+  for a timeout specifically, since that's a truncation, not a real
+  terminal — the TD target should still bootstrap from the next state).
+- trains every `train_every` episodes once the buffer holds at least one
+  batch, and checkpoints to `checkpoint_dir` (default `Checkpoints/`)
+  every `checkpoint_every` episodes starting after `checkpoint_after` —
+  versioned filenames (`gnn_dqn_ep{N:06d}.pt`) keep every saved snapshot
+  rather than overwriting one "latest" file, so a later tournament
+  (`NetworkArchitectures.md`'s "Experiment plan" step 4) has multiple
+  checkpoints along the training run to pick from, not just the last one.
+
+**Verified:** a 6-episode smoke run (`batch_size=8`, `train_every=1`,
+`checkpoint_after=2`, `checkpoint_every=2`) — every episode picked a
+different `n_players`/seat combination, the replay buffer grew every
+episode, `train_step` ran without error each time, and checkpoint files
+landed on disk at episodes 2/4/6 as configured. Full suite re-run:
+`python -m pytest Temp/tests -q` → 234 passed, 1 skipped, unaffected (no
+existing test touches `risk/learning/`).
+
+## Follow-up pass: explicit trainer loop + agent-owned ingest/schedule
+
+Per request, `risk/learning/trainer.py` was restructured to read like the
+example PPO/DQN trainers: one explicit episode loop with clear orchestration
+steps (build episode context, rollout, ingest, train-if-due, checkpoint).
+
+- `Trainer.run(...)` now delegates to `Trainer.train(...)` for a more obvious
+  entry point name.
+- `Trainer.run_episode(...)` is now loop-first and short; internals split into
+  `_build_episode_context(...)` and `_play_episode(...)` so the control flow
+  is easy to scan.
+- trainer-side `_remember_episode(...)` was removed.
+
+That removed logic moved into `risk/learning/gnn_dqn_agent.py`:
+
+- `ingest_episode(...)` now applies the existing sparse terminal reward policy
+  on the final transition and pushes transitions to replay.
+- `can_train(...)`, `learn_steps(...)`, and `learn_if_ready(...)` now own the
+  "is replay ready" and "train every N episodes" cadence decisions.
+- `train_step(...)` is unchanged mathematically; this pass only moved
+  responsibility boundaries to keep the trainer loop clearer.
+
+No wandb/logging behavior was added in this pass, intentionally.
+
+## Follow-up pass: `run_episode()` returns explicit episode stats
+
+Small trainer ergonomics pass, keeping the same training behavior:
+
+- `risk/learning/trainer.py` now defines `EpisodeStats` (`TypedDict`) and
+  `Trainer.run_episode()` returns one compact summary dict instead of only a
+  winner id.
+- Summary fields are loop-facing only (no logging integration):
+  `episode`, `n_players`, `learner_seat`, `transitions`, `winner`,
+  `eliminated`, `terminated`, `losses`, `trained`, `replay_size`.
+- `Trainer.train(n_episodes)` now returns a `list[EpisodeStats]` (one row per
+  episode). `Trainer.run(n_episodes)` is still supported and delegates to
+  `train(...)`.
+
+This keeps the loop readable (PPO/DQN-trainer style) while making each
+episode's outcome/training step visible to callers without introducing
+wandb/logging yet.
+
+## Follow-up pass: simplify trainer API to one public method
+
+Per request, `risk/learning/trainer.py` now exposes a single public training
+entry point: `Trainer.train(...)`.
+
+- Removed `Trainer.run(...)` and `Trainer.run_episode(...)`.
+- Inlined the episode flow directly inside `train(...)` so all orchestration
+  is visible in one function.
+- Kept the same behavior for rollout, ingest, train scheduling, checkpointing,
+  and returned `EpisodeStats` rows.
+
+This reduces surface area and keeps the training loop easy to read without
+adding logging/wandb concerns.
+
+## Follow-up pass: non-deterministic episode seeds
+
+Per request, trainer episode construction now defaults to non-deterministic
+randomness:
+
+- `risk/learning/trainer.py` now uses `random.SystemRandom()` when `seed`
+  is not provided.
+- `_build_episode_context(...)` now passes `seed=None` into
+  `SetupStage.default_settings(...)` so each episode's game setup is not
+  pinned to a fixed integer seed.
+- `main()` now constructs `Trainer()` without a fixed seed.
+
+Reproducibility is still available by explicitly passing `seed=...` to
+`Trainer(...)`.
+
+## Follow-up pass: inline episode rollout inside train
+
+Per request, `risk/learning/trainer.py` no longer has a separate
+`_play_episode(...)` helper.
+
+- Moved the `SelfPlay.play_headless(...)` call and transition collector
+  closure directly into `Trainer.train(...)`.
+- Kept behavior unchanged (same max steps, stop-on-elimination, and
+  transition capture).
+
+This keeps the full training flow visible in one method.
+
+## Follow-up pass: remove trainer stats aggregation
+
+Per request, `risk/learning/trainer.py` no longer builds or returns a per-
+episode stats structure.
+
+- Removed `EpisodeStats` from the trainer module.
+- `Trainer.train(...)` now returns `None` and runs the loop only.
+- Removed row assembly and "last stats" print in `main()`.
+- Kept periodic progress output and checkpointing behavior unchanged.
+
+This leaves room to add a dedicated logging/stats class later (e.g. wandb)
+without mixing that concern into the core training loop.
+
+## Follow-up pass: fix missing stop-on-elimination in inlined loop
+
+The "inline episode rollout inside train" pass above stated stop-on-elimination
+was unchanged, but the actual manual loop in `Trainer.train(...)` never
+checked it — it only broke on `result.done` (a real game-over). Once the
+learner's seat was eliminated, the inner per-opponent `while` loop kept
+running indefinitely (its only exit condition was `result.done`), so episodes
+ran until the *entire game* ended rather than stopping at the learner's own
+elimination, regularly chewing through all of `MAX_STEPS_PER_EPISODE`.
+
+Fixed in `risk/learning/trainer.py`'s `train(...)`:
+- outer loop now breaks immediately if `seat in env.current_state().eliminated`.
+- inner opponent-turn `while` loop now also exits on `seat in
+  result.state.eliminated`, not just `result.done`.
+- the stored transition's `done` is `result.done or seat in
+  result.state.eliminated`, so elimination is correctly treated as terminal.
+
+Separately, some episodes still legitimately run very long (one player
+taking thousands of consecutive steps without yielding a turn) because
+`RandomAgent` picks uniformly among legal actions, including individual
+attack actions, and rarely happens to pick `StopAttackAction` — this is
+opponent-policy behavior, not a trainer bug.
+
+While in there, also removed the `if current_player_index == seat: ... else:
+...` branch from the per-step loop. A small `while` loop now runs before the
+main loop to play any opening moves from seats ordered before the learner's,
+so by the time the main `for` loop starts it's always the learner's turn —
+the loop body only has to handle one case.
+
+## Follow-up pass: `learn_if_ready` -> `learn`, drop `train_every` cadence
+
+Per request, `GNN_DQN_Agent.learn_if_ready(...)` is renamed to
+`GNN_DQN_Agent.learn(...)` and no longer takes `episode_index`/`train_every`.
+The only remaining gate is `can_train(batch_size)`: skip if the replay buffer
+doesn't yet hold `batch_size` transitions. `train_every` had no reason to
+exist: if you don't want to train, you don't run the trainer.
+
+- `risk/learning/gnn_dqn_agent.py`: `learn_if_ready(...)` -> `learn(*,
+  batch_size, n_steps)`, body is just the `can_train` check + `learn_steps`.
+- `risk/learning/train_constants.py`: removed `TRAIN_EVERY`.
+
+Follow-up: `Trainer.train(...)`'s call to `self.agent.learn(...)` moved from
+once per episode to inside the per-turn loop, right after `remember(...)`, so
+the agent learns from every agent turn instead of once per episode — standard
+DQN behavior. This is much more expensive: each `learn()` call runs a full
+GNN forward+backward over `batch_size` transitions, measured at ~295ms for
+`batch_size=128` on this machine's GPU vs ~82ms for `batch_size=32`. With
+episodes often running 1000+ agent turns, this is the difference between
+~5 minutes and ~80 seconds of pure gradient compute per episode. Lowered
+`BATCH_SIZE` in `train_constants.py` from `128` to `32` to keep per-turn
+learning affordable.

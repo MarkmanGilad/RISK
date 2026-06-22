@@ -111,7 +111,16 @@ class SelfPlay:
                 # reusing for the rest of the game — snapshot it before
                 # handing it to the trainer, or every stored transition would
                 # alias the final state once the episode ends.
-                on_step(before, action, StepResult(state=result.state.snapshot(), info=result.info))
+                on_step(
+                    before,
+                    action,
+                    StepResult(
+                        state=result.state.snapshot(),
+                        info=result.info,
+                        reward=result.reward,
+                        done=result.done,
+                    ),
+                )
             if stop_when_player_eliminated is not None:
                 if stop_when_player_eliminated in result.state.eliminated:
                     steps += 1
@@ -179,7 +188,12 @@ class SelfPlay:
                             on_step(
                                 before,
                                 action,
-                                StepResult(state=result.state.snapshot(), info=result.info),
+                                StepResult(
+                                    state=result.state.snapshot(),
+                                    info=result.info,
+                                    reward=result.reward,
+                                    done=result.done,
+                                ),
                             )
                         if stop_when_player_eliminated is not None:
                             if stop_when_player_eliminated in result.state.eliminated:

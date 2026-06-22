@@ -54,6 +54,26 @@ architecture works unmodified for a 3-player game and a 6-player game — the
 input width never changes. Unused player slots (e.g. slots 4 and 5 in a
 4-player game) are always zero.
 
+**`perspective`** — `GraphAdapter.__call__(state, perspective=0)` rotates
+which absolute player id lands in slot `0` of every player-indexed
+feature (owner one-hot here; cards-per-player/current-player/eliminated in
+`u`, below): slot `k` holds whichever player is `(perspective + k) %
+n_players`, i.e. `(p - perspective) % n_players` for player `p`. Turn order
+is preserved, only the starting point shifts. Default `0` is a no-op
+(`p % n_players == p` for `p` in range), so every existing absolute-id call
+site is unaffected. This exists for the learning agent
+(`Docs/RL-Prep-Changes.md`'s trainer), which is assigned a different
+physical seat every self-play episode but should always learn from one
+consistent "slot 0 is me" frame rather than the net having to re-derive
+"which absolute id am I this game" from `u`'s current-player one-hot.
+
+`n_players` for this rotation (and for the padding loops generally) comes
+from `len(state.hands)`, not `settings.player_count` — the trainer reuses
+one `GraphAdapter` across many self-play episodes of different sizes
+(`GNN_DQN_Agent.attach`), and a replay-buffer `state` from an earlier,
+differently-sized episode must still be read against *its own* player
+count, not whichever episode the adapter is currently bound to.
+
 **Why raw army counts, not log-scaled?** Simplicity — if training stability
 becomes an issue later, normalize inside the network (e.g. a
 `BatchNorm`/`LayerNorm` right after the input layer) rather than baking a

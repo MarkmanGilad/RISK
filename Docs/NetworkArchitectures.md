@@ -288,11 +288,34 @@ classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
   together in one `forward` call through the same uniform loop, the shape
   a sampled replay-buffer minibatch would actually be: every row scored
   correctly, gradients confirmed flowing.
-- **`GNN_DQN_Agent`** — **implemented**. Owns `ActionGraphBuilder`,
-  builds/batches the per-candidate graphs, builds the `phase`/
-  `card_indices` tensors, merges scores back to `legal_actions()`'s order,
-  `argmax`s. This is the piece that actually knows what a `State`/`Action`
-  is.
+- **`GNN_DQN_Agent`** — **implemented**, including `train_step`. Owns
+  `ActionGraphBuilder`, builds/batches the per-candidate graphs, builds the
+  `phase`/`card_indices` tensors, merges scores back to `legal_actions()`'s
+  order, `argmax`s. This is the piece that actually knows what a
+  `State`/`Action` is.
+  - `train_step(batch_size)` — one DQN TD-error update: samples a
+    minibatch from `self.replay_buffer`, scores the taken `(state,
+    action)` pairs with the online net, scores every legal action of each
+    `next_state` with the target net (one batched forward pass over *all*
+    transitions' candidates at once, reduced back to a per-transition max
+    via `torch_geometric.utils.scatter(..., reduce="max")` keyed by a
+    per-row transition index — cheaper than one forward pass per
+    transition), Huber loss against `r + gamma * (1 - done) * max_a'
+    Q_target(s', a')`, one optimizer step. Target net is hard-synced to
+    the online net every `target_update_every` calls (an `Adam` optimizer
+    and `gamma`/`lr`/`target_update_every` are now `GNN_DQN_Agent`
+    constructor kwargs). Verified against a real self-play rollout: online
+    net params change after `train_step`, target net is unchanged between
+    syncs and exactly matches the online net immediately after one.
+  - `risk/learning/trainer.py`'s `Trainer` (not part of this doc's shared
+    foundation, but the thing that actually runs Net A's training step
+    from "Experiment plan" step 3) reuses one `GNN_DQN_Agent` across many
+    self-play episodes, reassigning it to a random seat/`n_players` every
+    episode via `attach(...)` — see `GraphAdapter`'s `perspective`
+    parameter (`Docs/GraphAdapter.md`) for how the net still sees one
+    consistent "this is me" frame despite the seat changing, and
+    `Docs/RL-Prep-Changes.md`'s "perspective-relative encoding + `Trainer`"
+    entry for the full writeup.
 
 ```
 base Data(state)

@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import torch
+import torch.nn.functional as F
 from torch_geometric.data import Batch, Data
+from torch_geometric.utils import scatter
 
 from risk.agents.base_agent import BaseAgent
 from risk.game.actions import Action
@@ -45,9 +47,10 @@ def resolve_device(device: Optional[torch.device] = None) -> torch.device:
 class GNN_DQN_Agent(BaseAgent):
     """`BaseAgent` wrapper for `GNN_DQN` action scoring."""
 
-    def __init__(self, player_id: int, env: Environment, *, 
+    def __init__(self, player_id: int, env: Environment, *,
                  replay_buffer: ReplayBuffer | None = None, device: torch.device | None = None,
-                 epsilon: float = 0.0, train_mode: bool = False, seed: int | None = None,) -> None:
+                 epsilon: float = 0.0, train_mode: bool = False, seed: int | None = None,
+                 gamma: float = 0.99, lr: float = 1e-4, target_update_every: int = 1000,) -> None:
         super().__init__(player_id)
         self.env = env
         self.device = resolve_device(device)
@@ -57,8 +60,11 @@ class GNN_DQN_Agent(BaseAgent):
         self.adapter = GraphAdapter(env.topology, env.settings)
         self.builder = ActionGraphBuilder(env.topology)
         self.action_encoder = ActionEncoder(env)
+        self.gamma = float(gamma)
+        self.target_update_every = int(target_update_every)
+        self._train_steps = 0
 
-        sample = self.adapter(env.current_state())
+        sample = self.adapter(env.current_state(), perspective=self.player_id)
         self.net = GNN_DQN(
             in_dim=sample.x.shape[1],
             hidden_dim=64,
@@ -70,6 +76,24 @@ class GNN_DQN_Agent(BaseAgent):
         self.target_net = deepcopy(self.net).to(self.device)
         self.target_net.eval()
         self.set_train_mode(train_mode)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
+
+    def attach(self, player_id: int, env: Environment) -> None:
+        """Rebind this agent to a new episode's seat/env.
+
+        `net`/`target_net`/`optimizer`/`replay_buffer` persist across the
+        call (that's the whole point — one learner trained over many
+        self-play episodes); only the per-episode bindings are rebuilt,
+        the same way `__init__` builds them the first time. Lets a trainer
+        reuse one `GNN_DQN_Agent` while reassigning it to a different
+        physical seat (and a freshly built `env`/`GameContext`) every
+        episode — see `Docs/RL-Prep-Changes.md`'s trainer.
+        """
+        self.player_id = player_id
+        self.env = env
+        self.adapter = GraphAdapter(env.topology, env.settings)
+        self.builder = ActionGraphBuilder(env.topology)
+        self.action_encoder = ActionEncoder(env)
 
     def load_params(self, path: str | Path) -> None:
         state_dict = torch.load(path, map_location=self.device, weights_only=True)
@@ -101,7 +125,7 @@ class GNN_DQN_Agent(BaseAgent):
         if not legal_actions:
             return report
 
-        base = self.adapter(state)
+        base = self.adapter(state, perspective=self.player_id)
         rows = [self.builder(base, legal_actions[0], state)]
         batch = Batch.from_data_list(rows).to(self.device)
         encoded = self.action_encoder.encode_many(legal_actions[:1], state).to(self.device)
@@ -128,7 +152,7 @@ class GNN_DQN_Agent(BaseAgent):
 
     def score_actions(self, state: State, legal_actions: Sequence[Action]) -> torch.Tensor:
         """Score each legal action with the online net and return `[N]` Q values."""
-        base = self.adapter(state)
+        base = self.adapter(state, perspective=self.player_id)
         rows: list[Data] = []
         for action in legal_actions:
             rows.append(self.builder(base, action, state))
@@ -155,11 +179,166 @@ class GNN_DQN_Agent(BaseAgent):
         return q_values
 
     def remember(self, state: State, action: Action, reward: float, next_state: State, done: bool,) -> None:
-        self.replay_buffer.push(state, action, reward, next_state, done)
+        """Snapshot and store one transition.
 
-    def train_step(self, *args, **kwargs) -> None:
-        """Training loop intentionally deferred; implemented in a later pass."""
-        raise NotImplementedError("GNN_DQN_Agent.train_step will be implemented later.")
+        Snapshots here (not in `ReplayBuffer.push`, which trusts its
+        caller) so it can also tag each copy with `.perspective =
+        self.player_id` — this agent's *current* seat, captured now rather
+        than re-read at training time, since a self-play trainer reassigns
+        this agent to a different seat every episode (`attach`). `State` is
+        a plain, unfrozen dataclass, so this is a normal attribute set, not
+        a declared field — invisible to `to_dict()`/`__eq__`, read back by
+        `_q_value`/`_max_next_q` as `state.perspective` when building that
+        transition's graph.
+        """
+        state_snapshot = state.snapshot()
+        next_state_snapshot = next_state.snapshot()
+        state_snapshot.perspective = self.player_id
+        next_state_snapshot.perspective = self.player_id
+        self.replay_buffer.push(state_snapshot, action, reward, next_state_snapshot, done)
+
+    def ingest_episode(self, transitions: Sequence[tuple[State, Action, State]], *,
+                      winner: int | None, seat: int, terminated: bool,
+                      eliminated: bool) -> None:
+        """Store one rollout with sparse terminal reward on the final transition.
+
+        Reward policy is unchanged from the previous trainer behavior:
+        +1 on win, -1 on elimination, 0 otherwise (including timeouts).
+        """
+        if not transitions:
+            return
+
+        if eliminated:
+            terminal_reward = -1.0
+        elif terminated and winner == seat:
+            terminal_reward = 1.0
+        else:
+            terminal_reward = 0.0
+        episode_ended = eliminated or terminated
+
+        last_index = len(transitions) - 1
+        for i, (state, action, next_state) in enumerate(transitions):
+            is_last = i == last_index
+            reward = terminal_reward if is_last else 0.0
+            done = is_last and episode_ended
+            self.remember(state, action, reward, next_state, done)
+
+    def can_train(self, batch_size: int) -> bool:
+        return len(self.replay_buffer) >= batch_size
+
+    def learn_steps(self, batch_size: int, n_steps: int) -> list[float]:
+        losses: list[float] = []
+        for _ in range(max(0, n_steps)):
+            losses.append(self.train_step(batch_size))
+        return losses
+
+    def learn(self, *, batch_size: int, n_steps: int) -> list[float]:
+        if not self.can_train(batch_size):
+            return []
+        return self.learn_steps(batch_size, n_steps)
+
+    def _score(self, net: torch.nn.Module, rows: list[Data], phase: torch.Tensor,
+               card_indices: torch.Tensor) -> torch.Tensor:
+        """Batch `rows` and score them with `net`. Shared by the current-Q
+        and target-Q passes below — only the rows/net/grad-tracking differ."""
+        batch = Batch.from_data_list(rows).to(self.device)
+        return net(batch, phase.to(self.device), card_indices.to(self.device))
+
+    def _q_value(self, states: Sequence[State], actions: Sequence[Action],
+                 stage: torch.Tensor) -> torch.Tensor:
+        """`Q(s, a)` for the taken `(state, action)` pairs, via the online net.
+
+        Each transition has its own `state`/`action` pair, unlike
+        `score_actions`'s "one state, many candidate actions" shape — so
+        rows/`card_indices` are built via `encode_batch` (one state per
+        action) rather than `encode_many` (one shared state for every
+        action). Each `state`'s own `.perspective` (set by
+        `ReplayBuffer.push`, `Docs/RL-Prep-Changes.md`'s trainer reassigns
+        this agent's seat every episode) is used to build its graph, not
+        this agent's current seat.
+        """
+        rows = [self.builder(self.adapter(s, perspective=s.perspective), a, s)
+                for s, a in zip(states, actions)]
+        card_indices = self.action_encoder.encode_batch(actions, states)[:, 1:4]
+        return self._score(self.net, rows, stage, card_indices)
+
+    def _max_next_q(self, next_states: Sequence[State], done: torch.Tensor,
+                     next_stage: torch.Tensor) -> torch.Tensor:
+        """`max_a' Q_target(next_state, a')` per transition, `0` where `done`.
+
+        Each `next_state` has its own candidate count, so every candidate
+        across the whole minibatch is built/batched/scored in one shot, then
+        reduced back to one max per transition with a per-row group index
+        (`torch_geometric.utils.scatter(..., reduce="max")`) rather than
+        looping a separate forward pass per transition. Every legal action
+        of one `next_state` shares that state's `phase` (`Phase`/decision-
+        stage are 1:1 — `Docs/RL-Prep-Changes.md`), so the per-row `phase`
+        the head-routing needs is just `next_stage` broadcast per group,
+        not re-derived from each candidate's own `dqn_index()`. Likewise
+        every candidate of one `next_state` is built from that state's own
+        `.perspective` (set by `ReplayBuffer.push`), not this agent's
+        current seat.
+        """
+        max_q = torch.zeros(len(next_states), dtype=torch.float32, device=self.device)
+        rows: list[Data] = []
+        groups: list[int] = []
+        card_rows: list[tuple[int, int, int]] = []
+        for i, ns in enumerate(next_states):
+            if bool(done[i]):
+                continue
+            legal = self.env.legal_actions(ns)
+            if not legal:
+                continue
+            base = self.adapter(ns, perspective=ns.perspective)
+            for a in legal:
+                rows.append(self.builder(base, a, ns))
+                groups.append(i)
+                card_rows.append(a.dqn_index(self.env.topology, ns)[1:])
+
+        if not rows:
+            return max_q
+
+        group_index = torch.tensor(groups, dtype=torch.long)
+        phase = next_stage[group_index]
+        card_indices = torch.tensor(card_rows, dtype=torch.long)
+        with torch.no_grad():
+            q_all = self._score(self.target_net, rows, phase, card_indices)
+        group_index = group_index.to(self.device)
+        per_group_max = scatter(q_all, group_index, dim=0, dim_size=len(next_states), reduce="max")
+        touched = torch.zeros(len(next_states), dtype=torch.bool, device=self.device)
+        touched[group_index.unique()] = True
+        max_q[touched] = per_group_max[touched]
+        return max_q
+
+    def train_step(self, batch_size: int) -> float:
+        """One DQN TD-error update from a sampled replay minibatch.
+
+        `Q(s, a)` (online net, gradients on) vs. `r + gamma * (1 - done) *
+        max_a' Q(s', a')` (target net, no gradients) — standard DQN, Huber
+        loss. Returns the scalar loss. Target net is hard-synced to the
+        online net every `target_update_every` calls.
+        """
+        states, actions, reward, next_states, done, stage, next_stage = (
+            self.replay_buffer.sample(batch_size)
+        )
+        reward = reward.to(self.device)
+        done = done.to(self.device)
+
+        q_value = self._q_value(states, actions, stage)
+        max_next_q = self._max_next_q(next_states, done, next_stage)
+        target_q = reward + self.gamma * (~done).float() * max_next_q
+
+        loss = F.mse_loss(q_value, target_q.detach())
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        self._train_steps += 1
+        if self._train_steps % self.target_update_every == 0:
+            self.target_net.load_state_dict(self.net.state_dict())
+
+        return float(loss.item())
 
 
 __all__ = ["GNN_DQN_Agent"]

@@ -54,6 +54,8 @@ class StepResult:
 
     state: State
     info: dict
+    reward: float = 0.0
+    done: bool = False
 
 
 # --- environment ----------------------------------------------------------
@@ -135,7 +137,7 @@ class Environment:
 
     # --- step -------------------------------------------------------------
 
-    def step(self, action: Action) -> StepResult:
+    def step(self, action: Action, reward_player: Optional[int] = None) -> StepResult:
         if self.is_terminal():
             raise RuntimeError("Cannot step a terminal Environment")
         s = self.current_state()
@@ -163,7 +165,17 @@ class Environment:
         if w is not None and s.phase is not Phase.GAME_OVER:
             s.phase = Phase.GAME_OVER
 
-        return StepResult(state=s, info=info)
+        reward = 0.0
+        done = False
+        if reward_player is not None:
+            if reward_player in s.eliminated:
+                reward = -1.0
+                done = True
+            elif s.phase is Phase.GAME_OVER:
+                reward = 1.0 if self.winner() == reward_player else 0.0
+                done = True
+
+        return StepResult(state=s, info=info, reward=reward, done=done)
 
     # --- legal actions ----------------------------------------------------
 

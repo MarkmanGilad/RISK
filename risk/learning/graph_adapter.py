@@ -52,23 +52,44 @@ class GraphAdapter:
         self.topology = topology
         self.settings = settings
 
-    def __call__(self, state: State) -> Data:
+    def __call__(self, state: State, perspective: int = 0) -> Data:
         """Build the graph snapshot for `state`.
 
         Node order matches `topology.territories` (`topology.index_of(t)` is
         the node index for territory `t`). Player-indexed features are
         padded to `MAX_PLAYERS` so the feature width is constant across
-        3..6-player games.
+        3..6-player games. `n_players` for the padding/rotation math below
+        is read off `len(state.hands)`, not `self.settings.player_count` —
+        a trainer that reuses one `GraphAdapter` (via `GNN_DQN_Agent.attach`)
+        across many self-play episodes of *different* sizes would otherwise
+        score an older replay-buffer `state` against the wrong (current
+        episode's) player count, indexing the wrong number of hands/owner
+        slots.
+
+        `perspective` rotates every player-indexed slot (owner one-hot,
+        cards-per-player, current-player one-hot, eliminated) so that
+        `perspective` itself always lands in relative slot `0`, the next
+        player after it in slot `1`, and so on (`(p - perspective) %
+        n_players`) — turn order is preserved, only the starting point
+        shifts. Default `0` is a no-op (`p % n_players == p`), so existing
+        callers that never pass it keep seeing raw, absolute player ids.
+        This is for the learning agent: across self-play episodes it gets
+        assigned a different physical seat (`Docs/RL-Prep-Changes.md`'s
+        trainer), but should always *learn* from one consistent "this is
+        me, these are my opponents in turn order" frame rather than having
+        to re-derive "which absolute id am I this game" from `u`'s
+        current-player one-hot every time.
         """
-        x = self._node_features(state)
+        x = self._node_features(state, perspective)
         edge_index = self._edge_index()
         edge_attr = torch.zeros((edge_index.shape[1], EDGE_ATTR_DIM), dtype=torch.float32)
-        u = self._global_features(state)
+        u = self._global_features(state, perspective)
         return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, u=u)
 
-    def _node_features(self, state: State) -> torch.Tensor:
+    def _node_features(self, state: State, perspective: int) -> torch.Tensor:
         topology = self.topology
         n = len(topology)
+        n_players = len(state.hands)
         continents = topology.continents
         continent_col = {c: i for i, c in enumerate(continents)}
         armies_col = armies_column_index(topology)
@@ -79,7 +100,7 @@ class GraphAdapter:
             x[i, continent_col[topology.continent_of(territory)]] = 1.0
             owner = state.owners[i]
             if owner is not None:
-                x[i, len(continents) + owner] = 1.0
+                x[i, len(continents) + (owner - perspective) % n_players] = 1.0
             x[i, armies_col] = float(state.armies[i])
         return x
 
@@ -87,18 +108,19 @@ class GraphAdapter:
         src, dst = self.topology.edge_index()
         return torch.tensor([src, dst], dtype=torch.long)
 
-    def _global_features(self, state: State) -> torch.Tensor:
-        topology, settings = self.topology, self.settings
-        n_players = settings.player_count
+    def _global_features(self, state: State, perspective: int) -> torch.Tensor:
+        topology = self.topology
+        n_players = len(state.hands)
 
         cards_per_player = [0.0] * MAX_PLAYERS
         eliminated = [0.0] * MAX_PLAYERS
         for p in range(n_players):
-            cards_per_player[p] = float(len(state.hands[p]))
-            eliminated[p] = 1.0 if p in state.eliminated else 0.0
+            rel = (p - perspective) % n_players
+            cards_per_player[rel] = float(len(state.hands[p]))
+            eliminated[rel] = 1.0 if p in state.eliminated else 0.0
 
         current_player_onehot = [0.0] * MAX_PLAYERS
-        current_player_onehot[state.current_player_index] = 1.0
+        current_player_onehot[(state.current_player_index - perspective) % n_players] = 1.0
 
         phase_onehot = [0.0] * len(Phase)
         phase_onehot[int(state.phase)] = 1.0
