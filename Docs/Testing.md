@@ -33,13 +33,19 @@ set it in the shell before running the suite).
 | `test_game_loop.py` | `Game` (the tick-based app loop) and the `risk.app.main` entry point |
 | `test_ui.py` | Hit-testing (`TerritoryHitTester`) and the init/setup screen |
 | `test_self_play.py` | `SelfPlay.play_headless` — multi-seed fuzz test, full AI-only games played to an actual winner |
+| `test_reward.py` | `RewardCalculator` — terminal semantics (win/loss/not-done) plus one case per phase shaping helper (`TRADE_IN`/`REINFORCE_PLACE`/`ATTACK`/`OCCUPY`/`FORTIFY`/`end_of_turn`) |
+| `test_training_logger.py` | `TrainingLogger` — config building, checkpoint path/cadence orchestration (`save_checkpoint`/`try_resume`), no-op behavior with W&B disabled. Agent-internals round-tripping stays in `test_agents.py` (below) |
 
 `risk/learning/` (the RL layer — `GraphAdapter`, `ActionGraphBuilder`,
-`Encoder`, `Heads`, `GNN_DQN`, `ReplayBuffer`, `ActionEncoder`) has **no
-checked-in tests yet** — see "Ad-hoc verification" below for how it's been
-validated instead, and consider promoting some of those scripts into real
-tests once the training loop exists and these modules stop changing shape
-every session.
+`Encoder`, `Heads`, `GNN_DQN`, `ReplayBuffer`, `ActionEncoder`) has limited
+checked-in tests so far, with `RewardCalculator` (`test_reward.py`) and
+`TrainingLogger` (`test_training_logger.py`) the exceptions — both fully
+covered per their respective design docs. `test_agents.py` also covers
+`GNN_DQN_Agent.save_checkpoint`/`load_checkpoint` (full training-state
+round trip) alongside its existing `save_params`/`load_params` (policy-only)
+test — see "Ad-hoc verification" below for how the rest has been validated
+instead, and consider promoting some of those scripts into real tests once
+these modules stop changing shape every session.
 
 ## Shared fixtures — `conftest.py`
 

@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 pygame = ">=2.5"
 "svg.path" = ">=6.3"
+wandb = "*"
 
 [dev-packages]
 

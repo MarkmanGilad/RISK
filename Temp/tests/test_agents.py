@@ -244,6 +244,30 @@ def test_gnn_dqn_agent_save_and_load_params_round_trip(tmp_path: Path) -> None:
         assert torch.equal(value, saved_state[key])
 
 
+def test_gnn_dqn_agent_save_and_load_checkpoint_round_trip(tmp_path: Path) -> None:
+    env = _fresh_env(seed=5)
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=True, epsilon=0.3)
+    state = env.current_state()
+    action = env.legal_actions(state)[0]
+    agent.remember(state, action, 1.0, state.snapshot(), False)
+    agent.remember(state, action, -1.0, state.snapshot(), True)
+    agent.train_step(batch_size=2)
+
+    ckpt_dir = tmp_path / "full_ckpt"
+    agent.save_checkpoint(ckpt_dir)
+
+    agent2 = GNN_DQN_Agent(player_id=0, env=env, train_mode=True)
+    agent2.load_checkpoint(ckpt_dir)
+
+    assert agent2._train_steps == agent._train_steps
+    assert agent2.epsilon == agent.epsilon
+    assert len(agent2.replay_buffer) == len(agent.replay_buffer)
+    for key, value in agent.net.state_dict().items():
+        assert torch.equal(value, agent2.net.state_dict()[key])
+    for key, value in agent.optimizer.state_dict()["state"].items():
+        assert key in agent2.optimizer.state_dict()["state"]
+
+
 def test_gnn_dqn_agent_auto_device_selection() -> None:
     env = _fresh_env(seed=6)
     agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=False)

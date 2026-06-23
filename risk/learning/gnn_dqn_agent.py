@@ -101,7 +101,43 @@ class GNN_DQN_Agent(BaseAgent):
         self.target_net.load_state_dict(state_dict)
 
     def save_params(self, path: str | Path) -> None:
+        """Policy-only checkpoint: just the net weights, for play/inference."""
         torch.save(self.net.state_dict(), path)
+
+    def save_checkpoint(self, dir_path: str | Path) -> None:
+        """Full training checkpoint: everything needed to resume exactly.
+
+        Writes two files under `dir_path`: `model.pt` (net/target_net/
+        optimizer/train_steps/epsilon state) and `replay.pt` (the replay
+        buffer, via `ReplayBuffer.save`, kept separate since it can be much
+        larger than the model state).
+        """
+        dir_path = Path(dir_path)
+        dir_path.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "net": self.net.state_dict(),
+                "target_net": self.target_net.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "train_steps": self._train_steps,
+                "epsilon": self.epsilon,
+            },
+            dir_path / "model.pt",
+        )
+        self.replay_buffer.save(dir_path / "replay.pt")
+
+    def load_checkpoint(self, dir_path: str | Path) -> None:
+        """Inverse of `save_checkpoint` — restores net/target/optimizer/
+        train_steps/epsilon and replaces `self.replay_buffer` with the
+        saved one."""
+        dir_path = Path(dir_path)
+        payload = torch.load(dir_path / "model.pt", map_location=self.device, weights_only=False)
+        self.net.load_state_dict(payload["net"])
+        self.target_net.load_state_dict(payload["target_net"])
+        self.optimizer.load_state_dict(payload["optimizer"])
+        self._train_steps = int(payload["train_steps"])
+        self.epsilon = float(payload["epsilon"])
+        self.replay_buffer = ReplayBuffer(capacity=self.replay_buffer.capacity, path=dir_path / "replay.pt")
 
     def set_train_mode(self, train: bool) -> None:
         self.train_mode = bool(train)
@@ -196,32 +232,6 @@ class GNN_DQN_Agent(BaseAgent):
         state_snapshot.perspective = self.player_id
         next_state_snapshot.perspective = self.player_id
         self.replay_buffer.push(state_snapshot, action, reward, next_state_snapshot, done)
-
-    def ingest_episode(self, transitions: Sequence[tuple[State, Action, State]], *,
-                      winner: int | None, seat: int, terminated: bool,
-                      eliminated: bool) -> None:
-        """Store one rollout with sparse terminal reward on the final transition.
-
-        Reward policy is unchanged from the previous trainer behavior:
-        +1 on win, -1 on elimination, 0 otherwise (including timeouts).
-        """
-        if not transitions:
-            return
-
-        if eliminated:
-            terminal_reward = -1.0
-        elif terminated and winner == seat:
-            terminal_reward = 1.0
-        else:
-            terminal_reward = 0.0
-        episode_ended = eliminated or terminated
-
-        last_index = len(transitions) - 1
-        for i, (state, action, next_state) in enumerate(transitions):
-            is_last = i == last_index
-            reward = terminal_reward if is_last else 0.0
-            done = is_last and episode_ended
-            self.remember(state, action, reward, next_state, done)
 
     def can_train(self, batch_size: int) -> bool:
         return len(self.replay_buffer) >= batch_size

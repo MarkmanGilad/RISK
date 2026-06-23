@@ -43,6 +43,7 @@ from risk.game.phase import Phase
 from risk.game.player import Player
 from risk.game.settings import GameSettings
 from risk.game.state import PendingAttack, State
+from risk.learning.reward import RewardCalculator
 
 
 # --- result type ----------------------------------------------------------
@@ -70,15 +71,13 @@ class Environment:
         # Card deck: one card per territory + 2 wilds.
         self._deck: list[Card] = []
         self._discard: list[Card] = []
-        # Per-turn flags (re-init on each new player's reinforce).
-        self._conquered_this_turn: bool = False
+        self._reward = RewardCalculator(self.topology)
 
     # --- lifecycle --------------------------------------------------------
 
     def reset(self, settings: GameSettings) -> State:
         self._settings = settings
         self._rng = random.Random(settings.seed)
-        self._conquered_this_turn = False
         n_players = settings.player_count
 
         # Build deck deterministically.
@@ -123,6 +122,17 @@ class Environment:
         assert self._settings is not None, "Environment.reset has not been called"
         return self._settings
 
+    @property
+    def reward(self) -> RewardCalculator:
+        """The `RewardCalculator` this environment's `step(...)` calls.
+
+        Exposed so callers needing terms `step(...)` itself can't see (e.g.
+        `Trainer`'s end-of-turn opponent-impact reward, which spans multiple
+        `step()` calls) can call it directly without recomputing the same
+        math.
+        """
+        return self._reward
+
     def current_state(self) -> State:
         assert self._state is not None, "Environment.reset has not been called"
         return self._state
@@ -142,6 +152,7 @@ class Environment:
             raise RuntimeError("Cannot step a terminal Environment")
         s = self.current_state()
         action.validate_against(self.topology) if hasattr(action, "validate_against") else None
+        before = s.snapshot() if reward_player is not None else None
 
         if isinstance(action, ReinforcementAction):
             info = self._apply_reinforce(s, action)
@@ -168,12 +179,16 @@ class Environment:
         reward = 0.0
         done = False
         if reward_player is not None:
-            if reward_player in s.eliminated:
-                reward = -1.0
-                done = True
-            elif s.phase is Phase.GAME_OVER:
-                reward = 1.0 if self.winner() == reward_player else 0.0
-                done = True
+            done = reward_player in s.eliminated or s.phase is Phase.GAME_OVER
+            reward = self._reward.compute(
+                action=action,
+                info=info,
+                before=before,
+                after=s,
+                reward_player=reward_player,
+                done=done,
+                winner=self.winner(),
+            )
 
         return StepResult(state=s, info=info, reward=reward, done=done)
 
@@ -271,7 +286,7 @@ class Environment:
         s.reinforcement_budget -= action.total
         if s.reinforcement_budget == 0:
             s.phase = Phase.ATTACK
-            self._conquered_this_turn = False
+            s.conquered_this_turn = False
         return {"placed": dict(action.placements), "remaining_budget": s.reinforcement_budget}
 
     def _trade_in_set(self, s: State, pid: int, trio: tuple[Card, Card, Card]) -> int:
@@ -410,11 +425,11 @@ class Environment:
             info["conquered"] = True
 
             # Card draw on first conquest of the turn.
-            if not self._conquered_this_turn:
+            if not s.conquered_this_turn:
                 card = self._draw_card()
                 if card is not None:
                     s.hands[pid].append(card)
-                self._conquered_this_turn = True
+                s.conquered_this_turn = True
 
             # Elimination check (done before occupy so cards transfer
             # correctly and the winner can be detected early).
@@ -576,7 +591,7 @@ class Environment:
     def _begin_turn_for(self, s: State, pid: int) -> None:
         s.phase = Phase.TRADE_IN
         s.reinforcement_budget = self._compute_reinforcement(s, pid)
-        self._conquered_this_turn = False
+        s.conquered_this_turn = False
         # If no valid set exists, there is no trade decision to make, so the
         # turn starts directly in REINFORCE_PLACE.
         if not any(self._legal_trade_ins(s)):

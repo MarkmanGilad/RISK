@@ -96,7 +96,11 @@ class ReplayBuffer:
     ) -> None:
         self.capacity = capacity
         if path is not None:
-            self.buffer = deque(torch.load(path), maxlen=capacity)
+            # weights_only=False: a transition is (State, Action, float,
+            # State, bool, int, int), not just tensors — torch's
+            # weights_only unpickler can't load our domain objects. Trusted
+            # local checkpoint data, not an untrusted source.
+            self.buffer = deque(torch.load(path, weights_only=False), maxlen=capacity)
         else:
             self.buffer = deque(maxlen=capacity)
 

@@ -960,3 +960,150 @@ episodes often running 1000+ agent turns, this is the difference between
 ~5 minutes and ~80 seconds of pure gradient compute per episode. Lowered
 `BATCH_SIZE` in `train_constants.py` from `128` to `32` to keep per-turn
 learning affordable.
+
+## Follow-up pass: `RewardCalculator` — dense per-step reward shaping
+
+Implements the design in [`Reward.md`](Reward.md): reward computation moved
+out of `Environment` entirely and into a new dedicated class,
+`risk/learning/reward.py`'s `RewardCalculator`. `Environment.step(...)` calls
+`RewardCalculator.compute(...)` and returns the float as-is — no reward
+arithmetic (not even the old `+1.0`/`-1.0` literals) lives in
+`environment.py` anymore.
+
+**Step 1 — terminal-only baseline.** `RewardCalculator.compute(...)`
+returned just `REWARD_TERMINAL_WIN`/`REWARD_TERMINAL_LOSS` (sparse, matching
+the old behavior exactly). No `REWARD_TERMINAL_TIMEOUT`: a
+`MAX_STEPS_PER_EPISODE` cutoff (`trainer.py`'s episode loop) truncates the
+episode without the underlying state ever becoming terminal, so it must
+never be paired with `done=True` — that would falsely zero out the TD
+bootstrap target for a state that isn't actually terminal. `done=True` with
+`winner=None` only ever means "`reward_player` was eliminated while other
+players keep going," which is correctly scored as a loss, not a neutral
+timeout.
+
+**Step 2 — full per-phase dense shaping**, every term from `Reward.md`'s
+"Where each phase even has something to reward" section, gated so every
+phase helper only scores the *current actor's own* decision
+(`before.current_player_index == reward_player`) — `Environment.step(...)`
+is called with `reward_player=seat` for opponents' actions too (the
+trainer attributes every step in the chain to the learner's seat), so
+without this gate an opponent's attack would get scored as if the learner
+made it.
+
+Two structural problems surfaced while wiring this in, both required
+touching files beyond `reward.py`/`environment.py`:
+
+- **`trainer.py` was discarding the agent's own per-step reward.** Its
+  inner `while` loop (opponents' turns) reassigned `result` on every
+  opponent step; by the time `remember(...)` ran, `result.reward` was
+  whichever opponent action happened last, not the learner's own action's
+  reward. Harmless under the old sparse-only reward (every non-terminal
+  step was `0.0` anyway) but would have silently dropped all dense shaping.
+  Fixed by accumulating (`reward_total +=`) across the whole chain instead
+  of overwriting.
+- **End-of-turn opponent-impact terms (`REWARD_TERRITORY_DELTA`,
+  `REWARD_ARMY_DELTA_RELATIVE_SCALE`, `REWARD_CONTINENT_DELTA_RELATIVE`)
+  can't be computed inside a single `Environment.step()` call** — they
+  need the state right when the learner's `FortifyAction` is taken vs. the
+  state once every opponent has played their full turn, and no one
+  `step()` call ever sees both ends of that span (each call only processes
+  one action). `trainer.py` now detects a turn-ending `FortifyAction` and
+  calls `RewardCalculator.end_of_turn(...)` directly with the pre-action
+  snapshot and the post-opponent-round `next_state`, adding the result into
+  `reward_total`. `trainer.py` only decides *when* to call it; all the math
+  still lives in `RewardCalculator`. Reachable via a new
+  `Environment.reward` read-only property (`self._reward`) since `trainer.py`
+  doesn't otherwise have a handle on the environment's calculator instance.
+- **`REWARD_ATTACK_STOP_WITHOUT_CARD` needed turn-level memory** ("was a
+  card drawn yet this turn") that only existed as a private
+  `Environment._conquered_this_turn` attribute, invisible to
+  `RewardCalculator` (which only ever sees `State` snapshots). Promoted to
+  a real `State.conquered_this_turn` field (set in `_apply_attack`, reset
+  in `_begin_turn_for`/on entering `ATTACK`), included in `State.copy()`/
+  `to_dict()`/`from_dict()`. `environment.py` no longer has a
+  `_conquered_this_turn` instance attribute at all.
+
+Also fixed an inconsistency caught mid-implementation: `compute(...)`
+originally short-circuited to terminal-only on `done=True`, skipping all
+shaping on the final transition — contradicting `Reward.md`'s own open
+question 2 ("shaping should be visible on every transition, including
+`done` ones"). Removed the early return; shaping and terminal now always
+sum together.
+
+`train_constants.py` gained `REWARD_SHAPING_STEP_CAP` plus every constant
+from `Reward.md`'s "Proposed v1 values" section (~27 constants total across
+`TRADE_IN`/`REINFORCE_PLACE`/`ATTACK`/`OCCUPY`/`FORTIFY`/end-of-turn).
+`REWARD_TERMINAL_TIMEOUT` was added then removed once the done/timeout
+distinction above was worked out — never reachable through any real code
+path, so kept out rather than left as dead/misleading config.
+
+**Verified:** added 10 new `test_reward.py` cases, one per phase helper plus
+`end_of_turn` (hand-built `before`/`after` `State` triples, no `Environment`
+needed, per `Reward.md`'s testing plan) — `python -m pytest Temp/tests -q` →
+248 passed (10 new), 1 skipped. Beyond the unit suite, ran `Trainer.train(...)`
+against the real `Environment` for 1-3 episodes (thousands of real steps,
+`end_of_turn` firing on every `FortifyAction`) with no exceptions, confirming
+the full shaping pipeline executes correctly against live gameplay, not just
+hand-built fixtures.
+
+## Follow-up pass: `TrainingLogger` — checkpointing + optional W&B logging
+
+Implements [`Training-Logging-Plan.md`](Training-Logging-Plan.md). New
+`risk/learning/training_logger.py`'s `TrainingLogger` owns *when*/*where* a
+checkpoint happens and W&B init/log/finish; it never reaches into
+`GNN_DQN_Agent`'s internals directly — same split as `Environment` only
+ever calling `RewardCalculator`. `wandb` is optional: wrapped in a
+try/except import, every W&B-facing method becomes a no-op if it's missing
+or `use_wandb=False`. Added `wandb>=0.16` to `requirements.txt` as an
+optional dependency (commented as such).
+
+**`GNN_DQN_Agent` gained `save_checkpoint(dir_path)`/`load_checkpoint(dir_path)`**
+(`gnn_dqn_agent.py`) — a *full* training checkpoint (net, target_net,
+optimizer state, `_train_steps`, `epsilon`, replay buffer — two files under
+`dir_path`: `model.pt` and `replay.pt`, kept separate since the buffer can
+be far larger than the model state). Deliberately separate from the
+existing `save_params`/`load_params`, which stay as the lightweight
+policy-only path (net weights only, for play/inference without dragging in
+optimizer/replay state) — `Trainer._checkpoint()` now writes both at the
+same cadence.
+
+**`ReplayBuffer`** already supported loading via its constructor's `path`
+argument (`ReplayBuffer(path=...)`) — no new method needed, just used as-is
+by `load_checkpoint`. While touching it, fixed a `torch.load` `FutureWarning`
+by passing `weights_only=False` explicitly (a transition tuple holds
+`State`/`Action` domain objects, not just tensors, so the restrictive
+unpickler can't load it anyway — this is trusted local checkpoint data, not
+an untrusted source).
+
+**`Trainer` integration** (`trainer.py`):
+- `__init__` gained `logger`/`use_wandb`/`resume`/`notes` params, builds a
+  `TrainingLogger` by default, calls `start_run(...)` then `try_resume(...)`
+  — restores `self.episode` if a checkpoint was found.
+- `train(...)` now accumulates `episode_reward`/`losses` across the episode
+  and calls a new `_log_episode(...)` helper at the end of each episode,
+  which builds the metrics dict (`episode_steps`, `agent_turns`,
+  `episode_reward`, `win`, `eliminated`, `done`, `epsilon`, `replay_size`,
+  `learn_loss_mean`) and hands it to `logger.log_episode(...)`.
+- `main()` calls `trainer.logger.finish()` after `train(...)` returns
+  (not inside `train()` itself, so repeated `train()` calls on one
+  `Trainer` don't end the W&B run prematurely).
+
+**Also removed `GNN_DQN_Agent.ingest_episode`** — dead code (no callers
+anywhere in the codebase) left over from before `trainer.py`'s loop called
+`remember(...)` directly per step. It also hardcoded the old `+1/-1/0`
+sparse reward policy that `RewardCalculator` has since replaced, so leaving
+it in place was actively misleading, not just unused.
+
+**Verified:**
+- Direct round-trip checks (`GNN_DQN_Agent.save_checkpoint`/`load_checkpoint`,
+  `TrainingLogger.save_checkpoint`/`try_resume`) confirm `_train_steps`,
+  `epsilon`, optimizer state, and replay buffer contents all survive a
+  save/load cycle exactly.
+- Added `test_gnn_dqn_agent_save_and_load_checkpoint_round_trip` to
+  `test_agents.py` (mirrors the existing `save_params`/`load_params` test's
+  shape) and a new `test_training_logger.py` (config building, checkpoint
+  cadence/latest-episode selection, no-op-when-disabled, resume-disabled).
+  `python -m pytest Temp/tests -q` → 255 passed (7 new), 1 skipped.
+- Ran a full `Trainer(...).train(n_episodes=1)` with `use_wandb=False` end
+  to end (thousands of real steps) with no exceptions, confirming the
+  logging/metrics wiring doesn't break the existing training loop.

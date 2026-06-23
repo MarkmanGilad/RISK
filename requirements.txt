@@ -1,6 +1,11 @@
 pygame>=2.5
 svg.path>=6.3
 
+# Optional: remote training metrics (risk/learning/training_logger.py).
+# TrainingLogger degrades to a no-op without it — only needed if you want
+# W&B logging enabled.
+wandb>=0.16
+
 # CUDA 12.4 PyTorch wheels
 --extra-index-url https://download.pytorch.org/whl/cu124
 

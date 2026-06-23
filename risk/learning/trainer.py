@@ -9,14 +9,16 @@ ingest and gradient-step scheduling logic. Every episode:
   seat for the learner, then builds a fresh all-`RandomAgent` roster
   (`GameFactory.build`/`SetupStage.default_settings`) and reassigns the
   learner onto one seat (`GNN_DQN_Agent.attach`) — no `HumanAgent` seats.
-- plays to either a real game-over or the learner's own elimination
-  (`stop_when_player_eliminated`), since once the learner is out there's
-  nothing left for it to learn from that episode.
-- sparse terminal reward and `done` assignment are applied in
-    `GNN_DQN_Agent.ingest_episode` on the episode's final transition.
-- a gradient step is taken every episode once the replay buffer holds at
-    least `batch_size` transitions (`GNN_DQN_Agent.learn`).
-- checkpointing remains in this trainer.
+- plays to either a real game-over or the learner's own elimination, since
+  once the learner is out there's nothing left for it to learn from that
+  episode.
+- reward (sparse terminal plus dense per-phase shaping, `Docs/Reward.md`) is
+  computed by `Environment.step(...)` via `RewardCalculator` and stored on
+  every learner transition via `GNN_DQN_Agent.remember(...)`.
+- a gradient step is taken after every learner turn once the replay buffer
+  holds at least `batch_size` transitions (`GNN_DQN_Agent.learn`).
+- checkpointing and W&B/local logging are owned by `TrainingLogger`
+  (`Docs/Training-Logging-Plan.md`), called from this trainer.
 
 Because the learner is reassigned a different seat (and `n_players`) every
 episode, `GraphAdapter`'s `perspective` parameter (`Docs/GraphAdapter.md`)
@@ -49,18 +51,18 @@ if __package__ in (None, ""):
 
 from risk.app.factory import GameFactory
 from risk.app.setup import SetupStage
+from risk.game.actions import FortifyAction
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.train_constants import (
     BATCH_SIZE,
-    CHECKPOINT_AFTER,
     CHECKPOINT_DIR,
-    CHECKPOINT_EVERY,
     MAX_PLAYERS,
     MAX_STEPS_PER_EPISODE,
     MIN_PLAYERS,
     TRAIN_EPISODES,
     TRAIN_STEPS_PER_CALL,
 )
+from risk.learning.training_logger import TrainingLogger
 
 
 class Trainer:
@@ -71,7 +73,17 @@ class Trainer:
     every episode (`GNN_DQN_Agent.attach`).
     """
 
-    def __init__(self, run_id: int, *, agent: Optional[GNN_DQN_Agent] = None, **agent_kwargs) -> None:
+    def __init__(
+        self,
+        run_id: int,
+        *,
+        agent: Optional[GNN_DQN_Agent] = None,
+        logger: Optional[TrainingLogger] = None,
+        use_wandb: bool = True,
+        resume: bool = True,
+        notes: Optional[str] = None,
+        **agent_kwargs,
+    ) -> None:
         self.run_id = run_id
         self.checkpoint_dir = Path(CHECKPOINT_DIR) / f"run_{run_id:03d}"
         self._rng = random.SystemRandom()
@@ -82,6 +94,15 @@ class Trainer:
             agent = GNN_DQN_Agent(player_id=0, env=ctx.env, train_mode=True, **agent_kwargs)
         self.agent = agent
 
+        self.logger = logger or TrainingLogger(
+            run_id, self.checkpoint_dir, use_wandb=use_wandb, resume=resume, notes=notes
+        )
+        self.logger.start_run(agent=self.agent, trainer=self)
+        resumed = self.logger.try_resume(agent=self.agent)
+        if resumed is not None:
+            self.episode = resumed["episode"]
+            print(f"resumed from episode {self.episode}")
+
     def train(self, n_episodes: int) -> None:
         """Run the full training loop."""
         for _ in range(n_episodes):
@@ -91,6 +112,9 @@ class Trainer:
             env, agents = ctx.env, ctx.agents
             step_count = 0
             agent_turns = 0
+            episode_reward = 0.0
+            losses: list[float] = []
+            done = False
 
             # Other seats may act before the learner's own seat on turn 1 —
             # play those opening moves now so the loop below only ever has to
@@ -109,28 +133,56 @@ class Trainer:
                 state = current_state.snapshot()
                 action = agents[seat]((), current_state)
                 result = env.step(action, reward_player=seat)
+                reward_total = result.reward
                 step_count += 1
                 agent_turns += 1
                 print(f"ep={self.episode}/{n_episodes} steps={step_count} agent_turns={agent_turns}", end="\r", flush=True)
 
-                # Play until agent's turn again, the agent is eliminated, or the game ends
+                # Play until agent's turn again, the agent is eliminated, or the game ends.
+                # Each opponent step may carry its own dense shaping reward
+                # (attributed to the learner via reward_player=seat), so sum
+                # rather than overwrite — only the last step's `state`/`done`
+                # describe where the chain ended.
                 while (not result.done and seat not in result.state.eliminated and env.current_state().current_player_index != seat):
                     current_state = env.current_state()
                     action_other = agents[current_state.current_player_index]((), current_state)
                     result = env.step(action_other, reward_player=seat)
+                    reward_total += result.reward
                     step_count += 1
                     print(f"ep={self.episode}/{n_episodes} steps={step_count} agent_turns={agent_turns}", end="\r", flush=True)
 
                 # Store transition: state before agent acted → next_state (after all agents played)
                 next_state = result.state
                 done = result.done or seat in result.state.eliminated
-                self.agent.remember(state, action, result.reward, next_state, done)
-                self.agent.learn(batch_size=BATCH_SIZE, n_steps=TRAIN_STEPS_PER_CALL)
+
+                # FortifyAction always ends the learner's turn (skip or real
+                # move), so `next_state` here is exactly "once every opponent
+                # has played their full turn" — the one point the end-of-turn
+                # opponent-impact terms (Docs/Reward.md) can be scored from.
+                if isinstance(action, FortifyAction):
+                    reward_total += env.reward.end_of_turn(state, next_state, seat)
+
+                episode_reward += reward_total
+                self.agent.remember(state, action, reward_total, next_state, done)
+                losses.extend(self.agent.learn(batch_size=BATCH_SIZE, n_steps=TRAIN_STEPS_PER_CALL))
 
                 if done:
                     break
 
-            self._checkpoint()
+            winner = env.winner()
+            metrics = {
+                "episode_steps": step_count,
+                "agent_turns": agent_turns,
+                "episode_reward": episode_reward,
+                "win": int(winner == seat),
+                "eliminated": int(seat in env.current_state().eliminated),
+                "done": int(done),
+                "epsilon": self.agent.epsilon,
+                "replay_size": len(self.agent.replay_buffer),
+                "learn_loss_mean": (sum(losses) / len(losses)) if losses else 0.0,
+            }
+            self.logger.log_episode(episode=self.episode, metrics=metrics)
+            self.logger.checkpoint(episode=self.episode, agent=self.agent)
             if step_count > 0:
                 print()
 
@@ -143,16 +195,6 @@ class Trainer:
         ctx.agents[seat] = self.agent
         return ctx, seat, n_players
 
-    def _checkpoint(self) -> None:
-        if self.episode < CHECKPOINT_AFTER:
-            return
-        if (self.episode - CHECKPOINT_AFTER) % CHECKPOINT_EVERY != 0:
-            return
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        path = self.checkpoint_dir / f"gnn_dqn_ep{self.episode:06d}.pt"
-        self.agent.save_params(path)
-        print(f"saved checkpoint: {path}")
-
 
 def main() -> None:
     """Training entry point — the only value you change per run is RUN_ID.
@@ -163,6 +205,7 @@ def main() -> None:
 
     trainer = Trainer(RUN_ID)
     trainer.train(n_episodes=TRAIN_EPISODES)
+    trainer.logger.finish()
 
 
 __all__ = ["Trainer", "main"]

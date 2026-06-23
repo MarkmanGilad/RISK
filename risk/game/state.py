@@ -44,6 +44,14 @@ class State:
     eliminated: set[int]
     cards_traded_in_count: int = 0
     pending_attack: Optional[PendingAttack] = None
+    # Whether the current player has drawn a conquest card this turn —
+    # cards only draw on a turn's *first* conquest, so this also gates
+    # later conquests' card draws. Reset each turn in
+    # `Environment._begin_turn_for`. Exposed on `State` (rather than kept
+    # as a private `Environment` attribute) so `RewardCalculator` can read
+    # it from a `before`/`after` snapshot without `Environment` needing to
+    # compute any reward itself.
+    conquered_this_turn: bool = False
 
     # --- constructors ------------------------------------------------------
 
@@ -61,6 +69,7 @@ class State:
             eliminated=set(),
             cards_traded_in_count=0,
             pending_attack=None,
+            conquered_this_turn=False,
         )
 
     # --- copy --------------------------------------------------------------
@@ -77,6 +86,7 @@ class State:
             eliminated=set(self.eliminated),
             cards_traded_in_count=self.cards_traded_in_count,
             pending_attack=_copy.copy(self.pending_attack) if self.pending_attack else None,
+            conquered_this_turn=self.conquered_this_turn,
         )
 
     def snapshot(self) -> "State":
@@ -98,6 +108,7 @@ class State:
             ],
             "eliminated": sorted(self.eliminated),
             "cards_traded_in_count": self.cards_traded_in_count,
+            "conquered_this_turn": self.conquered_this_turn,
             "pending_attack": (
                 {
                     "from_index": self.pending_attack.from_index,
@@ -124,6 +135,7 @@ class State:
             ],
             eliminated=set(data["eliminated"]),
             cards_traded_in_count=int(data["cards_traded_in_count"]),
+            conquered_this_turn=bool(data.get("conquered_this_turn", False)),
             pending_attack=(
                 PendingAttack(
                     from_index=int(pa["from_index"]),
