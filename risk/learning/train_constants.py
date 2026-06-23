@@ -15,7 +15,7 @@ from typing import Final
 
 MIN_PLAYERS: Final[int] = 3       # minimum opponents per episode (inclusive)
 MAX_PLAYERS: Final[int] = 6       # maximum opponents per episode (inclusive)
-MAX_STEPS_PER_EPISODE: Final[int] = 20_000
+MAX_STEPS_PER_EPISODE: Final[int] = 2_000
 TRAIN_OPPONENT_AGENT_KINDS: Final[tuple[str, ...]] = (
     "random",
     "raider",

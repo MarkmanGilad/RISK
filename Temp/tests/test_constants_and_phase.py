@@ -108,10 +108,12 @@ def test_card_set_value_fixed_range() -> None:
 
 
 def test_card_set_value_plus_5_after_15() -> None:
-    # 6th trade-in (index 6) is 15 + 5 = 20, then 25, 30, ...
+    # 6th trade-in (index 6) is 15 + 5 = 20, then 25, 30, ... capped at 50.
     assert C.card_set_value(6) == 20
     assert C.card_set_value(7) == 25
     assert C.card_set_value(10) == 40
+    assert C.card_set_value(12) == 50
+    assert C.card_set_value(100) == C.CARD_SET_MAX_VALUE
 
 
 def test_card_set_value_rejects_negative() -> None:

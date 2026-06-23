@@ -131,13 +131,16 @@ class Trainer:
             # Other seats may act before the learner's own seat on turn 1 —
             # play those opening moves now so the loop below only ever has to
             # deal with the agent's own turn.
-            while env.current_state().current_player_index != seat:
+            while (
+                step_count < MAX_STEPS_PER_EPISODE
+                and env.current_state().current_player_index != seat
+            ):
                 current_state = env.current_state()
                 action = agents[current_state.current_player_index]((), current_state)
                 env.step(action, reward_player=seat)
                 step_count += 1
 
-            for _ in range(MAX_STEPS_PER_EPISODE):
+            while step_count < MAX_STEPS_PER_EPISODE:
                 if seat in env.current_state().eliminated:
                     break
 
@@ -162,7 +165,12 @@ class Trainer:
                 # (attributed to the learner via reward_player=seat), so sum
                 # rather than overwrite — only the last step's `state`/`done`
                 # describe where the chain ended.
-                while (not result.done and seat not in result.state.eliminated and env.current_state().current_player_index != seat):
+                while (
+                    step_count < MAX_STEPS_PER_EPISODE
+                    and not result.done
+                    and seat not in result.state.eliminated
+                    and env.current_state().current_player_index != seat
+                ):
                     current_state = env.current_state()
                     action_other = agents[current_state.current_player_index]((), current_state)
                     result = env.step(action_other, reward_player=seat)
@@ -278,7 +286,7 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 5
+    RUN_ID = 11
 
     trainer = Trainer(RUN_ID)
     trainer.train(n_episodes=TRAIN_EPISODES)

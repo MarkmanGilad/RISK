@@ -113,7 +113,7 @@ into `[batch_size, F]` for free (verified — see below).
 | Slice | Width | Meaning | Source |
 |---|---|---|---|
 | `u[0]` | 1 | Number of players in this game | `settings.player_count` |
-| `u[1]` | 1 | Value of the **next** card trade-in (not the last one cashed) | `card_set_value(state.cards_traded_in_count)` |
+| `u[1]` | 1 | Value of the **next** card trade-in (not the last one cashed), capped by `CARD_SET_MAX_VALUE` | `card_set_value(state.cards_traded_in_count)` |
 | `u[2:8]` | 6 | Cards currently in each player's hand, padded | `len(state.hands[p])` |
 | `u[8:15]` | 7 | Current phase, one-hot | `state.phase` against `Phase` (`TRADE_IN, REINFORCE_PLACE, ATTACK, OCCUPY, FORTIFY, GAME_OVER, SETUP`) |
 | `u[15:21]` | 6 | Whose turn it is, one-hot, padded | `state.current_player_index` |

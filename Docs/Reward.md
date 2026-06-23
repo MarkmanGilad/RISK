@@ -15,8 +15,9 @@ opponent's action would get scored as if the learner had taken it.
 `REWARD_TERMINAL_LOSS` fires on that player's own elimination too, even if
 the game isn't over for everyone else yet — elimination is a real loss for
 that player regardless. There is deliberately no terminal reward for a
-`MAX_STEPS_PER_EPISODE` timeout (`trainer.py`'s episode loop): a timeout
-truncates the episode without the underlying game state ever becoming
+`MAX_STEPS_PER_EPISODE` timeout (`trainer.py`'s episode loop, counted as
+total environment steps including opponent actions): a timeout truncates
+the episode without the underlying game state ever becoming
 terminal, so it must never be paired with `done=True` — that would tell the
 TD bootstrap target "nothing follows this state," which is false, and would
 corrupt training. `trainer.py` gets this right: it just stops calling
@@ -127,7 +128,8 @@ what's worth shaping:
 ### `TRADE_IN`
 `card_set_value(trade_in_index)` (`risk/constants.py`) is keyed to the
 *global* trade-in count (`state.cards_traded_in_count`), not the trading
-player's hand size. Since opponents trading in sets also advances that
+player's hand size. Its progressive value is capped at 50 armies to stop
+very long games from exploding reinforcement budgets. Since opponents trading in sets also advances that
 counter, waiting to trade is often a real edge — your own eventual trade
 lands at a higher, more valuable index. So "reward trading, discourage
 hoarding" would be backwards. Instead:

@@ -120,6 +120,8 @@ Only local artifacts required:
 Current exploration schedule: epsilon decays linearly from `EPSILON_START`
 to `EPSILON_END` over 100 episodes (`EPSILON_DECAY_EPISODES = 100`) so
 early training becomes less random quickly enough to show first signals.
+Training episodes are truncated at `MAX_STEPS_PER_EPISODE = 2000` total
+environment steps, counting both learner and opponent actions.
 
 2. Policy-only checkpoint (`play`):
 - `agent.net.state_dict()` only

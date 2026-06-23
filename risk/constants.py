@@ -81,9 +81,11 @@ MAX_CARDS_IN_HAND: Final[int] = 5
 MAX_TRANSIENT_HAND_SIZE: Final[int] = 2 * (MAX_CARDS_IN_HAND - 1) + 1
 
 # Classic Risk card-set trade-in progression. After the 6th trade-in
-# (value 15) each further trade-in is worth the previous value + 5.
+# (value 15) each further trade-in is worth the previous value + 5,
+# capped so very long games do not spiral into huge reinforcement swings.
 CARD_SET_VALUES: Final[tuple[int, ...]] = (4, 6, 8, 10, 12, 15)
 CARD_SET_INCREMENT_AFTER_FIXED: Final[int] = 5
+CARD_SET_MAX_VALUE: Final[int] = 50
 
 # Extra armies placed immediately on a territory when a traded-in card
 # depicts a territory the trading player currently occupies.
@@ -95,14 +97,15 @@ def card_set_value(trade_in_index: int) -> int:
 
     The first six values come from :data:`CARD_SET_VALUES`. From the
     seventh trade-in (index 6) onward each set is worth 5 more than the
-    previous.
+    previous, capped at :data:`CARD_SET_MAX_VALUE`.
     """
     if trade_in_index < 0:
         raise ValueError(f"trade_in_index must be >= 0, got {trade_in_index}")
     if trade_in_index < len(CARD_SET_VALUES):
         return CARD_SET_VALUES[trade_in_index]
     extra = trade_in_index - (len(CARD_SET_VALUES) - 1)
-    return CARD_SET_VALUES[-1] + extra * CARD_SET_INCREMENT_AFTER_FIXED
+    value = CARD_SET_VALUES[-1] + extra * CARD_SET_INCREMENT_AFTER_FIXED
+    return min(value, CARD_SET_MAX_VALUE)
 
 
 def starting_armies_for(player_count: int) -> int:
@@ -131,6 +134,7 @@ __all__ = [
     "MAX_TRANSIENT_HAND_SIZE",
     "CARD_SET_VALUES",
     "CARD_SET_INCREMENT_AFTER_FIXED",
+    "CARD_SET_MAX_VALUE",
     "CARD_TERRITORY_BONUS_ARMIES",
     "card_set_value",
     "starting_armies_for",
