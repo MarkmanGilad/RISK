@@ -6,9 +6,9 @@ rollout, ingest, train, checkpoint), while `GNN_DQN_Agent` owns replay
 ingest and gradient-step scheduling logic. Every episode:
 
 - picks a random player count (`min_players`..`max_players`) and a random
-  seat for the learner, then builds a fresh all-`RandomAgent` roster
-  (`GameFactory.build`/`SetupStage.default_settings`) and reassigns the
-  learner onto one seat (`GNN_DQN_Agent.attach`) — no `HumanAgent` seats.
+    seat for the learner, then randomly assigns every non-learner seat to one
+    of the configured random/heuristic opponent agents (`random`, `raider`,
+    `sentinel`, `empire`) — no `HumanAgent` seats.
 - plays to either a real game-over or the learner's own elimination, since
   once the learner is out there's nothing left for it to learn from that
   episode.
@@ -37,6 +37,7 @@ Run as a script with: python -m risk.learning.trainer
 from __future__ import annotations
 
 import random
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -51,14 +52,21 @@ if __package__ in (None, ""):
 
 from risk.app.factory import GameFactory
 from risk.app.setup import SetupStage
+from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
+from risk.agents.random_agent import RandomAgent
 from risk.game.actions import FortifyAction
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.train_constants import (
     BATCH_SIZE,
     CHECKPOINT_DIR,
+    EPSILON_DECAY_EPISODES,
+    EPSILON_END,
+    EPSILON_START,
     MAX_PLAYERS,
     MAX_STEPS_PER_EPISODE,
     MIN_PLAYERS,
+    ROLLING_WIN_RATE_WINDOW,
+    TRAIN_OPPONENT_AGENT_KINDS,
     TRAIN_EPISODES,
     TRAIN_STEPS_PER_CALL,
 )
@@ -88,9 +96,11 @@ class Trainer:
         self.checkpoint_dir = Path(CHECKPOINT_DIR) / f"run_{run_id:03d}"
         self._rng = random.SystemRandom()
         self.episode = 0
+        self._recent_wins: deque[int] = deque(maxlen=ROLLING_WIN_RATE_WINDOW)
 
         if agent is None:
             ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
+            agent_kwargs.setdefault("epsilon", EPSILON_START)
             agent = GNN_DQN_Agent(player_id=0, env=ctx.env, train_mode=True, **agent_kwargs)
         self.agent = agent
 
@@ -107,12 +117,14 @@ class Trainer:
         """Run the full training loop."""
         for _ in range(n_episodes):
             self.episode += 1
+            self.agent.epsilon = self._epsilon_for_episode(self.episode)
 
             ctx, seat, _ = self._build_episode_context()
             env, agents = ctx.env, ctx.agents
             step_count = 0
             agent_turns = 0
             episode_reward = 0.0
+            territories_conquered = 0
             losses: list[float] = []
             done = False
 
@@ -136,7 +148,14 @@ class Trainer:
                 reward_total = result.reward
                 step_count += 1
                 agent_turns += 1
-                print(f"ep={self.episode}/{n_episodes} steps={step_count} agent_turns={agent_turns}", end="\r", flush=True)
+                self._print_progress_line(
+                    n_episodes=n_episodes,
+                    step_count=step_count,
+                    agent_turns=agent_turns,
+                    seat=seat,
+                    current_state=result.state,
+                    topology=env.topology,
+                )
 
                 # Play until agent's turn again, the agent is eliminated, or the game ends.
                 # Each opponent step may carry its own dense shaping reward
@@ -149,7 +168,14 @@ class Trainer:
                     result = env.step(action_other, reward_player=seat)
                     reward_total += result.reward
                     step_count += 1
-                    print(f"ep={self.episode}/{n_episodes} steps={step_count} agent_turns={agent_turns}", end="\r", flush=True)
+                    self._print_progress_line(
+                        n_episodes=n_episodes,
+                        step_count=step_count,
+                        agent_turns=agent_turns,
+                        seat=seat,
+                        current_state=result.state,
+                        topology=env.topology,
+                    )
 
                 # Store transition: state before agent acted → next_state (after all agents played)
                 next_state = result.state
@@ -162,6 +188,12 @@ class Trainer:
                 if isinstance(action, FortifyAction):
                     reward_total += env.reward.end_of_turn(state, next_state, seat)
 
+                territories_conquered += sum(
+                    1
+                    for before_owner, after_owner in zip(state.owners, next_state.owners)
+                    if before_owner != seat and after_owner == seat
+                )
+
                 episode_reward += reward_total
                 self.agent.remember(state, action, reward_total, next_state, done)
                 losses.extend(self.agent.learn(batch_size=BATCH_SIZE, n_steps=TRAIN_STEPS_PER_CALL))
@@ -170,30 +202,75 @@ class Trainer:
                     break
 
             winner = env.winner()
+            win = int(winner == seat)
+            self._recent_wins.append(win)
             metrics = {
-                "episode_steps": step_count,
-                "agent_turns": agent_turns,
-                "episode_reward": episode_reward,
-                "win": int(winner == seat),
-                "eliminated": int(seat in env.current_state().eliminated),
-                "done": int(done),
-                "epsilon": self.agent.epsilon,
-                "replay_size": len(self.agent.replay_buffer),
+                "win": win,
+                f"win_rate_last_{ROLLING_WIN_RATE_WINDOW}": (
+                    sum(self._recent_wins) / len(self._recent_wins)
+                ),
+                "reward_per_agent_turn": episode_reward / max(agent_turns, 1),
                 "learn_loss_mean": (sum(losses) / len(losses)) if losses else 0.0,
+                "territories_conquered": territories_conquered,
+                "agent_turns_survived": agent_turns,
             }
             self.logger.log_episode(episode=self.episode, metrics=metrics)
             self.logger.checkpoint(episode=self.episode, agent=self.agent)
             if step_count > 0:
                 print()
 
+    def _epsilon_for_episode(self, episode: int) -> float:
+        """Linear decay from `EPSILON_START` to `EPSILON_END` over `EPSILON_DECAY_EPISODES`."""
+        progress = min(episode / EPSILON_DECAY_EPISODES, 1.0)
+        return EPSILON_START + (EPSILON_END - EPSILON_START) * progress
+
     def _build_episode_context(self):
         n_players = self._rng.randint(MIN_PLAYERS, MAX_PLAYERS)
         seat = self._rng.randrange(n_players)
         settings = SetupStage.default_settings(n=n_players, seed=None)
         ctx = GameFactory.build(settings)
+        self._assign_random_opponents(ctx, learner_seat=seat)
         self.agent.attach(seat, ctx.env)
         ctx.agents[seat] = self.agent
         return ctx, seat, n_players
+
+    def _assign_random_opponents(self, ctx, *, learner_seat: int) -> None:
+        for player_id in range(len(ctx.agents)):
+            if player_id == learner_seat:
+                continue
+            kind = self._rng.choice(TRAIN_OPPONENT_AGENT_KINDS)
+            seed = self._rng.randrange(2**32)
+            if kind == "random":
+                ctx.agents[player_id] = RandomAgent(player_id=player_id, env=ctx.env, seed=seed)
+            elif kind == "raider":
+                ctx.agents[player_id] = RaiderAgent(player_id=player_id, env=ctx.env, seed=seed)
+            elif kind == "sentinel":
+                ctx.agents[player_id] = SentinelAgent(player_id=player_id, env=ctx.env, seed=seed)
+            elif kind == "empire":
+                ctx.agents[player_id] = EmpireAgent(player_id=player_id, env=ctx.env, seed=seed)
+            else:
+                raise ValueError(f"Unknown training opponent kind {kind!r}")
+
+    def _print_progress_line(
+        self,
+        *,
+        n_episodes: int,
+        step_count: int,
+        agent_turns: int,
+        seat: int,
+        current_state,
+        topology,
+    ) -> None:
+        status_line = self.logger.format_status_line(
+            topology=topology,
+            episode=self.episode,
+            n_episodes=n_episodes,
+            step_count=step_count,
+            agent_turns=agent_turns,
+            seat=seat,
+            current_state=current_state,
+        )
+        print(status_line, end="\r", flush=True)
 
 
 def main() -> None:
@@ -201,7 +278,7 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 1
+    RUN_ID = 5
 
     trainer = Trainer(RUN_ID)
     trainer.train(n_episodes=TRAIN_EPISODES)

@@ -163,8 +163,10 @@ def head_input(stage, t1, t2, n, H, none_vec):
 stage's sentinel case (`StopAttackAction`, skip-`FortifyAction`) — the
 `-1 -> fixed learned "none" vector` idea from `Action.md`. `TRADE_IN`
 doesn't read `H` at all regardless of net — its `t1`/`t2`/`n` are
-card-hand-slot indices, so its head reads `nn.Embedding(MAX_CARDS_IN_HAND,
-d)` lookups concatenated with pooled global context instead.
+card-hand-slot indices, so its head reads `nn.Embedding(MAX_TRANSIENT_HAND_
+SIZE, d)` lookups concatenated with pooled global context instead — sized
+to the hand's worst momentary size mid-attack, not the steady-state
+`MAX_CARDS_IN_HAND` (see `TradeInHead` below).
 
 ### Per-stage heads (all four nets)
 
@@ -182,7 +184,7 @@ class ScoringHead(nn.Module):       # REINFORCE_PLACE/ATTACK/OCCUPY/FORTIFY —
 
 class TradeInHead(nn.Module):       # different input shape -> its own class
     def __init__(self, g_dim, card_embed_dim=8):
-        self.card_embedding = nn.Embedding(MAX_CARDS_IN_HAND + 1, card_embed_dim)
+        self.card_embedding = nn.Embedding(MAX_TRANSIENT_HAND_SIZE + 1, card_embed_dim)
         self.net = _mlp(g_dim + 3 * card_embed_dim)
 
     def forward(self, g, card_indices):
@@ -208,13 +210,21 @@ the **input** to each head (pooled action-graph embedding for A/C,
 `head_input(...)` lookup for B/D) and the **output's meaning** (`Q` for
 A/B, `logit` for C/D).
 
-`TradeInHead`'s embedding table has one extra row reserved for the
-`SkipTradeAction` sentinel (`dqn_index()`'s `(-1, -1, 0)`) — detected per
-*row* (`t1 < 0`), not per element, since `n == 0` is `SkipTradeAction`'s
-placeholder but a legitimate real card-slot index for `TradeInAction`;
-per-element masking would silently mis-embed that slot. Verified directly:
-a real rollout exercising the sentinel row through `TradeInHead` produces
-the dedicated "none" embedding rather than colliding with card slot 0.
+`TradeInHead`'s embedding table is sized `MAX_TRANSIENT_HAND_SIZE + 1`
+rows, not `MAX_CARDS_IN_HAND + 1`: a real hand-slot index (`dqn_index()`'s
+`t1`/`t2`/`n` for `TradeInAction`) can momentarily exceed `MAX_CARDS_IN_
+HAND` mid-attack, between an elimination's card transfer
+(`Environment._apply_attack`, `risk/game/environment.py`) and the forced
+trade-in(s) that bring the hand back down — `MAX_TRANSIENT_HAND_SIZE`
+(`risk/constants.py`) is the proven worst case (two players' steady-state
+hands plus one conquest-card draw), not an arbitrary pad. The table's last
+row is reserved for the `SkipTradeAction` sentinel (`dqn_index()`'s
+`(-1, -1, 0)`) — detected per *row* (`t1 < 0`), not per element, since
+`n == 0` is `SkipTradeAction`'s placeholder but a legitimate real
+card-slot index for `TradeInAction`; per-element masking would silently
+mis-embed that slot. Verified directly: a real rollout exercising the
+sentinel row through `TradeInHead` produces the dedicated "none" embedding
+rather than colliding with card slot 0.
 
 `Phase` doubles as the DQN action-representation stage directly
 (`Docs/Action.md`), so any one decision's legal actions are always a

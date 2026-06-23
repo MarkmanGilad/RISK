@@ -508,6 +508,61 @@ def test_occupy_rejects_count_below_dice() -> None:
         env.step(OccupyAction(count=dice - 1))
 
 
+def test_mid_attack_elimination_forces_trade_in_before_occupy() -> None:
+    """An eliminated defender's cards can push the winner's hand to/past
+    MAX_CARDS_IN_HAND mid-attack; the environment must force TRADE_IN
+    before the parked OccupyAction, then resume OCCUPY once the hand is
+    back below the limit, rather than dropping into REINFORCE_PLACE."""
+    env = Environment()
+    env.reset(_settings(n=3, seed=0))
+    s = env.current_state()
+    pid, defender_pid = 0, 1
+    territories = env.topology.territories
+    target = next(t for t in territories if s.owners[env.topology.index_of(t)] == defender_pid)
+    ti = env.topology.index_of(target)
+
+    # `defender_pid` owns only `target`; `pid` owns everything else, so
+    # conquering it both eliminates them and guarantees an attacking
+    # neighbor.
+    for i in range(len(s.owners)):
+        if i != ti:
+            s.owners[i] = pid
+            s.armies[i] = max(s.armies[i], 5)
+    s.owners[ti] = defender_pid
+    s.armies[ti] = 1
+
+    attacker = next(nb for nb in env.topology.neighbors(target))
+    ai = env.topology.index_of(attacker)
+    s.armies[ai] = 50
+    s.current_player_index = pid
+    s.phase = Phase.ATTACK
+    s.conquered_this_turn = True  # skip the conquest card draw for an exact hand count
+
+    card_ids = territories[:8]
+    s.hands[pid] = [Card(territory_id=t, symbol="infantry") for t in card_ids[:4]]
+    s.hands[defender_pid] = [Card(territory_id=t, symbol="infantry") for t in card_ids[4:8]]
+
+    while s.phase not in (Phase.OCCUPY, Phase.TRADE_IN):
+        env.step(AttackAction(from_territory=attacker, to_territory=target, dice=3))
+
+    assert defender_pid in s.eliminated
+    assert len(s.hands[pid]) == 8
+    assert s.phase is Phase.TRADE_IN
+    assert s.pending_attack is not None
+
+    while s.phase is Phase.TRADE_IN:
+        trades = [a for a in env.legal_actions() if isinstance(a, TradeInAction)]
+        env.step(trades[0] if trades else SkipTradeAction())
+
+    assert s.phase is Phase.OCCUPY
+    assert len(s.hands[pid]) < 5
+    assert s.pending_attack is not None
+
+    env.step(OccupyAction(count=5))
+    assert s.phase is Phase.ATTACK
+    assert s.pending_attack is None
+
+
 def test_occupy_rejects_count_above_available() -> None:
     env = Environment()
     env.reset(_settings(n=3, seed=0))

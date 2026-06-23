@@ -72,7 +72,61 @@ class TrainingLogger:
     def log_episode(self, *, episode: int, metrics: dict) -> None:
         if not self._wandb_enabled:
             return
-        wandb.log(metrics, step=episode)
+        payload = dict(metrics)
+        payload.setdefault("episode", episode)
+        wandb.log(payload)
+
+    def format_status_line(
+        self,
+        *,
+        topology,
+        episode: int,
+        n_episodes: int,
+        step_count: int,
+        agent_turns: int,
+        seat: int,
+        current_state,
+    ) -> str:
+        """Build compact single-line terminal status text."""
+        agent_territories = sum(1 for owner in current_state.owners if owner == seat)
+        agent_continents = [
+            continent
+            for continent in topology.continents
+            if topology.owns_continent(current_state.owners, continent, seat)
+        ]
+        opponent_territories_by_player = {
+            player_id: sum(1 for owner in current_state.owners if owner == player_id)
+            for player_id in range(len(current_state.hands))
+            if player_id != seat
+        }
+        armies_by_player = {
+            player_id: sum(
+                current_state.armies[idx]
+                for idx, owner in enumerate(current_state.owners)
+                if owner == player_id
+            )
+            for player_id in range(len(current_state.hands))
+        }
+        other_territories = sum(
+            1 for owner in current_state.owners if owner is not None and owner != seat
+        )
+        others_territories_detail = ",".join(
+            f"p{player_id}:{count}"
+            for player_id, count in sorted(opponent_territories_by_player.items())
+        )
+        armies_detail = ",".join(
+            f"p{player_id}:{count}" for player_id, count in sorted(armies_by_player.items())
+        )
+        continents_detail = ",".join(agent_continents) if agent_continents else "-"
+        return (
+            f"run={self.run_id:03d} ep={episode}/{n_episodes} "
+            f"steps={step_count} agent_turns={agent_turns} "
+            f"agent_terr={agent_territories} "
+            f"others_terr_total={other_territories} "
+            f"others_terr_by_player=[{others_territories_detail}] "
+            f"agent_cont={len(agent_continents)}[{continents_detail}] "
+            f"armies=[{armies_detail}]"
+        )
 
     def checkpoint(self, *, episode: int, agent: GNN_DQN_Agent) -> tuple[bool, Optional[Path]]:
         """Check interval thresholds; save full checkpoint if conditions met.

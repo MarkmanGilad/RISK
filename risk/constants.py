@@ -71,6 +71,15 @@ WILD_SYMBOL: Final[str] = "wild"
 # Maximum cards a player may hold before being forced to trade in.
 MAX_CARDS_IN_HAND: Final[int] = 5
 
+# Highest a hand can momentarily reach mid-attack, before the forced
+# trade-in (Environment._apply_attack) brings it back below
+# MAX_CARDS_IN_HAND: the attacker's own steady-state hand (<= MAX_CARDS_
+# IN_HAND - 1, since they always trade back down before continuing), plus
+# one conquest-card draw, plus the eliminated defender's own steady-state
+# hand (<= MAX_CARDS_IN_HAND - 1). Used to size TradeInHead's card-slot
+# embedding table so a real hand-slot index is never out of range.
+MAX_TRANSIENT_HAND_SIZE: Final[int] = 2 * (MAX_CARDS_IN_HAND - 1) + 1
+
 # Classic Risk card-set trade-in progression. After the 6th trade-in
 # (value 15) each further trade-in is worth the previous value + 5.
 CARD_SET_VALUES: Final[tuple[int, ...]] = (4, 6, 8, 10, 12, 15)
@@ -119,6 +128,7 @@ __all__ = [
     "CARD_SYMBOLS",
     "WILD_SYMBOL",
     "MAX_CARDS_IN_HAND",
+    "MAX_TRANSIENT_HAND_SIZE",
     "CARD_SET_VALUES",
     "CARD_SET_INCREMENT_AFTER_FIXED",
     "CARD_TERRITORY_BONUS_ARMIES",

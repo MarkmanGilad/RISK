@@ -16,11 +16,23 @@ from typing import Final
 MIN_PLAYERS: Final[int] = 3       # minimum opponents per episode (inclusive)
 MAX_PLAYERS: Final[int] = 6       # maximum opponents per episode (inclusive)
 MAX_STEPS_PER_EPISODE: Final[int] = 20_000
+TRAIN_OPPONENT_AGENT_KINDS: Final[tuple[str, ...]] = (
+    "random",
+    "raider",
+    "sentinel",
+    "empire",
+)
 
 # --- Replay / gradient update -----------------------------------------------
 
 BATCH_SIZE: Final[int] = 32
 TRAIN_STEPS_PER_CALL: Final[int] = 1  # gradient steps taken each time
+
+# --- Exploration (epsilon-greedy, linear decay by episode) ------------------
+
+EPSILON_START: Final[float] = 1.0
+EPSILON_END: Final[float] = 0.05
+EPSILON_DECAY_EPISODES: Final[int] = 100  # episode at which epsilon reaches EPSILON_END
 
 # --- Run control -------------------------------------------------------------
 
@@ -29,6 +41,9 @@ TRAIN_EPISODES: Final[int] = 200
 
 # Print one progress line every N episodes.
 PROGRESS_EVERY: Final[int] = 10
+
+# Rolling window (in episodes) for the win_rate_last_n W&B metric.
+ROLLING_WIN_RATE_WINDOW: Final[int] = 50
 
 # --- Checkpointing ----------------------------------------------------------
 
@@ -82,10 +97,15 @@ __all__ = [
     "MIN_PLAYERS",
     "MAX_PLAYERS",
     "MAX_STEPS_PER_EPISODE",
+    "TRAIN_OPPONENT_AGENT_KINDS",
     "BATCH_SIZE",
     "TRAIN_STEPS_PER_CALL",
+    "EPSILON_START",
+    "EPSILON_END",
+    "EPSILON_DECAY_EPISODES",
     "TRAIN_EPISODES",
     "PROGRESS_EVERY",
+    "ROLLING_WIN_RATE_WINDOW",
     "CHECKPOINT_DIR",
     "CHECKPOINT_AFTER",
     "CHECKPOINT_EVERY",

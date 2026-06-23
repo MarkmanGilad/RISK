@@ -28,7 +28,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from risk.constants import MAX_CARDS_IN_HAND
+from risk.constants import MAX_TRANSIENT_HAND_SIZE
 
 
 def _mlp(in_dim: int) -> nn.Module:
@@ -67,9 +67,12 @@ class TradeInHead(nn.Module):
     just different card slots). `card_indices` is each action's
     `dqn_index()` `(t1, t2, n)` — real card-hand-slot indices for
     `TradeInAction`, or the `(-1, -1, 0)` sentinel for `SkipTradeAction`.
-    The embedding table has one extra row reserved for that sentinel (`-1`
-    -> a fixed *learned* "none" vector, never a real lookup — `Docs/
-    Action.md`'s "Network wiring" section). Detected per *row*, not per
+    The embedding table is sized to `MAX_TRANSIENT_HAND_SIZE` — the worst
+    a hand can momentarily reach mid-attack before a forced trade-in brings
+    it back down, not the steady-state `MAX_CARDS_IN_HAND` — plus one extra
+    row reserved for the sentinel (`-1` -> a fixed *learned* "none" vector,
+    never a real lookup — `Docs/Action.md`'s "Network wiring" section).
+    Detected per *row*, not per
     element: `n == 0` is `t1`'s "stop" sentinel for `SkipTradeAction` but a
     legitimate real card-slot index for `TradeInAction`, so only `t1 < 0`
     (unambiguous either way) decides whether the whole row is a skip.
@@ -77,8 +80,8 @@ class TradeInHead(nn.Module):
 
     def __init__(self, g_dim: int, card_embed_dim: int = 8) -> None:
         super().__init__()
-        self._none_slot = MAX_CARDS_IN_HAND
-        self.card_embedding = nn.Embedding(MAX_CARDS_IN_HAND + 1, card_embed_dim)
+        self._none_slot = MAX_TRANSIENT_HAND_SIZE
+        self.card_embedding = nn.Embedding(MAX_TRANSIENT_HAND_SIZE + 1, card_embed_dim)
         self.net = _mlp(g_dim + 3 * card_embed_dim)
 
     def forward(self, g_base: torch.Tensor, card_indices: torch.Tensor) -> torch.Tensor:

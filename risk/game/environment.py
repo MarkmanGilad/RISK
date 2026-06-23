@@ -321,7 +321,10 @@ class Environment:
         s.reinforcement_budget += value
         auto_skipped = not any(self._legal_trade_ins(s))
         if auto_skipped:
-            s.phase = Phase.REINFORCE_PLACE
+            # Mid-attack forced trade-in (hand inherited from an eliminated
+            # opponent) resumes the parked OccupyAction instead of advancing
+            # to REINFORCE_PLACE.
+            s.phase = Phase.OCCUPY if s.pending_attack is not None else Phase.REINFORCE_PLACE
         return {
             "traded": value,
             "cards": len(hand) - 3,
@@ -329,7 +332,8 @@ class Environment:
         }
 
     def _apply_skip_trade(self, s: State) -> dict:
-        s.phase = Phase.REINFORCE_PLACE
+        # Same resume-OCCUPY rule as the auto-skip path in _apply_trade_in.
+        s.phase = Phase.OCCUPY if s.pending_attack is not None else Phase.REINFORCE_PLACE
         return {}
 
     def _legal_trade_ins(self, s: State) -> Iterable[Action]:
@@ -442,15 +446,20 @@ class Environment:
                 s.hands[pid].extend(taken)
                 s.hands[defender_pid] = []
                 info["eliminated"] = defender_pid
-                # Cards transfer to the winner. They must trade down to < 5
-                # before placing armies — the UI enforces this at reinforce.
-                # (AI agents pick TradeInAction from legal_actions naturally.)
 
             # Park the attack so the next step is an OccupyAction.
             s.pending_attack = PendingAttack(
                 from_index=fi, to_index=ti, attacker_dice=action.dice
             )
-            s.phase = Phase.OCCUPY
+            # An eliminated player's cards can push the winner's hand to or
+            # past MAX_CARDS_IN_HAND mid-attack — forced trade-ins (legal_
+            # actions() already makes TRADE_IN mandatory at that hand size)
+            # must resolve before the parked OccupyAction; _apply_trade_in/
+            # _apply_skip_trade route back here via pending_attack.
+            if len(s.hands[pid]) >= MAX_CARDS_IN_HAND:
+                s.phase = Phase.TRADE_IN
+            else:
+                s.phase = Phase.OCCUPY
 
         # Winner detection.
         w = self.winner()

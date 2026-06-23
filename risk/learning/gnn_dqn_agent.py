@@ -78,6 +78,10 @@ class GNN_DQN_Agent(BaseAgent):
         self.set_train_mode(train_mode)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
 
+    @property
+    def train_steps(self) -> int:
+        return self._train_steps
+
     def attach(self, player_id: int, env: Environment) -> None:
         """Rebind this agent to a new episode's seat/env.
 

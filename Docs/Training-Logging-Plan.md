@@ -33,7 +33,8 @@ Out of scope (for this pass):
 - Local metric plotting/history files.
 - UI changes.
 - The existing `\r` console progress print in `Trainer.train(...)`
-  (`ep=.../... steps=... agent_turns=...`). Stays exactly as-is, independent
+  (`run=... ep=.../... steps=... agent_turns=... agent_terr=... others_terr_total=... others_terr_by_player=[pX:n,...] agent_cont=K[...] armies=[p0:n,p1:n,...]`).
+  Stays independent
   of `TrainingLogger` — it's the simple "is the trainer alive and roughly
   where is it" signal, distinct from W&B's episode-level metrics. Not folded
   into the logger, not replaced by it.
@@ -69,6 +70,10 @@ Responsibilities:
 - Local checkpoint save/load and interval-based cadence.
 - Keep `Trainer` thin (trainer computes metrics; logger handles all I/O and scheduling).
 
+`Trainer` now delegates progress-metric/state-summary computation directly
+to `TrainingLogger` (including both W&B progress metrics and terminal
+status-line formatting), so the training loop stays orchestration-only.
+
 **Recommendation — don't have `TrainingLogger` reach into `agent.net`/
 `agent.optimizer`/`agent.replay_buffer` directly to build the checkpoint
 payload.** That repeats the exact coupling problem fixed in `Reward.md`
@@ -88,7 +93,7 @@ doesn't own). Cleaner split, matching how `Environment` calls
 ## 2) W&B backend behavior
 If `use_wandb=True` and `wandb` is available:
 - `wandb.init(project=..., name=..., config=...)` in `start_run`.
-- `wandb.log(metrics, step=episode)` in `log_episode`.
+- `wandb.log(metrics)` in `log_episode` (payload includes `episode`).
 - `wandb.finish()` in `finish`.
 
 If disabled/unavailable:
@@ -104,12 +109,17 @@ Only local artifacts required:
 - `agent.target_net.state_dict()`
 - `agent.optimizer.state_dict()`
 - `agent._train_steps`
-- `agent.epsilon` — note: currently a fixed value passed at construction
-  (`GNN_DQN_Agent.__init__`, `gnn_dqn_agent.py:52`), no decay schedule exists
-  anywhere yet, so this field is just a constant for now, not evidence of a
-  schedule already in place.
+- `agent.epsilon` — set by `Trainer` at the start of every episode via a
+  linear decay schedule (`EPSILON_START`/`EPSILON_END`/`EPSILON_DECAY_EPISODES`
+  in `train_constants.py`, `Trainer._epsilon_for_episode`), so this field is
+  meaningful to checkpoint/resume even though the decay itself is recomputed
+  from `episode` on every episode (not read back from the checkpoint).
 - replay buffer contents (`agent.replay_buffer.save(...)` or embedded payload)
 - optional trainer counters (`episode`, any rolling stats needed for scheduling)
+
+Current exploration schedule: epsilon decays linearly from `EPSILON_START`
+to `EPSILON_END` over 100 episodes (`EPSILON_DECAY_EPISODES = 100`) so
+early training becomes less random quickly enough to show first signals.
 
 2. Policy-only checkpoint (`play`):
 - `agent.net.state_dict()` only
@@ -133,6 +143,8 @@ methods:**
 1. `risk/learning/train_constants.py`
 - collect all uppercase names (or use `__all__` if preferred for explicit control)
 - include exact values used in this run
+- includes `TRAIN_OPPONENT_AGENT_KINDS`, the opponent pool sampled for each
+  non-learner seat every episode (`random`, `raider`, `sentinel`, `empire`)
 
 2. Model identity
 - `model_class`: `type(agent.net).__name__`
@@ -149,23 +161,56 @@ methods:**
 
 ## Metrics to log to W&B (episode-level)
 
-Minimal v1 set:
-- `episode`
-- `episode_steps`
-- `agent_turns`
-- `episode_reward`
-- `win` (0/1)
-- `eliminated` (0/1)
-- `done` (0/1)
-- `epsilon`
-- `replay_size`
-- `learn_loss_mean` (mean of losses returned by `agent.learn(...)` this episode)
+**Deliberately small set — 6 metrics, logged once per episode (`log_episode`
+only; no intra-episode logging).** An earlier version of this plan logged
+~17 episode-level metrics plus ~11 more at an intra-episode cadence
+(`log_progress`); in practice that produced too many overlapping/duplicate
+graphs to read "is the agent improving" off the dashboard. A second pass
+dropped `progress/agent_territory_share` too: it's a *terminal*-state
+snapshot, so for a losing/eliminated episode it mostly captures "how much
+board did the agent have when it finally died" — early in training that's
+dominated by "how fast did it die," not "how good was its play." Each
+metric below earns its place as a distinct, non-redundant signal:
 
-Recommended additions:
-- `n_players`
-- `seat`
-- `checkpoint_saved` (0/1)
-- throughput (`steps_per_sec`)
+- `win` (0/1) — the actual objective. Sparse/noisy early in training (with
+  3-6 opponents a weak agent may not win for a long time); read with W&B's
+  smoothing slider, or use `win_rate_last_50` below for a fixed window
+  instead of an arbitrary UI-side smoothing setting.
+- `win_rate_last_50` — rolling mean of `win` over the trainer's last
+  `ROLLING_WIN_RATE_WINDOW` (default 50) episodes (`Trainer._recent_wins`,
+  a `collections.deque(maxlen=...)`). The most direct "is the agent
+  actually getting better over time" curve — should trend up over the
+  course of training.
+- `reward_per_agent_turn` — the shaped reward (`Docs/Reward.md`) per
+  learner turn. Moves every episode, including ones the agent loses, so it
+  trends upward well before `win`/`win_rate_last_50` do — the early/dense
+  leading indicator for the sparse/lagging win signal.
+- `territories_conquered` — count of territories that flipped from
+  "not the learner's" to "the learner's" during the episode (summed across
+  every stored transition, not a terminal-state snapshot). Unlike
+  `agent_territory_share`, this stays meaningful even in a losing episode:
+  an agent that conquers 6 territories before eventually losing is playing
+  better than one that conquers 1, regardless of the final outcome.
+- `agent_turns_survived` — how many of the learner's own turns happened
+  before the episode ended (win, loss, elimination, or step-cap timeout).
+  Expected to rise early/mid training (the agent survives longer before
+  dying) — but don't expect it to keep rising indefinitely: once win rate
+  climbs, episodes increasingly end via outright wins rather than survival
+  time alone, so this metric is most informative before that point.
+- `learn_loss_mean` — mean TD/Huber loss over gradient steps taken this
+  episode. Not an "improving" signal by itself (DQN loss isn't expected to
+  monotonically decrease, since the bootstrapped target keeps moving) — a
+  diagnostic for "is training still healthy" (bounded, not NaN/diverging),
+  to check when the other metrics plateau or behave strangely.
+
+Everything else previously tracked (`episode_reward`, `eliminated`, `done`,
+`epsilon`, `max_agent_territories`, `terminal_steps`,
+`progress/agent_territory_share` and the other army/continent-share
+metrics, `alive_opponents`, `replay_size`, `train_steps`, and the whole
+intra-episode `log_progress` path) was cut from W&B. `epsilon` specifically:
+it's a known linear decay schedule (`EPSILON_START`/`EPSILON_END`/
+`EPSILON_DECAY_EPISODES` in `train_constants.py`), not something that needs
+a live graph to understand.
 
 ## Monitoring strategy for slow training (hours per run)
 
