@@ -27,6 +27,9 @@ TRAIN_OPPONENT_AGENT_KINDS: Final[tuple[str, ...]] = (
 
 BATCH_SIZE: Final[int] = 64
 TRAIN_STEPS_PER_CALL: Final[int] = 1  # gradient steps taken each time
+TARGET_ALGORITHM: Final[str] = "ddqn"
+LOSS_NAME: Final[str] = "smooth_l1"
+GRAD_CLIP_MAX_NORM: Final[float] = 10.0
 
 # --- Exploration (epsilon-greedy, linear decay by episode) ------------------
 
@@ -107,6 +110,9 @@ __all__ = [
     "TRAIN_OPPONENT_AGENT_KINDS",
     "BATCH_SIZE",
     "TRAIN_STEPS_PER_CALL",
+    "TARGET_ALGORITHM",
+    "LOSS_NAME",
+    "GRAD_CLIP_MAX_NORM",
     "EPSILON_START",
     "EPSILON_END",
     "EPSILON_DECAY_EPISODES",

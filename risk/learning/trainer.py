@@ -301,7 +301,7 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 14
+    RUN_ID = 20
 
     trainer = Trainer(RUN_ID)
     trainer.train(n_episodes=TRAIN_EPISODES)

@@ -147,6 +147,9 @@ methods:**
 - include exact values used in this run
 - includes `TRAIN_OPPONENT_AGENT_KINDS`, the opponent pool sampled for each
   non-learner seat every episode (`random`, `raider`, `sentinel`, `empire`)
+- includes training-behavior labels/knobs such as `TARGET_ALGORITHM`,
+  `LOSS_NAME`, and `GRAD_CLIP_MAX_NORM`, so W&B config shows whether a run
+  used DDQN, which loss was active, and the actual clipping threshold.
 
 2. Model identity
 - `model_class`: `type(agent.net).__name__`

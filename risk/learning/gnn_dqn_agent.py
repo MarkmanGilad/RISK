@@ -33,6 +33,7 @@ from risk.learning.action_graph_builder import ActionGraphBuilder
 from risk.learning.gnn_dqn import GNN_DQN
 from risk.learning.graph_adapter import EDGE_ATTR_DIM, GraphAdapter
 from risk.learning.replay_buffer import ReplayBuffer
+from risk.learning.train_constants import GRAD_CLIP_MAX_NORM
 
 
 def resolve_device(device: Optional[torch.device] = None) -> torch.device:
@@ -384,7 +385,7 @@ class GNN_DQN_Agent(BaseAgent):
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.net.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.net.parameters(), GRAD_CLIP_MAX_NORM)
         self.optimizer.step()
 
         self._train_steps += 1
