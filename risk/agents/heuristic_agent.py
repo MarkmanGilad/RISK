@@ -9,7 +9,6 @@ from __future__ import annotations
 import random
 from collections import deque
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Optional, Sequence
 
 from risk.agents.base_agent import BaseAgent
@@ -46,27 +45,44 @@ def attacker_roll_edge(attacker_dice: int, defender_dice: int) -> float:
     return ATTACKER_ROLL_EDGE[(attacker_dice, defender_dice)]
 
 
-@lru_cache(maxsize=None)
+_battle_win_cache: dict[tuple[int, int], float] = {}
+
+
+def _battle_win_lookup(attacker_armies: int, defender_armies: int) -> float:
+    if defender_armies <= 0:
+        return 1.0
+    if attacker_armies <= 1:
+        return 0.0
+    return _battle_win_cache[(attacker_armies, defender_armies)]
+
+
 def battle_win_probability(attacker_armies: int, defender_armies: int) -> float:
-    """Probability of conquering a territory while always rolling full force."""
+    """Probability of conquering a territory while always rolling full force.
+
+    Computed bottom-up (not via direct recursion): every roll outcome
+    strictly reduces attacker_armies + defender_armies by at least 1, so a
+    deep recursive version can exceed Python's call-stack limit once armies
+    pile up into the hundreds during long training games.
+    """
 
     if defender_armies <= 0:
         return 1.0
     if attacker_armies <= 1:
         return 0.0
 
-    attacker_dice = min(MAX_ATTACK_DICE, attacker_armies - 1)
-    defender_dice = min(MAX_DEFEND_DICE, defender_armies)
-    return sum(
-        probability
-        * battle_win_probability(
-            attacker_armies - attacker_losses,
-            defender_armies - defender_losses,
-        )
-        for attacker_losses, defender_losses, probability in ROLL_OUTCOMES[
-            (attacker_dice, defender_dice)
-        ]
-    )
+    for a in range(2, attacker_armies + 1):
+        for d in range(1, defender_armies + 1):
+            if (a, d) in _battle_win_cache:
+                continue
+            attacker_dice = min(MAX_ATTACK_DICE, a - 1)
+            defender_dice = min(MAX_DEFEND_DICE, d)
+            _battle_win_cache[(a, d)] = sum(
+                probability * _battle_win_lookup(a - attacker_losses, d - defender_losses)
+                for attacker_losses, defender_losses, probability in ROLL_OUTCOMES[
+                    (attacker_dice, defender_dice)
+                ]
+            )
+    return _battle_win_cache[(attacker_armies, defender_armies)]
 
 
 class AttackAgent(BaseAgent):

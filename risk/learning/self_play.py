@@ -144,6 +144,9 @@ class SelfPlay:
         `fps=30` to slow it to a watchable speed without adding per-move
         delays. Closing the window or pressing ESC stops early.
 
+        Press SPACE to pause/resume the run. While paused, press RIGHT to
+        advance exactly one move and pause again.
+
         If `stop_when_player_eliminated` is set, the rollout ends as soon as
         that player id appears in `state.eliminated`.
         """
@@ -152,6 +155,7 @@ class SelfPlay:
         # Local imports: pygame is only needed for the rendered path.
         import pygame
 
+        from risk.app.marker import ActionMarker
         from risk.app.view import GameView
 
         env, agents = ctx.env, ctx.agents
@@ -163,9 +167,12 @@ class SelfPlay:
             view = GameView(screen, ctx.settings, width, height)
             clock = pygame.time.Clock()
             last_action_text = ""
+            last_action_lines: tuple[str, ...] = ()
 
             steps = 0
             running = True
+            paused = False
+            single_step = False
             while running and steps < max_steps:
                 if stop_when_player_eliminated is not None:
                     if stop_when_player_eliminated in env.current_state().eliminated:
@@ -175,15 +182,40 @@ class SelfPlay:
                         running = False
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         running = False
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                        paused = not paused
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHT and paused:
+                        single_step = True
+
+                if paused and not single_step:
+                    view.render(
+                        env.current_state(),
+                        agents[env.current_state().current_player_index].widgets(
+                            env.current_state()
+                        ),
+                        None,
+                        cls._end_message(env),
+                        last_action_text,
+                        last_action_lines,
+                    )
+                    pygame.display.flip()
+                    clock.tick(30)
+                    continue
+                single_step = False
 
                 if not env.is_terminal():
                     state = env.current_state()
                     player = agents[state.current_player_index]
                     action = player((), state)
                     if action is not None:
+                        pid = state.current_player_index
+                        pre_pending = state.pending_attack
                         before = state.snapshot() if on_step else state
                         result = env.step(action)
-                        last_action_text = cls._describe(action, ctx, state)
+                        last_action_text = cls._describe(action, ctx, pid, pre_pending)
+                        last_action_lines = ActionMarker.action_report(
+                            action, ctx.settings.players[pid].name, result.info, pre_pending
+                        )
                         if on_step is not None:
                             on_step(
                                 before,
@@ -211,6 +243,7 @@ class SelfPlay:
                     None,                   # no action marker in training view
                     cls._end_message(env),
                     last_action_text,
+                    last_action_lines,
                 )
                 pygame.display.flip()
                 if fps > 0:
@@ -225,12 +258,11 @@ class SelfPlay:
             pygame.quit()
 
     @staticmethod
-    def _describe(action: Action, ctx: GameContext, state: State) -> str:
+    def _describe(action: Action, ctx: GameContext, player_id: int, pre_pending=None) -> str:
         from risk.app.marker import ActionMarker
 
-        pid = state.current_player_index
         return ActionMarker.describe_action(
-            action, ctx.settings.players[pid].name, state.pending_attack
+            action, ctx.settings.players[player_id].name, pre_pending
         )
 
     @staticmethod
@@ -283,21 +315,26 @@ def main() -> None:
     `SelfPlay.play_rendered` (watchable).
     Run it with:  python -m risk.learning.self_play
     """
-    from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
-    from risk.agents.random_agent import RandomAgent
     from risk.app.factory import GameFactory
-    from risk.app.setup import SetupStage
     from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
+    from risk.ui.input.init_screen import InitScreenState
 
     # 1) Roster: four fixed AI seats + one untrained GNN+DQN learner.
-    ctx = GameFactory.build(SetupStage.default_settings(n=5))
-    ctx.agents[0] = RaiderAgent(player_id=0, env=ctx.env)
-    ctx.agents[1] = SentinelAgent(player_id=1, env=ctx.env)
-    ctx.agents[2] = EmpireAgent(player_id=2, env=ctx.env)
-    ctx.agents[3] = SentinelAgent(player_id=3, env=ctx.env)
+    # Set each seat's agent_kind to match the agent actually assigned below,
+    # so the sidebar label (read from settings.players[i].agent_kind) isn't
+    # left at the InitScreenState default ("human").
+    state = InitScreenState()
+    state.set_player_count(5)
+    state.set_agent_kind(0, "raider")
+    state.set_agent_kind(1, "sentinel")
+    state.set_agent_kind(2, "empire")
+    state.set_agent_kind(3, "sentinel")
+    state.set_agent_kind(4, "ai")
+    ctx = GameFactory.build(state.build_settings(seed=0))
     
     # 2) To test your learner, add your agent to the list:
     learner = GNN_DQN_Agent(player_id=4, env=ctx.env)
+    learner.load_checkpoint("Checkpoints/run_013/ep000400")
     ctx.agents[4] = learner
     print(f"learner device report = {learner.device_report(ctx.env.current_state())}")
     _print_roster(ctx)
@@ -309,8 +346,8 @@ def main() -> None:
         transitions.append((state, action, result.info))
 
     # 4) Run one episode. Use SelfPlay.play_rendered(ctx, fps=30) to watch it.
-    winner = SelfPlay.play_headless(ctx, max_steps=150_000, on_step=collect)
-    # winner = SelfPlay.play_rendered(ctx, fps=30, on_step=collect)
+    # winner = SelfPlay.play_headless(ctx, max_steps=150_000, on_step=collect)
+    winner = SelfPlay.play_rendered(ctx, fps=4, on_step=collect)
 
     
     terminated = ctx.env.is_terminal()

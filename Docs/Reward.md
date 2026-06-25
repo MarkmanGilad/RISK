@@ -519,7 +519,8 @@ as the checklist when we move on to picking actual values.
 - **`ATTACK`**: `REWARD_ATTACK_FEWER_DICE`, `REWARD_ATTACK_RATIO_SCALE`,
   `REWARD_ATTACK_RATIO_CAP`, `REWARD_ATTACK_RATIO_THRESHOLD`,
   `REWARD_ATTACK_CONTINENT_DOMINATION`,
-  `REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN`, `REWARD_ATTACK_ARMY_TRADE`,
+  `REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN`,
+  `REWARD_ATTACK_CONTINENT_ADVANTAGE`, `REWARD_ATTACK_ARMY_TRADE`,
   `REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD`, `REWARD_ATTACK_CONTINENT_CAPTURED`,
   `REWARD_ATTACK_CONQUER_TERRITORY`, `REWARD_ATTACK_CONQUER_WITH_CARD`,
   `REWARD_ATTACK_CARD_TERRITORY_MATCH`, `REWARD_ATTACK_STOP_WITHOUT_CARD`
@@ -532,7 +533,7 @@ as the checklist when we move on to picking actual values.
 - **Terminal**: `REWARD_TERMINAL_WIN`, `REWARD_TERMINAL_LOSS` (implemented;
   no `REWARD_TERMINAL_TIMEOUT` — see intro)
 
-~31 constants total. With this many additive terms, the shaping cap(s) need
+~32 constants total. With this many additive terms, the shaping cap(s) need
 explicit values, not implicit assumptions.
 
 ## Proposed v1 values (starting point)
@@ -564,6 +565,7 @@ terminal outcomes much larger than any single shaping event.
   - `REWARD_ATTACK_RATIO_THRESHOLD = 1.50`
   - `REWARD_ATTACK_CONTINENT_DOMINATION = 0.80`
   - `REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN = 0.10`
+  - `REWARD_ATTACK_CONTINENT_ADVANTAGE = 1.20`
   - `REWARD_ATTACK_ARMY_TRADE = 0.60`
   - `REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD = 1.25`
   - `REWARD_ATTACK_CONTINENT_CAPTURED = 4.00`
@@ -704,3 +706,201 @@ re-testing the reward math itself.
    logging (open question 4) is still future work — worth doing once a real
    training run is underway and a bad constant needs to be visible in the
    training curves rather than just inferred from behavior.
+
+## Continent-advantage reward
+
+Implementation status: implemented in `risk/learning/reward.py`, with
+`REWARD_ATTACK_CONTINENT_ADVANTAGE` defined in
+`risk/learning/train_constants.py`.
+
+Observed problem: the trained agent learns which neighboring territory is
+worth attacking, but it does not reliably convert a local advantage into a
+continent plan. In particular, when it already owns most of a continent and
+has enough troops there to finish it, the current shaping is too weak or too
+indirect to say "keep taking territories in this continent now."
+
+### Goal
+
+Add a small dense reward that scores attacks by the strategic value of the
+target's continent, not only by the immediate attack ratio. The reward should
+prefer attacks into continents where the player has:
+
+1. more owned territories out of the continent total,
+2. more troops in that continent than all other players combined,
+3. a higher continent bonus value.
+
+This should be an incentive to finish continents where the player already has
+a real advantage, not a blanket "always chase continents" bonus.
+
+### Keep the first version cheap
+
+Do not start by caching this in `GraphAdapter.u` or another global graph
+attribute for reward calculation. Reward code already has everything it needs:
+`State.owners`, `State.armies`, and `BoardTopology.territories_in(continent)`.
+There are only 6 continents and 42 territories, so scanning the target
+continent during `RewardCalculator._attack(...)` is cheap and much simpler
+than adding cache invalidation or keeping graph features synchronized with the
+rules engine.
+
+Graph global attributes are still worth considering later as model inputs,
+not as reward storage. If the agent still struggles after the reward change,
+add per-continent summary features to `GraphAdapter.u` so the network can see
+the same "continent opportunity" signal directly when scoring legal actions.
+That would be a separate network-input change, documented in
+`Docs/GraphAdapter.md`, and should update the `u` width and tests.
+
+### Proposed formula
+
+Add a helper in `RewardCalculator`, roughly:
+
+```python
+continent_advantage(state, player_id, continent) -> float
+```
+
+For the target continent:
+
+```python
+owned = owned_territories_in_continent
+total = total_territories_in_continent
+my_troops = troops_on_my_territories_in_continent
+other_troops = troops_on_non_my_territories_in_continent
+bonus = topology.continent_bonus(continent)
+max_bonus = max(topology.continent_bonus(c) for c in topology.continents)
+
+territory_score = owned / total
+troop_score = my_troops / max(my_troops + other_troops, 1)
+worth_score = bonus / max_bonus
+
+baseline_territory_share = 1 / number_of_alive_players
+territory_edge_raw = max(0, territory_score - baseline_territory_share)
+troop_edge_raw = max(0, troop_score - 0.5)
+
+# Rescale each edge to its own [0, 1] range before multiplying — see
+# "Coefficient / making the signal stronger" below for why.
+territory_edge = territory_edge_raw / max(1 - baseline_territory_share, _EPS)
+troop_edge = troop_edge_raw / 0.5
+
+advantage = territory_edge * troop_edge * worth_score
+```
+
+`_EPS` is `reward.py`'s existing module-level `_EPS = 1e-6`
+(already used by `_fortify`'s balance term) — reuse it, don't add a second
+epsilon constant. It only guards the degenerate `alive_players == 1`
+case (already moot in practice, since the game ends before only one
+player remains), not a realistic division.
+
+`number_of_alive_players` should reuse `_attack(...)`'s existing
+`alive_players = len(before.hands) - len(before.eliminated)`
+(`reward.py:292`, already computed there for
+`REWARD_ATTACK_CONTINENT_DOMINATION`) rather than recomputing it.
+
+Multiplication is intentional: it keeps the reward low unless all three
+signals agree. The `max(0, ...)` gates are also intentional: this is a reward
+for actual advantage, not for any partial interest in a continent. The
+territory edge only turns positive once the player owns more than their
+expected share among surviving players, and the troop edge only turns positive
+once the player has troop majority inside that continent. Owning most of a
+continent with no troops there should not look as good as a real attack
+opportunity, and having many troops in a low-progress continent should not
+beat finishing a nearly controlled one.
+
+### Coefficient / making the signal stronger
+
+Gating both edges at `max(0, ...)` shrinks their usable range — `territory_edge_raw`
+tops out at `1 - baseline_territory_share` (e.g. ~0.83 at 6 players, ~0.5 at
+2), and `troop_edge_raw` tops out at `0.5`. Multiplied together with
+`worth_score <= 1`, the *raw* product is compressed well below 1.0 even in
+the best case (full ownership, full troop majority, max-bonus continent), so
+a flat `REWARD_ATTACK_CONTINENT_ADVANTAGE` constant tuned against that
+compressed ceiling would under-reward real advantage.
+
+Rather than bolting on a second free-floating multiplier (which is just a
+less legible way to do the same thing as raising the one constant — it has no
+independent meaning of its own), rescale each raw edge by its own maximum
+back into `[0, 1]` (as shown above: divide by `1 - baseline_territory_share`
+and by `0.5` respectively). That restores `advantage`'s natural ceiling to
+`worth_score`'s own `[0, 1]` range — same ceiling the original, ungated
+formula had — so `REWARD_ATTACK_CONTINENT_ADVANTAGE` stays the single,
+meaningful scale knob, comparable apples-to-apples against
+`REWARD_ATTACK_CONQUER_TERRITORY`/`REWARD_ATTACK_CONTINENT_CAPTURED` without
+needing a compensating bump once real data comes in. The `max(0, ...)` gate
+behavior (zero reward below baseline) is unchanged; only the *shape* above
+zero is restored to full strength.
+
+`max_bonus` does not change during a game (it's a property of the fixed
+board, not of state) — compute it once in `RewardCalculator.__init__`
+alongside `self.topology` rather than re-scanning `topology.continents` on
+every attack. Same "computed once" principle as the rest of this doc, and
+free to do since nothing about it depends on `State`.
+
+### Where it should fire
+
+Use the target territory's continent for `AttackAction`.
+
+Recommended v1 behavior:
+
+- Add `REWARD_ATTACK_CONTINENT_ADVANTAGE` as a new term, additive alongside
+  the existing `REWARD_ATTACK_CONTINENT_DOMINATION` — don't replace it. The
+  two score different signals: `DOMINATION` is a hard ownership-threshold
+  gate with no awareness of troop counts or continent value, while
+  `ADVANTAGE` is a dense, troop/value-weighted closeness signal. `DOMINATION`
+  is already tuned against the rest of the attack terms; removing it would
+  lose that gate's behavior for no benefit, since the two terms are cheap
+  to compute together and `compute()`'s composition rule is additive anyway
+  (see principle 6).
+- Apply it on every non-stop `AttackAction` into that continent, using the
+  pre-attack state so it rewards the decision, not the dice result.
+- Scale it by closeness to completion:
+  ```python
+  missing = total - owned
+  reward = REWARD_ATTACK_CONTINENT_ADVANTAGE * advantage / (missing + 1)
+  ```
+- Keep `REWARD_ATTACK_CONTINENT_CAPTURED` as the one-time completion reward;
+  this new term is the repeated "keep pushing here" signal before completion.
+
+This gives the strongest reward when the agent owns most of a valuable
+continent, has troop superiority there, and only has one or two territories
+left to conquer.
+
+### Avoid reward hacking
+
+Keep the constant smaller than the direct conquest and capture rewards at
+first. With the edge-rescaling above restoring `advantage`'s ceiling to
+`[0, 1]`, the original starting point is back in scale:
+
+```python
+REWARD_ATTACK_CONTINENT_ADVANTAGE = 1.20
+```
+
+Then compare it against the existing values:
+
+- `REWARD_ATTACK_CONQUER_TERRITORY = 1.20`
+- `REWARD_ATTACK_CONTINENT_CAPTURED = 4.00`
+- `REWARD_SHAPING_STEP_CAP = 10.0`
+
+This should make continent pressure meaningful without letting the agent farm
+continent intent instead of actually conquering territories.
+
+### Possible graph feature follow-up
+
+If reward-only shaping does not change behavior enough, add compact global
+features for each continent to `GraphAdapter.u`, from the learner's
+perspective:
+
+- owned territory fraction,
+- troop share,
+- normalized continent bonus.
+
+That is 18 new global features for 6 continents. It is more calculation than
+the reward-only version and changes the model input shape, so it should be a
+second step only after testing the reward change.
+
+### Implementation and test notes
+
+1. `RewardCalculator.__init__` caches the board-static max continent bonus.
+2. `RewardCalculator._continent_advantage(...)` computes the gated,
+   rescaled territory/troop/value signal.
+3. `_attack(...)` adds the term for non-stop `AttackAction`, alongside the
+   existing domination term.
+4. Focused reward tests should stay in `Temp/tests/test_reward.py`; no new
+   test file is needed for this subsystem.

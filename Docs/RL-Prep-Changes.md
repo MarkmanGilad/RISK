@@ -188,6 +188,19 @@ only within that one file's `Player`/`Card` unit tests — different enough
 purpose from the `conftest.py` builders that folding them in would blur
 what each helper is for, for no real line-count win.
 
+## Follow-up pass: rendered self-play last-move attribution
+
+`SelfPlay.play_rendered` now captures the acting player id and any pending
+attack before `env.step(action)`. This matches `AppLoop._apply` and matters
+for turn-ending actions like skip-fortify: `Environment.step` mutates the
+live `State` in place and immediately advances to the next player, so using
+`state.current_player_index` after the step could label the previous
+player's action as the new current player's "Last move" in the training HUD.
+
+Added a regression in `test_self_play.py` that forces a skip-fortify turn
+advance and asserts the rendered description still names the player who
+actually acted.
+
 ## Follow-up pass: multi-step reinforcement (DQN action-space prep)
 
 Context: designing how to feed actions into a DQN ([Docs/Action.md](Action.md)'s
@@ -687,20 +700,21 @@ Implemented the previously-deferred DQN update, closing out Net A's
 - `GNN_DQN_Agent.__init__` gained `gamma`, `lr`, `target_update_every`
   kwargs and now owns an `Adam` optimizer over `self.net.parameters()`.
 - `train_step(batch_size)` samples a minibatch from `self.replay_buffer`,
-  computes `Q(s, a)` for the taken actions via the online net
-  (`_current_q`), computes `max_a' Q_target(s', a')` via the target net
-  (`_max_next_q`), and takes one Huber-loss gradient step. Target net is
+  computes `Q(s, a)` for the taken actions via the online net (`_q_value`),
+  computes the Double-DQN next-state value via `_max_next_ddqn_q` (online
+  net selects the best legal next action, target net evaluates it), and
+  takes one Huber-loss gradient step with gradient clipping. Target net is
   hard-synced to the online net every `target_update_every` calls (chosen
   over a soft/Polyak update, per request).
-- `_max_next_q`'s candidate count varies per transition (`next_state`'s
+- `_max_next_q`/`_max_next_ddqn_q` candidate count varies per transition (`next_state`'s
   own `legal_actions()` count), so every transition's candidates are
-  built/batched/scored in **one** target-net forward pass across the whole
-  minibatch, then reduced to one max per transition via
-  `torch_geometric.utils.scatter(..., reduce="max")` keyed by a per-row
-  transition index — avoids one forward pass per transition. Rows for
-  `done` transitions are skipped entirely (their target contribution is
-  `0` by construction).
-- `_current_q` builds one graph row per `(state, action)` pair directly
+  built/batched/scored across the whole minibatch — avoids one forward pass
+  per transition. The original `_max_next_q` keeps the target-net max path
+  for easy rollback; `_max_next_ddqn_q` scores candidates with both online
+  and target nets, then takes the target-net value at the action selected
+  by the online net. Rows for `done` transitions are skipped entirely
+  (their target contribution is `0` by construction).
+- `_q_value` builds one graph row per `(state, action)` pair directly
   (`ActionGraphBuilder`/`ActionEncoder.encode_one`), rather than going
   through `ActionEncoder.encode_many`/`score_actions`'s "one state, many
   candidate actions" shape — each replay transition has its own `state`,
@@ -776,10 +790,10 @@ the attribute along with everything else).
   `optimizer`/`replay_buffer` persist — lets one learner train across many
   episodes instead of being rebuilt (and losing its weights) every time.
 - Every adapter call (`score_actions`, `device_report`, `_q_value`,
-  `_max_next_q`, the constructor's dimension probe) now passes
+  `_max_next_q`/`_max_next_ddqn_q`, the constructor's dimension probe) now passes
   `perspective` — `self.player_id` for live inference, the buffer's
   per-transition `perspective` tensor for training (`_q_value`/
-  `_max_next_q` build each row's graph from *that transition's* seat, not
+  `_max_next_q`/`_max_next_ddqn_q` build each row's graph from *that transition's* seat, not
   whatever seat the agent currently happens to be attached to).
 - `remember(...)` captures `perspective=self.player_id` at push time.
 
@@ -957,9 +971,15 @@ DQN behavior. This is much more expensive: each `learn()` call runs a full
 GNN forward+backward over `batch_size` transitions, measured at ~295ms for
 `batch_size=128` on this machine's GPU vs ~82ms for `batch_size=32`. With
 episodes often running 1000+ agent turns, this is the difference between
-~5 minutes and ~80 seconds of pure gradient compute per episode. Lowered
-`BATCH_SIZE` in `train_constants.py` from `128` to `32` to keep per-turn
-learning affordable.
+~5 minutes and ~80 seconds of pure gradient compute per episode. The current
+`BATCH_SIZE` in `train_constants.py` is `64`, a middle ground between noisy
+updates and per-turn training cost.
+
+Follow-up: after an unstable run plateaued, the training defaults were tuned
+for more conservative DQN learning: epsilon now decays over 200 episodes,
+Net A uses the Double-DQN target helper (`_max_next_ddqn_q`), `train_step`
+uses Huber loss (`smooth_l1_loss`), and gradients are clipped before the
+optimizer step.
 
 ## Follow-up pass: `RewardCalculator` — dense per-step reward shaping
 
@@ -1107,3 +1127,61 @@ it in place was actively misleading, not just unused.
 - Ran a full `Trainer(...).train(n_episodes=1)` with `use_wandb=False` end
   to end (thousands of real steps) with no exceptions, confirming the
   logging/metrics wiring doesn't break the existing training loop.
+
+## Follow-up pass: continent-advantage attack reward
+
+Implements `Docs/Reward.md`'s continent-advantage shaping term. The goal is
+to help the agent convert a local attack advantage into an actual continent
+plan, instead of only learning which adjacent territory is attackable.
+
+`risk/learning/reward.py` now caches the board-static maximum continent
+bonus in `RewardCalculator.__init__` and adds a private
+`_continent_advantage(...)` helper. The helper scores the attack target's
+continent from the pre-attack state using three gated signals:
+
+- territory edge above the alive-player baseline,
+- troop majority edge inside that continent,
+- normalized continent bonus value.
+
+Each edge is rescaled back to `[0, 1]` after gating, then multiplied by the
+continent value. `_attack(...)` adds the resulting
+`REWARD_ATTACK_CONTINENT_ADVANTAGE * advantage / (missing + 1)` term
+alongside the existing `REWARD_ATTACK_CONTINENT_DOMINATION` term; the
+one-time `REWARD_ATTACK_CONTINENT_CAPTURED` reward is unchanged.
+
+`risk/learning/train_constants.py` gained
+`REWARD_ATTACK_CONTINENT_ADVANTAGE = 1.20`, exported through `__all__`, so
+the new scale lives with the rest of the reward tuning knobs. `Docs/Reward.md`
+was updated in the constant checklist, proposed values, and implementation
+notes.
+
+**Verified:** direct `RISK` virtualenv checks pass:
+`python -m pytest Temp\tests\test_reward.py -q` -> 16 passed, and
+`python -m compileall risk\learning\reward.py risk\learning\train_constants.py`
+also passed. Full `Temp/tests` currently reaches 256 passed / 1 skipped, then
+fails 3 existing `test_training_logger.py` cases because the tests call a
+missing public `TrainingLogger.save_checkpoint(...)` method; those failures
+are outside this reward change.
+
+## Follow-up pass: trainer evaluation wiring
+
+`Trainer` now constructs an `Evaluator` alongside `TrainingLogger` and, every
+`EVAL_EVERY_EPISODES`, runs deterministic eval before episode metrics are
+logged. Eval metrics are merged into the same W&B row as the training episode,
+including `eval_saved_best`, then normal resume checkpointing still runs as
+before. Best-model policy saves are owned by `Evaluator`; resume checkpoints
+remain owned by `TrainingLogger`.
+
+**Verified:**
+- New `Temp/tests/test_evaluator.py` (6 cases): `evaluate(...)`'s returned
+  metric keys/`episode`/`eval_games` count, `epsilon`/`train_mode` restored
+  after eval, determinism across repeated `evaluate(...)` calls on the same
+  agent/episode, the score formula's weights, and `maybe_save_best(...)`'s
+  top-N retention plus its rejection of a score below the worst kept.
+- `python -m pytest Temp/tests -q` → 262 passed, 1 skipped; the only
+  failures are the pre-existing 3 `test_training_logger.py` cases unrelated
+  to this change (confirmed via `git stash` against plain `main`).
+- Ran a real `Trainer(run_id=999, use_wandb=False, resume=False).train(
+  n_episodes=1)` with `EVAL_EVERY_EPISODES`/`MAX_STEPS_PER_EPISODE`
+  temporarily lowered, end to end with no exceptions — confirmed it writes
+  `Checkpoints/run_999/best/best_ep000001_score....pt` and `manifest.json`.

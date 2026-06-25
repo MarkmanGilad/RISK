@@ -32,15 +32,17 @@ set it in the shell before running the suite).
 | `test_human_input.py` | `HumanInputController` — the interactive UI decision-builder (clicks, HUD buttons/fields, widget view-models) |
 | `test_game_loop.py` | `Game` (the tick-based app loop) and the `risk.app.main` entry point |
 | `test_ui.py` | Hit-testing (`TerritoryHitTester`) and the init/setup screen |
-| `test_self_play.py` | `SelfPlay.play_headless` — multi-seed fuzz test, full AI-only games played to an actual winner |
+| `test_self_play.py` | `SelfPlay.play_headless` — multi-seed fuzz test, full AI-only games played to an actual winner; rendered last-move attribution for turn-advance actions |
 | `test_reward.py` | `RewardCalculator` — terminal semantics (win/loss/not-done) plus one case per phase shaping helper (`TRADE_IN`/`REINFORCE_PLACE`/`ATTACK`/`OCCUPY`/`FORTIFY`/`end_of_turn`) |
+| `test_evaluator.py` | `Evaluator` (`Docs/Eval.md`) — `evaluate(...)`'s returned metric keys/determinism and `epsilon`/`train_mode` restore, `maybe_save_best(...)`'s top-N retention and manifest sorting |
 | `test_training_logger.py` | `TrainingLogger` — config building, checkpoint path/cadence orchestration (`save_checkpoint`/`try_resume`), no-op behavior with W&B disabled. Agent-internals round-tripping stays in `test_agents.py` (below) |
 
 `risk/learning/` (the RL layer — `GraphAdapter`, `ActionGraphBuilder`,
 `Encoder`, `Heads`, `GNN_DQN`, `ReplayBuffer`, `ActionEncoder`) has limited
-checked-in tests so far, with `RewardCalculator` (`test_reward.py`) and
-`TrainingLogger` (`test_training_logger.py`) the exceptions — both fully
-covered per their respective design docs. `test_agents.py` also covers
+checked-in tests so far, with `RewardCalculator` (`test_reward.py`),
+`TrainingLogger` (`test_training_logger.py`), and `Evaluator`
+(`test_evaluator.py`) the exceptions — each fully covered per their
+respective design docs. `test_agents.py` also covers
 `GNN_DQN_Agent.save_checkpoint`/`load_checkpoint` (full training-state
 round trip) alongside its existing `save_params`/`load_params` (policy-only)
 test — see "Ad-hoc verification" below for how the rest has been validated

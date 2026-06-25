@@ -55,10 +55,14 @@ from risk.app.setup import SetupStage
 from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
 from risk.agents.random_agent import RandomAgent
 from risk.game.actions import FortifyAction
+from risk.learning.evaluator import Evaluator
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.train_constants import (
     BATCH_SIZE,
     CHECKPOINT_DIR,
+    EVAL_EVERY_EPISODES,
+    EVAL_KEEP_BEST,
+    EVAL_MAX_STEPS,
     EPSILON_DECAY_EPISODES,
     EPSILON_END,
     EPSILON_START,
@@ -86,6 +90,7 @@ class Trainer:
         run_id: int,
         *,
         agent: Optional[GNN_DQN_Agent] = None,
+        evaluator: Optional[Evaluator] = None,
         logger: Optional[TrainingLogger] = None,
         use_wandb: bool = True,
         resume: bool = True,
@@ -106,6 +111,11 @@ class Trainer:
 
         self.logger = logger or TrainingLogger(
             run_id, self.checkpoint_dir, use_wandb=use_wandb, resume=resume, notes=notes
+        )
+        self.evaluator = evaluator or Evaluator(
+            max_steps=EVAL_MAX_STEPS,
+            keep_best=EVAL_KEEP_BEST,
+            best_dir=self.checkpoint_dir / "best",
         )
         self.logger.start_run(agent=self.agent, trainer=self)
         resumed = self.logger.try_resume(agent=self.agent)
@@ -222,6 +232,11 @@ class Trainer:
                 "territories_conquered": territories_conquered,
                 "agent_turns_survived": agent_turns,
             }
+            if self.episode % EVAL_EVERY_EPISODES == 0:
+                eval_result = self.evaluator.evaluate(self.agent, episode=self.episode)
+                saved_best = self.evaluator.maybe_save_best(self.agent, eval_result)
+                eval_result["eval_saved_best"] = int(saved_best)
+                metrics.update(eval_result)
             self.logger.log_episode(episode=self.episode, metrics=metrics)
             self.logger.checkpoint(episode=self.episode, agent=self.agent)
             if step_count > 0:
@@ -278,7 +293,7 @@ class Trainer:
             seat=seat,
             current_state=current_state,
         )
-        print(status_line, end="\r", flush=True)
+        print(f"\033[K{status_line}", end="\r", flush=True)
 
 
 def main() -> None:
@@ -286,7 +301,7 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 11
+    RUN_ID = 14
 
     trainer = Trainer(RUN_ID)
     trainer.train(n_episodes=TRAIN_EPISODES)

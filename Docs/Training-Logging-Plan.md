@@ -33,7 +33,7 @@ Out of scope (for this pass):
 - Local metric plotting/history files.
 - UI changes.
 - The existing `\r` console progress print in `Trainer.train(...)`
-  (`run=... ep=.../... steps=... agent_turns=... agent_terr=... others_terr_total=... others_terr_by_player=[pX:n,...] agent_cont=K[...] armies=[p0:n,p1:n,...]`).
+  (`run ... | episode .../... | step ... | turn ... | territories agent vs others [pX:n,...] | continents K [...] | armies [p0:n,p1:n,...]`).
   Stays independent
   of `TrainingLogger` — it's the simple "is the trainer alive and roughly
   where is it" signal, distinct from W&B's episode-level metrics. Not folded
@@ -118,8 +118,8 @@ Only local artifacts required:
 - optional trainer counters (`episode`, any rolling stats needed for scheduling)
 
 Current exploration schedule: epsilon decays linearly from `EPSILON_START`
-to `EPSILON_END` over 100 episodes (`EPSILON_DECAY_EPISODES = 100`) so
-early training becomes less random quickly enough to show first signals.
+to `EPSILON_END` over 200 episodes (`EPSILON_DECAY_EPISODES = 200`) so
+early training keeps exploration active longer before mostly exploiting.
 Training episodes are truncated at `MAX_STEPS_PER_EPISODE = 2000` total
 environment steps, counting both learner and opponent actions.
 

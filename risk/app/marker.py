@@ -82,7 +82,10 @@ class ActionMarker:
     def describe_action(action: Action, player_name: str, pre_pending=None) -> str:
         """Human-readable one-line summary of an executed action."""
         if isinstance(action, ReinforcementAction):
-            return f"{player_name} reinforced {action.total} armies"
+            placed = ", ".join(
+                f"{t}:{n}" for t, n in action.placements.items() if n > 0
+            )
+            return f"{player_name} reinforced {action.total} armies ({placed})"
         if isinstance(action, TradeInAction):
             return f"{player_name} traded a card set"
         if isinstance(action, AttackAction):
@@ -119,6 +122,12 @@ class ActionMarker:
         `describe_action`.
         """
         info = info or {}
+        if isinstance(action, ReinforcementAction):
+            lines = [f"{player_name} reinforced {action.total} armies"]
+            lines.extend(
+                f"  {t}: +{n}" for t, n in action.placements.items() if n > 0
+            )
+            return tuple(lines)
         if isinstance(action, AttackAction):
             a_loss = info.get("attacker_losses", 0)
             d_loss = info.get("defender_losses", 0)

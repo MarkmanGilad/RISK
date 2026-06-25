@@ -324,13 +324,51 @@ class GNN_DQN_Agent(BaseAgent):
         max_q[touched] = per_group_max[touched]
         return max_q
 
+    def _max_next_ddqn_q(self, next_states: Sequence[State], done: torch.Tensor,
+                         next_stage: torch.Tensor) -> torch.Tensor:
+        """Double-DQN next-state value: online net selects, target net evaluates."""
+        max_q = torch.zeros(len(next_states), dtype=torch.float32, device=self.device)
+        rows: list[Data] = []
+        groups: list[int] = []
+        card_rows: list[tuple[int, int, int]] = []
+        for i, ns in enumerate(next_states):
+            if bool(done[i]):
+                continue
+            legal = self.env.legal_actions(ns)
+            if not legal:
+                continue
+            base = self.adapter(ns, perspective=ns.perspective)
+            for a in legal:
+                rows.append(self.builder(base, a, ns))
+                groups.append(i)
+                card_rows.append(a.dqn_index(self.env.topology, ns)[1:])
+
+        if not rows:
+            return max_q
+
+        group_index = torch.tensor(groups, dtype=torch.long)
+        phase = next_stage[group_index]
+        card_indices = torch.tensor(card_rows, dtype=torch.long)
+        with torch.no_grad():
+            q_online = self._score(self.net, rows, phase, card_indices)
+            q_target = self._score(self.target_net, rows, phase, card_indices)
+
+        best_online_by_group: dict[int, float] = {}
+        for group, online_value, target_value in zip(groups, q_online, q_target):
+            online_scalar = float(online_value.item())
+            if group not in best_online_by_group or online_scalar > best_online_by_group[group]:
+                best_online_by_group[group] = online_scalar
+                max_q[group] = target_value
+        return max_q
+
     def train_step(self, batch_size: int) -> float:
         """One DQN TD-error update from a sampled replay minibatch.
 
-        `Q(s, a)` (online net, gradients on) vs. `r + gamma * (1 - done) *
-        max_a' Q(s', a')` (target net, no gradients) — standard DQN, Huber
-        loss. Returns the scalar loss. Target net is hard-synced to the
-        online net every `target_update_every` calls.
+        `Q(s, a)` (online net, gradients on) vs. the Double-DQN target:
+        the online net selects the next action and the target net evaluates
+        it. Uses Huber loss plus gradient clipping, and returns the scalar
+        loss. Target net is hard-synced to the online net every
+        `target_update_every` calls.
         """
         states, actions, reward, next_states, done, stage, next_stage = (
             self.replay_buffer.sample(batch_size)
@@ -339,13 +377,14 @@ class GNN_DQN_Agent(BaseAgent):
         done = done.to(self.device)
 
         q_value = self._q_value(states, actions, stage)
-        max_next_q = self._max_next_q(next_states, done, next_stage)
+        max_next_q = self._max_next_ddqn_q(next_states, done, next_stage)
         target_q = reward + self.gamma * (~done).float() * max_next_q
 
-        loss = F.mse_loss(q_value, target_q.detach())
+        loss = F.smooth_l1_loss(q_value, target_q.detach())
 
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.net.parameters(), 10.0)
         self.optimizer.step()
 
         self._train_steps += 1

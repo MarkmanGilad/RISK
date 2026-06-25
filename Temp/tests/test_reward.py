@@ -21,7 +21,12 @@ from risk.learning.train_constants import (
     REWARD_ATTACK_ARMY_TRADE,
     REWARD_ATTACK_CONQUER_TERRITORY,
     REWARD_ATTACK_CONQUER_WITH_CARD,
+    REWARD_ATTACK_CONTINENT_ADVANTAGE,
+    REWARD_ATTACK_CONTINENT_DOMINATION,
     REWARD_ATTACK_FEWER_DICE,
+    REWARD_ATTACK_RATIO_CAP,
+    REWARD_ATTACK_RATIO_SCALE,
+    REWARD_ATTACK_RATIO_THRESHOLD,
     REWARD_ATTACK_STOP_WITHOUT_CARD,
     REWARD_CONTINENT_DELTA_RELATIVE,
     REWARD_FORTIFY_CONTINENT_PUSH,
@@ -295,6 +300,87 @@ def test_attack_stop_without_card_penalty() -> None:
     )
 
     assert reward == pytest.approx(REWARD_ATTACK_STOP_WITHOUT_CARD)
+
+
+def test_attack_continent_advantage_rewards_real_edge() -> None:
+    """Owning most of Australia with troop majority should add a positive,
+    gated continent-advantage term on top of ratio/domination."""
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.owners = [1] * len(state.owners)
+
+    eastern, new_guinea, western, indonesia = (
+        "EasternAustralia", "NewGuinea", "WesternAustralia", "Indonesia"
+    )
+    for terr in (eastern, new_guinea, western):
+        state.owners[topo.index_of(terr)] = 0
+        state.armies[topo.index_of(terr)] = 5
+    state.armies[topo.index_of(indonesia)] = 3  # stays owner 1 (the attack target)
+
+    state.current_player_index = 0
+    state.eliminated = set()
+    state.hands = [[], [], []]
+    state.conquered_this_turn = False
+
+    fi, ti = topo.index_of(western), topo.index_of(indonesia)
+    action = AttackAction(from_territory=western, to_territory=indonesia, dice=3)  # == max dice
+    info = {"defender_losses": 0, "attacker_losses": 0, "conquered": False, "eliminated": None}
+
+    reward = calc.compute(
+        action=action, info=info, before=state, after=state,
+        reward_player=0, done=False, winner=None,
+    )
+
+    continent = topo.continent_of(indonesia)
+    owned, total = topo.continent_owner_counts(state.owners, continent, 0)
+    alive_players = 3
+    my_troops = sum(state.armies[i] for i in topo.continent_member_indices(continent) if state.owners[i] == 0)
+    other_troops = sum(state.armies[i] for i in topo.continent_member_indices(continent) if state.owners[i] != 0)
+    baseline = 1 / alive_players
+    territory_edge = max(0.0, owned / total - baseline) / (1 - baseline)
+    troop_edge = max(0.0, my_troops / (my_troops + other_troops) - 0.5) / 0.5
+    worth = topo.continent_bonus(continent) / max(topo.continent_bonus(c) for c in topo.continents)
+    advantage = territory_edge * troop_edge * worth
+
+    ratio = state.armies[fi] / state.armies[ti]
+    expected_ratio = REWARD_ATTACK_RATIO_SCALE * (min(ratio, REWARD_ATTACK_RATIO_CAP) - REWARD_ATTACK_RATIO_THRESHOLD)
+    margin_left = total - owned
+    expected_domination = REWARD_ATTACK_CONTINENT_DOMINATION * (1.0 / (margin_left + 1))
+    expected_advantage = REWARD_ATTACK_CONTINENT_ADVANTAGE * advantage / (margin_left + 1)
+
+    assert advantage > 0  # sanity: the scenario really does cross both gates
+    assert reward == pytest.approx(expected_ratio + expected_domination + expected_advantage)
+
+
+def test_attack_continent_advantage_zero_below_territory_baseline() -> None:
+    """Owning only 1 of 12 Asia territories (well under the 1/alive_players
+    baseline) must contribute zero, regardless of troop majority there."""
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.owners = [1] * len(state.owners)
+    from_t, to_t = "Afghanistan", "China"
+    fi, ti = topo.index_of(from_t), topo.index_of(to_t)
+    state.owners[fi] = 0
+    state.armies[fi] = 20  # troop majority in Asia, but territory share is far below baseline
+    state.armies[ti] = 2
+    state.current_player_index = 0
+    state.eliminated = set()
+    state.hands = [[], [], []]
+    state.conquered_this_turn = False
+
+    action = AttackAction(from_territory=from_t, to_territory=to_t, dice=3)  # == max dice, no fewer-dice penalty
+    info = {"defender_losses": 0, "attacker_losses": 0, "conquered": False, "eliminated": None}
+
+    reward = calc.compute(
+        action=action, info=info, before=state, after=state,
+        reward_player=0, done=False, winner=None,
+    )
+
+    ratio = state.armies[fi] / state.armies[ti]
+    expected_ratio = REWARD_ATTACK_RATIO_SCALE * (min(ratio, REWARD_ATTACK_RATIO_CAP) - REWARD_ATTACK_RATIO_THRESHOLD)
+    assert reward == pytest.approx(expected_ratio)  # no domination, no advantage term
 
 
 # --- OCCUPY ------------------------------------------------------------------

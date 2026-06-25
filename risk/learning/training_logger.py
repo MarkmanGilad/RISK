@@ -117,15 +117,15 @@ class TrainingLogger:
         armies_detail = ",".join(
             f"p{player_id}:{count}" for player_id, count in sorted(armies_by_player.items())
         )
-        continents_detail = ",".join(agent_continents) if agent_continents else "-"
+        continents_detail = (
+            ",".join(c[:3] for c in agent_continents) if agent_continents else "none"
+        )
         return (
-            f"run={self.run_id:03d} ep={episode}/{n_episodes} "
-            f"steps={step_count} agent_turns={agent_turns} "
-            f"agent_terr={agent_territories} "
-            f"others_terr_total={other_territories} "
-            f"others_terr_by_player=[{others_territories_detail}] "
-            f"agent_cont={len(agent_continents)}[{continents_detail}] "
-            f"armies=[{armies_detail}]"
+            f"run {self.run_id:03d} | episode {episode:>4d}/{n_episodes} | "
+            f"step {step_count:>4d} | turn {agent_turns:>3d} | "
+            f"territories {agent_territories:>2d} vs {other_territories:>2d} [{others_territories_detail}] | "
+            f"continents {len(agent_continents)} [{continents_detail}] | "
+            f"armies [{armies_detail}]"
         )
 
     def checkpoint(self, *, episode: int, agent: GNN_DQN_Agent) -> tuple[bool, Optional[Path]]:

@@ -1,14 +1,13 @@
 # Network architectures — DQN × PPO, injection × lookup (plan)
 
-Planning doc for the network(s) that sit on top of
+Planning/reference doc for the network(s) that sit on top of
 [`GraphAdapter`](GraphAdapter.md) and [`Action.md`](Action.md) to choose
-actions. Shared-foundation pieces are being built incrementally — see
-[ActionGraphBuilder.md](ActionGraphBuilder.md) (implemented) — but
-none of the four nets themselves exist yet: no `risk/learning/encoder.py`,
-`q_network.py`, or `policy_network.py`. This supersedes the earlier
-split into `QNetwork.md` (DQN) and `PPOPolicy.md` (PPO) — those covered one
-combination each and would have repeated the shared structure twice; this
-doc covers all four combinations against one shared foundation instead.
+actions. The shared foundation and Net A (`GNN_DQN`, the DQN + injection
+variant) are implemented; the lookup/PPO variants remain planned comparison
+points. This supersedes the earlier split into `QNetwork.md` (DQN) and
+`PPOPolicy.md` (PPO) — those covered one combination each and would have
+repeated the shared structure twice; this doc covers all four combinations
+against one shared foundation instead.
 
 ---
 
@@ -37,6 +36,11 @@ how an action gets *into* the network and at what cost. That's four nets:
 The plan is to build and train all four against the same self-play setup
 and find out empirically which fits Risk best, rather than deciding by
 argument — see "Experiment plan" at the end.
+
+Current Net A training uses `_max_next_ddqn_q`, a Double-DQN target: the
+online net selects the best next action, while the target net evaluates that
+selected action. The original target-net max helper remains in
+`GNN_DQN_Agent` so the trainer can be switched back by changing one call site.
 
 ---
 
@@ -303,15 +307,12 @@ classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
   `phase`/`card_indices` tensors, merges scores back to `legal_actions()`'s
   order, `argmax`s. This is the piece that actually knows what a
   `State`/`Action` is.
-  - `train_step(batch_size)` — one DQN TD-error update: samples a
+   - `train_step(batch_size)` — one Double-DQN TD-error update: samples a
     minibatch from `self.replay_buffer`, scores the taken `(state,
-    action)` pairs with the online net, scores every legal action of each
-    `next_state` with the target net (one batched forward pass over *all*
-    transitions' candidates at once, reduced back to a per-transition max
-    via `torch_geometric.utils.scatter(..., reduce="max")` keyed by a
-    per-row transition index — cheaper than one forward pass per
-    transition), Huber loss against `r + gamma * (1 - done) * max_a'
-    Q_target(s', a')`, one optimizer step. Target net is hard-synced to
+      action)` pairs with the online net, lets the online net select the best
+      legal action of each `next_state`, evaluates those selected actions
+      with the target net, then applies Huber loss against the Double-DQN
+      target plus gradient clipping before one optimizer step. Target net is hard-synced to
     the online net every `target_update_every` calls (an `Adam` optimizer
     and `gamma`/`lr`/`target_update_every` are now `GNN_DQN_Agent`
     constructor kwargs). Verified against a real self-play rollout: online
@@ -341,9 +342,10 @@ argmax -> chosen action                                          <- back to the 
 ```
 
 `N` GNN forward passes per decision (batched into one call, but still `N`
-node-sets through the encoder). Loss: standard DQN TD error against a
-target network, off-policy replay buffer. This is the design originally in
-`QNetwork.md`.
+node-sets through the encoder). Training uses off-policy replay with a
+Double-DQN target: the online net selects the next action and the target net
+evaluates that selected action. This is the design originally in `QNetwork.md`,
+with the training target updated after the first stability runs.
 
 ## Net B — DQN + lookup
 

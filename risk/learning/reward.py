@@ -35,6 +35,7 @@ from risk.learning.train_constants import (
     REWARD_ARMY_DELTA_RELATIVE_SCALE,
     REWARD_ATTACK_ARMY_TRADE,
     REWARD_ATTACK_CARD_TERRITORY_MATCH,
+    REWARD_ATTACK_CONTINENT_ADVANTAGE,
     REWARD_ATTACK_CONTINENT_CAPTURED,
     REWARD_ATTACK_CONTINENT_DOMINATION,
     REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN,
@@ -72,6 +73,10 @@ class RewardCalculator:
 
     def __init__(self, topology: BoardTopology) -> None:
         self.topology = topology
+        self._max_continent_bonus = max(
+            (self.topology.continent_bonus(c) for c in self.topology.continents),
+            default=0,
+        )
 
     def compute(
         self,
@@ -180,6 +185,32 @@ class RewardCalculator:
         continent = self.topology.continent_of(territory)
         owned, total = self.topology.continent_owner_counts(state.owners, continent, pid)
         return scale * (owned / total) / total
+
+    def _continent_advantage(
+        self, state: State, pid: int, continent: str, alive_players: int, owned: int, total: int
+    ) -> float:
+        if alive_players <= 0 or total <= 0 or self._max_continent_bonus <= 0:
+            return 0.0
+
+        my_troops = 0
+        other_troops = 0
+        for idx in self.topology.continent_member_indices(continent):
+            if state.owners[idx] == pid:
+                my_troops += state.armies[idx]
+            else:
+                other_troops += state.armies[idx]
+
+        troop_total = my_troops + other_troops
+        territory_score = owned / total
+        troop_score = my_troops / troop_total if troop_total else 0.0
+        worth_score = self.topology.continent_bonus(continent) / self._max_continent_bonus
+
+        baseline_territory_share = 1.0 / alive_players
+        territory_edge_raw = max(0.0, territory_score - baseline_territory_share)
+        troop_edge_raw = max(0.0, troop_score - 0.5)
+        territory_edge = territory_edge_raw / max(1.0 - baseline_territory_share, _EPS)
+        troop_edge = troop_edge_raw / 0.5
+        return territory_edge * troop_edge * worth_score
 
     # --- TRADE_IN -----------------------------------------------------------
 
@@ -293,6 +324,9 @@ class RewardCalculator:
         if alive_players > 0 and (owned / total) >= (1 / alive_players + REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN):
             margin_left = total - owned
             reward += REWARD_ATTACK_CONTINENT_DOMINATION * (1.0 / (margin_left + 1))
+
+        advantage = self._continent_advantage(before, pid, continent, alive_players, owned, total)
+        reward += REWARD_ATTACK_CONTINENT_ADVANTAGE * advantage / (total - owned + 1)
 
         reward += REWARD_ATTACK_ARMY_TRADE * (
             info.get("defender_losses", 0) - info.get("attacker_losses", 0)

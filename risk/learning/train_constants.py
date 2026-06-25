@@ -25,19 +25,19 @@ TRAIN_OPPONENT_AGENT_KINDS: Final[tuple[str, ...]] = (
 
 # --- Replay / gradient update -----------------------------------------------
 
-BATCH_SIZE: Final[int] = 32
+BATCH_SIZE: Final[int] = 64
 TRAIN_STEPS_PER_CALL: Final[int] = 1  # gradient steps taken each time
 
 # --- Exploration (epsilon-greedy, linear decay by episode) ------------------
 
 EPSILON_START: Final[float] = 1.0
 EPSILON_END: Final[float] = 0.05
-EPSILON_DECAY_EPISODES: Final[int] = 100  # episode at which epsilon reaches EPSILON_END
+EPSILON_DECAY_EPISODES: Final[int] = 200  # episode at which epsilon reaches EPSILON_END
 
 # --- Run control -------------------------------------------------------------
 
 # Default episode count when running `python -m risk.learning.trainer`.
-TRAIN_EPISODES: Final[int] = 200
+TRAIN_EPISODES: Final[int] = 10000
 
 # Print one progress line every N episodes.
 PROGRESS_EVERY: Final[int] = 10
@@ -50,6 +50,12 @@ ROLLING_WIN_RATE_WINDOW: Final[int] = 50
 CHECKPOINT_DIR: Final[str] = "Checkpoints"
 CHECKPOINT_AFTER: Final[int] = 200   # don't checkpoint before this episode
 CHECKPOINT_EVERY: Final[int] = 200   # save every N episodes after that
+
+# --- Evaluation (see Docs/Eval.md) -------------------------------------------
+
+EVAL_EVERY_EPISODES: Final[int] = 50
+EVAL_KEEP_BEST: Final[int] = 5
+EVAL_MAX_STEPS: Final[int] = MAX_STEPS_PER_EPISODE
 
 # --- Reward (see Docs/Reward.md) ---------------------------------------------
 
@@ -73,6 +79,7 @@ REWARD_ATTACK_RATIO_CAP: Final[float] = 3.00
 REWARD_ATTACK_RATIO_THRESHOLD: Final[float] = 1.50
 REWARD_ATTACK_CONTINENT_DOMINATION: Final[float] = 0.80
 REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN: Final[float] = 0.10
+REWARD_ATTACK_CONTINENT_ADVANTAGE: Final[float] = 1.20
 REWARD_ATTACK_ARMY_TRADE: Final[float] = 0.60
 REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD: Final[float] = 1.25
 REWARD_ATTACK_CONTINENT_CAPTURED: Final[float] = 4.00
@@ -109,6 +116,9 @@ __all__ = [
     "CHECKPOINT_DIR",
     "CHECKPOINT_AFTER",
     "CHECKPOINT_EVERY",
+    "EVAL_EVERY_EPISODES",
+    "EVAL_KEEP_BEST",
+    "EVAL_MAX_STEPS",
     "REWARD_SHAPING_STEP_CAP",
     "REWARD_TERMINAL_WIN",
     "REWARD_TERMINAL_LOSS",
@@ -125,6 +135,7 @@ __all__ = [
     "REWARD_ATTACK_RATIO_THRESHOLD",
     "REWARD_ATTACK_CONTINENT_DOMINATION",
     "REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN",
+    "REWARD_ATTACK_CONTINENT_ADVANTAGE",
     "REWARD_ATTACK_ARMY_TRADE",
     "REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD",
     "REWARD_ATTACK_CONTINENT_CAPTURED",
