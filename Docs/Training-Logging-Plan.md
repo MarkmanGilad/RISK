@@ -89,6 +89,9 @@ doesn't own). Cleaner split, matching how `Environment` calls
   (`CHECKPOINT_AFTER`, `CHECKPOINT_EVERY`) and calls `agent.save_checkpoint(path)`
   if needed — no direct attribute access into the agent's internals, and trainer
   never sees interval logic.
+- `TrainingLogger.save_checkpoint(episode, agent)` is the immediate/manual
+  helper used by tests and ad-hoc scripts when interval checks should be
+  bypassed.
 
 ## 2) W&B backend behavior
 If `use_wandb=True` and `wandb` is available:

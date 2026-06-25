@@ -148,6 +148,11 @@ class TrainingLogger:
         agent.save_checkpoint(path)
         return path
 
+    def save_checkpoint(self, *, episode: int, agent: GNN_DQN_Agent) -> Path:
+        """Save a full checkpoint immediately, bypassing interval checks."""
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        return self._save_checkpoint(episode=episode, agent=agent)
+
     def try_resume(self, *, agent: GNN_DQN_Agent) -> Optional[dict]:
         if not self.resume:
             return None
