@@ -210,6 +210,14 @@ metric below earns its place as a distinct, non-redundant signal:
   monotonically decrease, since the bootstrapped target keeps moving) — a
   diagnostic for "is training still healthy" (bounded, not NaN/diverging),
   to check when the other metrics plateau or behave strangely.
+- `reward_component_*` — per-episode sum of each named reward term
+  (`trade_in`, `reinforce`, `attack`, `occupy`, `fortify`, `shaping_raw`,
+  `shaping_clipped`, `terminal`, `territory_delta`, `army_delta`,
+  `continent_delta`; `Docs/Reward.md`'s "Per-component logging"). Lets a
+  single bad shaping constant, or the dense shaping sum simply growing
+  faster than the one-time terminal reward as episodes lengthen, show up
+  directly instead of only being inferred from `reward_per_agent_turn`/
+  `territories_conquered` moving opposite to `win`.
 
 Everything else previously tracked (`episode_reward`, `eliminated`, `done`,
 `epsilon`, `max_agent_territories`, `terminal_steps`,

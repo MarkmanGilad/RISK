@@ -41,6 +41,29 @@ legal action to this builder and let it decide whether injection is needed.
 | `FORTIFY` (skip, `count == 0`) | No perturbation — same as `StopAttackAction`. |
 | `TRADE_IN` | Returns an unmodified copy of the base graph. Its head reads card-hand embeddings, never the graph (`Action.md`), so there is nothing to inject. |
 
+> **Future development — inject `TRADE_IN` like the other stages.**
+>
+> Trade-in is the one action that currently perturbs nothing, so the net
+> never sees *which* set is being cashed. A candidate `TradeInAction`
+> could be injected instead:
+>
+> - **Non-wild cards:** set a per-node flag (a new `x` column) on each
+>   card's territory. This grounds the +2 territory bonus
+>   ([Action.md](Action.md)) in board space, right next to the node's
+>   existing owner one-hot, so the GNN can weigh the bonus placements in
+>   topological context.
+> - **Wild cards:** have no territory, so they can't sit on a node. Carry
+>   them as a per-action `wilds_in_set` count written into `u` at build
+>   time. Note this is a *new capability* — `ActionGraphBuilder` today
+>   only perturbs `x`/`edge_attr` and never `u`; varying `u` per candidate
+>   action would be the new step (the `num_legal_actions` scalar in
+>   [NetworkArchitectures.md](NetworkArchitectures.md) lives in `u` but is
+>   written *per-state* by `GraphAdapter`, not per-action here).
+>
+> This complements, not replaces, the card-hand signal — node flags
+> capture the immediate territory-bonus differentiator; the residual-hand
+> ("which cards to keep") consideration still wants hand context.
+
 `edge_attr` is already present on every base graph (`GraphAdapter`,
 `Docs/GraphAdapter.md`, all-zero) — this class clones and overwrites it
 rather than building one from scratch, so it ends up on **every** action's

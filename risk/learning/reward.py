@@ -69,7 +69,13 @@ _EPS = 1e-6
 
 
 class RewardCalculator:
-    """Turns engine-produced `info`/before/after `State` into a reward float."""
+    """Turns engine-produced `info`/before/after `State` into a reward float.
+
+    Every `compute()`/`end_of_turn()` call also stashes a per-component
+    breakdown on `self.last_components`/`self.last_end_of_turn_components`
+    (`Docs/Reward.md`'s "per-component logging") — diagnostic only, read by
+    `Trainer` after each call; the float each method returns is unaffected.
+    """
 
     def __init__(self, topology: BoardTopology) -> None:
         self.topology = topology
@@ -77,6 +83,8 @@ class RewardCalculator:
             (self.topology.continent_bonus(c) for c in self.topology.continents),
             default=0,
         )
+        self.last_components: dict[str, float] = {}
+        self.last_end_of_turn_components: dict[str, float] = {}
 
     def compute(
         self,
@@ -90,14 +98,24 @@ class RewardCalculator:
     ) -> float:
         terminal = self._terminal(reward_player, done, winner)
 
-        shaping_raw = (
-            self._trade_in(action, before, reward_player)
-            + self._reinforce(action, before, after, reward_player)
-            + self._attack(action, info, before, after, reward_player)
-            + self._occupy(action, before, reward_player)
-            + self._fortify(action, before, after, reward_player)
-        )
+        trade_in = self._trade_in(action, before, reward_player)
+        reinforce = self._reinforce(action, before, after, reward_player)
+        attack = self._attack(action, info, before, after, reward_player)
+        occupy = self._occupy(action, before, reward_player)
+        fortify = self._fortify(action, before, after, reward_player)
+        shaping_raw = trade_in + reinforce + attack + occupy + fortify
         shaping = max(-REWARD_SHAPING_STEP_CAP, min(REWARD_SHAPING_STEP_CAP, shaping_raw))
+
+        self.last_components = {
+            "trade_in": trade_in,
+            "reinforce": reinforce,
+            "attack": attack,
+            "occupy": occupy,
+            "fortify": fortify,
+            "shaping_raw": shaping_raw,
+            "shaping_clipped": shaping,
+            "terminal": terminal,
+        }
         return terminal + shaping
 
     def end_of_turn(self, before_turn: State, after_turn: State, reward_player: int) -> float:
@@ -116,7 +134,7 @@ class RewardCalculator:
         my_terr_after = sum(1 for o in after_turn.owners if o == pid)
         share_before = my_terr_before / len(before_turn.owners)
         share_after = my_terr_after / len(after_turn.owners)
-        reward = REWARD_TERRITORY_DELTA * (share_after - share_before)
+        territory_delta = REWARD_TERRITORY_DELTA * (share_after - share_before)
 
         my_army_before = sum(a for o, a in zip(before_turn.owners, before_turn.armies) if o == pid)
         my_army_after = sum(a for o, a in zip(after_turn.owners, after_turn.armies) if o == pid)
@@ -124,8 +142,9 @@ class RewardCalculator:
         total_army_after = sum(after_turn.armies)
         army_share_before = my_army_before / total_army_before if total_army_before else 0.0
         army_share_after = my_army_after / total_army_after if total_army_after else 0.0
-        reward += REWARD_ARMY_DELTA_RELATIVE_SCALE * (army_share_after - army_share_before)
+        army_delta = REWARD_ARMY_DELTA_RELATIVE_SCALE * (army_share_after - army_share_before)
 
+        continent_delta = 0.0
         total_bonus = sum(self.topology.continent_bonus(c) for c in self.topology.continents)
         if total_bonus:
             my_bonus_before = sum(
@@ -138,11 +157,16 @@ class RewardCalculator:
                 for c in self.topology.continents
                 if self.topology.owns_continent(after_turn.owners, c, pid)
             )
-            reward += REWARD_CONTINENT_DELTA_RELATIVE * (
+            continent_delta = REWARD_CONTINENT_DELTA_RELATIVE * (
                 my_bonus_after / total_bonus - my_bonus_before / total_bonus
             )
 
-        return reward
+        self.last_end_of_turn_components = {
+            "territory_delta": territory_delta,
+            "army_delta": army_delta,
+            "continent_delta": continent_delta,
+        }
+        return territory_delta + army_delta + continent_delta
 
     # --- terminal -------------------------------------------------------
 

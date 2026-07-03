@@ -38,6 +38,27 @@ drawn yet this turn"), now exposed as `State.conquered_this_turn` (set in
 private `Environment` attribute, so `RewardCalculator` can read it from a
 `State` snapshot like everything else.
 
+## Per-component logging (implemented)
+
+`RewardCalculator.compute(...)` and `.end_of_turn(...)` still return the
+same clipped float they always did — training behavior is unchanged — but
+each call also stashes its term-by-term breakdown on
+`self.last_components` (`trade_in`, `reinforce`, `attack`, `occupy`,
+`fortify`, `shaping_raw`, `shaping_clipped`, `terminal`) and
+`self.last_end_of_turn_components` (`territory_delta`, `army_delta`,
+`continent_delta`) respectively — diagnostic-only, read after the fact.
+
+`Trainer.train(...)` accumulates these into a per-episode running total
+(`Trainer._accumulate_reward_components`) after every `env.step(...)`/
+`env.reward.end_of_turn(...)` call in the episode loop, then logs each as
+`reward_component_<name>` alongside the existing episode metrics
+(`win`, `reward_per_agent_turn`, etc.) via `TrainingLogger.log_episode(...)`.
+Comparing cumulative `reward_component_shaping_clipped` (and the terminal
+`reward_component_terminal`, effectively `win`'s ±100) across episodes is
+what lets a bad shaping constant — or the dense terms simply outgrowing the
+one-time terminal reward as episodes get longer — show up directly in
+training curves instead of only being inferred from behavior.
+
 ### Transition-level semantics (what actually gets remembered)
 
 The intended behavior is:
@@ -603,9 +624,8 @@ multi-trigger stacks.
    shaping vs. the existing sparse terminal-only reward.)
 3. Scale follow-up: keep only per-step clipping (`REWARD_SHAPING_STEP_CAP`),
   or also add an optional per-episode shaping cap later.
-4. Do we want per-component logging (e.g. via the planned wandb integration,
-   `Docs/RL-Prep-Changes.md`'s "no wandb yet" notes) so a bad shaping constant
-   is visible in training curves rather than just inferred from behavior?
+4. ~~Do we want per-component logging...~~ **Resolved/implemented** — see
+   "Per-component logging (implemented)" above.
 
 ## Coding plan and structure
 

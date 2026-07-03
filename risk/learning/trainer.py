@@ -137,6 +137,7 @@ class Trainer:
             territories_conquered = 0
             losses: list[float] = []
             done = False
+            reward_components: dict[str, float] = {}
 
             # Other seats may act before the learner's own seat on turn 1 —
             # play those opening moves now so the loop below only ever has to
@@ -148,6 +149,7 @@ class Trainer:
                 current_state = env.current_state()
                 action = agents[current_state.current_player_index]((), current_state)
                 env.step(action, reward_player=seat)
+                self._accumulate_reward_components(reward_components, env.reward.last_components)
                 step_count += 1
 
             while step_count < MAX_STEPS_PER_EPISODE:
@@ -158,6 +160,7 @@ class Trainer:
                 state = current_state.snapshot()
                 action = agents[seat]((), current_state)
                 result = env.step(action, reward_player=seat)
+                self._accumulate_reward_components(reward_components, env.reward.last_components)
                 reward_total = result.reward
                 step_count += 1
                 agent_turns += 1
@@ -184,6 +187,7 @@ class Trainer:
                     current_state = env.current_state()
                     action_other = agents[current_state.current_player_index]((), current_state)
                     result = env.step(action_other, reward_player=seat)
+                    self._accumulate_reward_components(reward_components, env.reward.last_components)
                     reward_total += result.reward
                     step_count += 1
                     self._print_progress_line(
@@ -205,6 +209,9 @@ class Trainer:
                 # opponent-impact terms (Docs/Reward.md) can be scored from.
                 if isinstance(action, FortifyAction):
                     reward_total += env.reward.end_of_turn(state, next_state, seat)
+                    self._accumulate_reward_components(
+                        reward_components, env.reward.last_end_of_turn_components
+                    )
 
                 territories_conquered += sum(
                     1
@@ -231,6 +238,10 @@ class Trainer:
                 "learn_loss_mean": (sum(losses) / len(losses)) if losses else 0.0,
                 "territories_conquered": territories_conquered,
                 "agent_turns_survived": agent_turns,
+                **{
+                    f"reward_component_{name}": total
+                    for name, total in reward_components.items()
+                },
             }
             if self.episode % EVAL_EVERY_EPISODES == 0:
                 eval_result = self.evaluator.evaluate(self.agent, episode=self.episode)
@@ -241,6 +252,15 @@ class Trainer:
             self.logger.checkpoint(episode=self.episode, agent=self.agent)
             if step_count > 0:
                 print()
+
+    def _accumulate_reward_components(
+        self, totals: dict[str, float], components: dict[str, float]
+    ) -> None:
+        """Add one `RewardCalculator` call's breakdown into the running
+        per-episode totals logged as `reward_component_*` (`Docs/Reward.md`
+        "per-component logging") — diagnostic only, no effect on training."""
+        for name, value in components.items():
+            totals[name] = totals.get(name, 0.0) + value
 
     def _epsilon_for_episode(self, episode: int) -> float:
         """Linear decay from `EPSILON_START` to `EPSILON_END` over `EPSILON_DECAY_EPISODES`."""
@@ -301,7 +321,7 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 20
+    RUN_ID = 21
 
     trainer = Trainer(RUN_ID)
     trainer.train(n_episodes=TRAIN_EPISODES)
