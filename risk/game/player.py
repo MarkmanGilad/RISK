@@ -17,6 +17,7 @@ AGENT_KIND_ORDER: Final[tuple[str, ...]] = (
     "raider",
     "sentinel",
     "empire",
+    "killbot",
 )
 AGENT_KIND_LABELS: Final[dict[str, str]] = {
     "human": "Human",
@@ -24,6 +25,7 @@ AGENT_KIND_LABELS: Final[dict[str, str]] = {
     "raider": "Raider",
     "sentinel": "Sentinel",
     "empire": "Empire",
+    "killbot": "Killbot",
     "ai": "AI",
 }
 ALLOWED_AGENT_KINDS: Final[frozenset[str]] = frozenset(

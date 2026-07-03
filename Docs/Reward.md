@@ -70,17 +70,25 @@ The intended behavior is:
   additional end-of-turn term comparing:
   - `before_turn`: state when that fortify was taken,
   - `after_turn`: state after all opponents have played and control returns.
+- **The action that ends the *episode* outright** (the learner's own winning
+  `AttackAction`/`OccupyAction`, which never reaches `FortifyAction`) gets
+  that same end-of-turn term too, comparing that single action's own
+  before/after state (`trainer.py`'s `if isinstance(action, FortifyAction) or
+  done:` — see "Finding 3" below for why this was added after `FortifyAction`
+  alone left the learner's own win unscored).
 
 `Trainer` stores one replay transition per learner decision. For
-non-turn-ending learner actions, that transition reward is effectively that
-single learner-step reward. For turn-ending fortify, the stored reward is:
+non-turn-ending, non-episode-ending learner actions, that transition reward
+is effectively that single learner-step reward. For turn-ending fortify, or
+for the episode-ending action, the stored reward is:
 
 ```
-fortify_step_reward + end_of_turn(before_turn, after_opponent_round)
+step_reward + end_of_turn(before, after)
 ```
 
 This matches the design goal: dense shaping on each learner decision, plus
-one cross-round comparison term only at the learner's turn boundary.
+one cross-round comparison term at the learner's turn boundary — including
+the final boundary, whatever action happens to end the episode.
 
 Every value mentioned below is a constant in
 `risk/learning/train_constants.py` (so it's tunable without touching
@@ -924,3 +932,154 @@ second step only after testing the reward change.
    existing domination term.
 4. Focused reward tests should stay in `Temp/tests/test_reward.py`; no new
    test file is needed for this subsystem.
+
+## Component-weight analysis (2026-07-03, run_021 post-restart, 7 episodes)
+
+First look at real `reward_component_*` data (`risk/learning/trainer.py`'s
+per-episode logging, added the same day) surfaced two things worth recording
+before any constant gets changed.
+
+### Finding 1: shaping dwarfs the terminal reward, ~8.6x on average
+
+Across the first 7 episodes after resuming from `ep000600`, cumulative
+per-episode shaping (`reward_component_shaping_clipped`) averaged **8.6x**
+the magnitude of the ±100 terminal reward (range ~2.7x on a short 116-turn
+episode to ~16x on a 604-turn one). Average shaping per turn was ~2.46 —
+well under the `REWARD_SHAPING_STEP_CAP = 10` ceiling, and `shaping_raw` vs
+`shaping_clipped` were nearly identical every episode (e.g. episode 604:
+855.25 vs 855.25, no clipping at all). So the dominance isn't from a few
+extreme turns getting capped down — it's many ordinary turns each
+contributing a small amount that simply adds up over hundreds of turns.
+
+Why this is a real concern and not just cosmetics: this shaping is **not
+potential-based** (it isn't a difference of a state potential
+`γΦ(s') - Φ(s)`), so unlike a potential-based term it is *not* guaranteed
+policy-invariant — a shaped return this much larger than the ±100 terminal
+can shift which policy is optimal, not merely speed up learning. Under DDQN
+bootstrapping the win/lose signal ends up a small correction riding on a
+large shaped return, exactly the regime where the agent can get very good at
+accumulating shaping while win-rate stalls. "Shaping dominates" is therefore
+a legitimate risk here, worth watching alongside win-rate.
+
+### Finding 2: `attack` alone is ~84% of all shaping, every single episode
+
+| component | share of shaping (mean over 7 episodes) |
+|---|---|
+| attack | **84.0%** |
+| occupy | 8.6% |
+| reinforce | 7.4% |
+| fortify | 0.3% |
+| trade_in | 0.2% |
+
+80–89% in every one of the 7 episodes, no exceptions — this reads as a
+structural property of the reward wiring, not noise. Plausible mechanism:
+`AttackAction` can fire many times *within a single turn* (attack, attack
+again, attack again...) before the turn ends, so it accumulates far more
+reward-generating events per episode than the once-or-twice-per-turn phases
+(`fortify`/`trade_in`, and `reinforce` — which fires per placement action,
+so a handful of times per turn, still far fewer than attack) — independent
+of whether its per-action constants are individually oversized.
+
+**Caveat before acting on this:** the episode *sum* conflates "fires often"
+with "per-fire too big." To tell those apart, log a **per-event mean**
+(episode sum ÷ number of that action's firings) next to the cumulative sum.
+That is the number that says whether `REWARD_ATTACK_*` constants are
+individually oversized or merely frequent — and it's the one to have in hand
+*before* changing any attack constant, since lowering a constant and
+lowering firing-frequency are different fixes with different behavioral
+consequences.
+
+### Finding 3: `territory_delta`/`continent_delta`/`army_delta` have an
+*asymmetric* blind spot — they never see the learner's own winning turn
+(but they *do* see losses)
+
+Observed values were small and often *negative* (`territory_delta`: -1 to
+-3 per episode; `continent_delta`: -4 to 0) even in episodes the learner
+won. The wiring cause is real, but it is asymmetric: an earlier reading of
+this finding claimed both the win *and* the loss are excluded — tracing the
+loop shows only the **win** is, and that changes the tuning implication.
+
+`Trainer.train(...)` only calls `env.reward.end_of_turn(...)` when the
+learner's action that iteration `isinstance(action, FortifyAction)`. In Risk
+the *only* learner action that ends the turn — and therefore the only one
+after which `Trainer`'s inner opponent loop runs at all — is
+`FortifyAction`. So:
+
+- **The learner's win is excluded.** A win happens on the learner's own
+  `AttackAction`/`OccupyAction` conquering the last enemy territory.
+  `Environment.step(...)` sets `done=True` immediately
+  (`environment.py:174-182`); the inner opponent loop is skipped
+  (`not result.done`), `action` is not a `FortifyAction`, and the loop hits
+  `if done: break` *before* `end_of_turn()` runs. The single biggest
+  *positive* swing in the game is never scored.
+- **Losses are *not* excluded.** The learner can only be eliminated during
+  an opponent's turn, and opponents only ever play inside the iteration
+  whose learner `action` was the turn-ending `FortifyAction`. So
+  `end_of_turn(...)` *does* fire, with `share_after ≈ 0`, producing a large
+  negative `territory_delta`. Opponent-win game-overs are captured the same
+  way.
+
+Net effect is a **negative bias**, not a symmetric blind spot: these three
+terms see every mid-game turn (opponents chipping territory back between the
+learner's turns) plus every full loss, but never the learner's own decisive
+*positive* event. That explains "small and often net-negative even in won
+episodes" more precisely than "only the noisy middle": in a won episode the
+learner is never eliminated, so what's logged is the mid-game grind
+(slightly net-negative from opponent counter-attacks in each opponent chain)
+with the winning swing subtracted out entirely.
+
+**Implication for weight-tuning:** scaling `REWARD_TERRITORY_DELTA` (or
+`REWARD_CONTINENT_DELTA_RELATIVE`) up without fixing the wiring would have
+amplified a signal that was *structurally anti-correlated with winning* — it
+counted downside (opponent gains, full losses) but not the learner's own
+victory.
+
+**Fixed (2026-07-03).** `Trainer.train(...)`'s gate changed from
+`if isinstance(action, FortifyAction):` to
+`if isinstance(action, FortifyAction) or done:` — so the learner's own
+episode-ending action now also scores `end_of_turn(state, next_state, seat)`,
+using that single action's own before/after (not a full-turn or full-episode
+span; see the scope note below). The mid-turn/loss path is unchanged — it
+already worked. Deliberate scope limit: if the winning blow was, say, the
+5th attack of a multi-attack final turn, only that 5th attack's share delta
+is scored this way — the earlier attacks that same turn already got their
+own reward via `_attack(...)`'s per-conquest terms (un-normalized, not
+share-based), so this isn't a gap, just a boundary between two different
+mechanisms. No persistent cross-iteration state was added to chase a fully
+turn-spanning delta for the final turn specifically, since the marginal
+gain over the per-action terms already covering it didn't seem to justify
+the added complexity. Revisit if post-fix data suggests otherwise.
+
+### Finding 4: the existing constants aren't on comparable scales
+
+`REWARD_TERRITORY_DELTA = 1.00` and `REWARD_OCCUPY_FORWARD_MOMENTUM = 1.00`
+are numerically identical, but they scale completely different-shaped
+inputs: `territory_delta`/`continent_delta` multiply a *board-wide share*
+change (one territory changing hands moves `share` by ~1/42 ≈ 0.024), while
+`occupy`/`reinforce`/`attack` multiply *local, per-action* fractions (a
+single decision can score up to ~1–3 before the constant is even applied).
+Comparing the raw constants as if "same number = same weight" is
+misleading — the same constant multiplying a share-of-board quantity vs. a
+fraction-of-one-decision quantity produces outputs roughly two orders of
+magnitude apart before either is scaled.
+
+### Suggested sequencing
+
+1. ~~Fix the `FortifyAction`-gating blind spot first (Finding 3)~~ **Done
+   (2026-07-03)** — see Finding 3 above. Not yet re-measured against live
+   training data (needs a fresh batch of episodes post-fix).
+2. Add **per-event-mean** logging for the shaping components (Finding 2:
+   episode sum ÷ firing count), so the next measurement can separate
+   "attack fires often" from "attack per-fire is too big" — the two imply
+   different fixes.
+3. Re-measure `reward_component_*` across a few dozen episodes once (1)+(2)
+   are in (7 episodes is enough to trust the *percentage breakdown*, since
+   it was stable in every single episode, but not enough to say how the
+   breakdown shifts across a win-rate trough vs. recovery).
+4. Only then decide relative constant changes, with real post-fix
+   magnitudes in hand rather than tuning against numbers known to be
+   structurally incomplete. Worth noting `attack` (84% of shaping) is a
+   much bigger lever than `occupy` (8.6%) if the goal is shifting weight
+   away from local tactical rewards and toward outcome-shaped ones; and per
+   Finding 4, compare constants by the *scaled* quantity they multiply
+   (share-of-board vs. per-decision fraction), not by the raw constant.

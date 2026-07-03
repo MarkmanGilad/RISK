@@ -244,7 +244,8 @@ class GNN_DQN_Agent(BaseAgent):
     def learn_steps(self, batch_size: int, n_steps: int) -> list[float]:
         losses: list[float] = []
         for _ in range(max(0, n_steps)):
-            losses.append(self.train_step(batch_size))
+            loss = self.train_step(batch_size)
+            losses.append(loss)
         return losses
 
     def learn(self, *, batch_size: int, n_steps: int) -> list[float]:

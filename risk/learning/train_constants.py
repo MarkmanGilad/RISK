@@ -21,6 +21,7 @@ TRAIN_OPPONENT_AGENT_KINDS: Final[tuple[str, ...]] = (
     "raider",
     "sentinel",
     "empire",
+    "killbot",
 )
 
 # --- Replay / gradient update -----------------------------------------------

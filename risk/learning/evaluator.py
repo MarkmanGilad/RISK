@@ -26,9 +26,11 @@ from risk.ui.input.init_screen import InitScreenState
 # Two fixed eval suites (Docs/Eval.md "Eval games and opponents"): a small
 # tactical game and a mixed full game, each played across the same fixed
 # seeds every time so scores are comparable across evaluation calls.
+# `killbot` is in both suites deliberately, so it's always part of eval
+# rather than something that shows up only if randomly sampled.
 _EVAL_SUITES: tuple[tuple[str, ...], ...] = (
-    ("raider", "sentinel"),
-    ("random", "raider", "sentinel", "empire"),
+    ("raider", "sentinel", "killbot"),
+    ("random", "raider", "sentinel", "empire", "killbot"),
 )
 _EVAL_SEEDS: tuple[int, ...] = (0, 1, 2)
 _LEARNER_SEAT = 0

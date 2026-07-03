@@ -8,7 +8,7 @@ ingest and gradient-step scheduling logic. Every episode:
 - picks a random player count (`min_players`..`max_players`) and a random
     seat for the learner, then randomly assigns every non-learner seat to one
     of the configured random/heuristic opponent agents (`random`, `raider`,
-    `sentinel`, `empire`) — no `HumanAgent` seats.
+    `sentinel`, `empire`, `killbot`) — no `HumanAgent` seats.
 - plays to either a real game-over or the learner's own elimination, since
   once the learner is out there's nothing left for it to learn from that
   episode.
@@ -52,7 +52,7 @@ if __package__ in (None, ""):
 
 from risk.app.factory import GameFactory
 from risk.app.setup import SetupStage
-from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
+from risk.agents.heuristic_agent import EmpireAgent, KillbotAgent, RaiderAgent, SentinelAgent
 from risk.agents.random_agent import RandomAgent
 from risk.game.actions import FortifyAction
 from risk.learning.evaluator import Evaluator
@@ -138,14 +138,9 @@ class Trainer:
             losses: list[float] = []
             done = False
             reward_components: dict[str, float] = {}
-
-            # Other seats may act before the learner's own seat on turn 1 —
-            # play those opening moves now so the loop below only ever has to
-            # deal with the agent's own turn.
-            while (
-                step_count < MAX_STEPS_PER_EPISODE
-                and env.current_state().current_player_index != seat
-            ):
+            
+            #play other until agent's turn
+            while (step_count < MAX_STEPS_PER_EPISODE and env.current_state().current_player_index != seat):
                 current_state = env.current_state()
                 action = agents[current_state.current_player_index]((), current_state)
                 env.step(action, reward_player=seat)
@@ -164,65 +159,34 @@ class Trainer:
                 reward_total = result.reward
                 step_count += 1
                 agent_turns += 1
-                self._print_progress_line(
-                    n_episodes=n_episodes,
-                    step_count=step_count,
-                    agent_turns=agent_turns,
-                    seat=seat,
-                    current_state=result.state,
-                    topology=env.topology,
-                )
+                self._print_progress_line(n_episodes=n_episodes, step_count=step_count, agent_turns=agent_turns,
+                    seat=seat, current_state=result.state, topology=env.topology, )
 
                 # Play until agent's turn again, the agent is eliminated, or the game ends.
-                # Each opponent step may carry its own dense shaping reward
-                # (attributed to the learner via reward_player=seat), so sum
-                # rather than overwrite — only the last step's `state`/`done`
-                # describe where the chain ended.
-                while (
-                    step_count < MAX_STEPS_PER_EPISODE
-                    and not result.done
-                    and seat not in result.state.eliminated
-                    and env.current_state().current_player_index != seat
-                ):
+                while (step_count < MAX_STEPS_PER_EPISODE and not result.done and seat not in result.state.eliminated and env.current_state().current_player_index != seat ):
                     current_state = env.current_state()
                     action_other = agents[current_state.current_player_index]((), current_state)
                     result = env.step(action_other, reward_player=seat)
                     self._accumulate_reward_components(reward_components, env.reward.last_components)
                     reward_total += result.reward
                     step_count += 1
-                    self._print_progress_line(
-                        n_episodes=n_episodes,
-                        step_count=step_count,
-                        agent_turns=agent_turns,
-                        seat=seat,
-                        current_state=result.state,
-                        topology=env.topology,
-                    )
+                    self._print_progress_line(n_episodes=n_episodes, step_count=step_count, agent_turns=agent_turns, seat=seat, current_state=result.state, topology=env.topology,)
 
                 # Store transition: state before agent acted → next_state (after all agents played)
                 next_state = result.state
                 done = result.done or seat in result.state.eliminated
 
-                # FortifyAction always ends the learner's turn (skip or real
-                # move), so `next_state` here is exactly "once every opponent
-                # has played their full turn" — the one point the end-of-turn
-                # opponent-impact terms (Docs/Reward.md) can be scored from.
-                if isinstance(action, FortifyAction):
+                if isinstance(action, FortifyAction) or done:
                     reward_total += env.reward.end_of_turn(state, next_state, seat)
-                    self._accumulate_reward_components(
-                        reward_components, env.reward.last_end_of_turn_components
-                    )
+                    self._accumulate_reward_components(reward_components, env.reward.last_end_of_turn_components)
 
-                territories_conquered += sum(
-                    1
-                    for before_owner, after_owner in zip(state.owners, next_state.owners)
-                    if before_owner != seat and after_owner == seat
-                )
-
+                territories_conquered += sum(1 for before_owner, after_owner in zip(state.owners, next_state.owners) if before_owner != seat and after_owner == seat)
                 episode_reward += reward_total
-                self.agent.remember(state, action, reward_total, next_state, done)
-                losses.extend(self.agent.learn(batch_size=BATCH_SIZE, n_steps=TRAIN_STEPS_PER_CALL))
 
+                self.agent.remember(state, action, reward_total, next_state, done)
+                step_losses = self.agent.learn(batch_size=BATCH_SIZE, n_steps=TRAIN_STEPS_PER_CALL)
+
+                losses.extend(step_losses)
                 if done:
                     break
 
@@ -231,9 +195,7 @@ class Trainer:
             self._recent_wins.append(win)
             metrics = {
                 "win": win,
-                f"win_rate_last_{ROLLING_WIN_RATE_WINDOW}": (
-                    sum(self._recent_wins) / len(self._recent_wins)
-                ),
+                f"win_rate_last_{ROLLING_WIN_RATE_WINDOW}": (sum(self._recent_wins) / len(self._recent_wins)),
                 "reward_per_agent_turn": episode_reward / max(agent_turns, 1),
                 "learn_loss_mean": (sum(losses) / len(losses)) if losses else 0.0,
                 "territories_conquered": territories_conquered,
@@ -253,9 +215,7 @@ class Trainer:
             if step_count > 0:
                 print()
 
-    def _accumulate_reward_components(
-        self, totals: dict[str, float], components: dict[str, float]
-    ) -> None:
+    def _accumulate_reward_components(self, totals: dict[str, float], components: dict[str, float]) -> None:
         """Add one `RewardCalculator` call's breakdown into the running
         per-episode totals logged as `reward_component_*` (`Docs/Reward.md`
         "per-component logging") — diagnostic only, no effect on training."""
@@ -291,28 +251,14 @@ class Trainer:
                 ctx.agents[player_id] = SentinelAgent(player_id=player_id, env=ctx.env, seed=seed)
             elif kind == "empire":
                 ctx.agents[player_id] = EmpireAgent(player_id=player_id, env=ctx.env, seed=seed)
+            elif kind == "killbot":
+                ctx.agents[player_id] = KillbotAgent(player_id=player_id, env=ctx.env, seed=seed)
             else:
                 raise ValueError(f"Unknown training opponent kind {kind!r}")
 
-    def _print_progress_line(
-        self,
-        *,
-        n_episodes: int,
-        step_count: int,
-        agent_turns: int,
-        seat: int,
-        current_state,
-        topology,
-    ) -> None:
-        status_line = self.logger.format_status_line(
-            topology=topology,
-            episode=self.episode,
-            n_episodes=n_episodes,
-            step_count=step_count,
-            agent_turns=agent_turns,
-            seat=seat,
-            current_state=current_state,
-        )
+    def _print_progress_line(self, *, n_episodes: int, step_count: int, agent_turns: int, seat: int, current_state, topology, ) -> None:
+        status_line = self.logger.format_status_line(topology=topology, episode=self.episode, n_episodes=n_episodes,
+            step_count=step_count, agent_turns=agent_turns, seat=seat, current_state=current_state, )
         print(f"\033[K{status_line}", end="\r", flush=True)
 
 
@@ -321,7 +267,7 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 21
+    RUN_ID = 22
 
     trainer = Trainer(RUN_ID)
     trainer.train(n_episodes=TRAIN_EPISODES)

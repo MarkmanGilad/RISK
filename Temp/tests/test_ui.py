@@ -125,6 +125,7 @@ def test_init_screen_cycles_agent_kinds() -> None:
     assert s.next_agent_kind(0) == "raider"
     assert s.next_agent_kind(0) == "sentinel"
     assert s.next_agent_kind(0) == "empire"
+    assert s.next_agent_kind(0) == "killbot"
     assert s.next_agent_kind(0) == "human"
 
 

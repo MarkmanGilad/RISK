@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from risk.agents.base_agent import BaseAgent
-from risk.agents.heuristic_agent import EmpireAgent, RaiderAgent, SentinelAgent
+from risk.agents.heuristic_agent import EmpireAgent, KillbotAgent, RaiderAgent, SentinelAgent
 from risk.agents.random_agent import RandomAgent
 from risk.app.game import Game
 from risk.game.environment import Environment
@@ -56,6 +56,8 @@ class GameFactory:
                 out.append(SentinelAgent(player_id=p.id, env=env, seed=seed))
             elif p.agent_kind == "empire":
                 out.append(EmpireAgent(player_id=p.id, env=env, seed=seed))
+            elif p.agent_kind == "killbot":
+                out.append(KillbotAgent(player_id=p.id, env=env, seed=seed))
             else:
                 raise ValueError(f"Unknown agent_kind {p.agent_kind!r}")
         return out

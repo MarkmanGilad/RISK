@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from risk.agents.base_agent import BaseAgent
-from risk.constants import ATTACKER_ROLL_EDGE, MAX_ATTACK_DICE, MAX_DEFEND_DICE, ROLL_OUTCOMES
+from risk.constants import (
+    ATTACKER_ROLL_EDGE,
+    MAX_ATTACK_DICE,
+    MAX_DEFEND_DICE,
+    ROLL_OUTCOMES,
+    card_set_value,
+)
 from risk.game.actions import (
     Action,
     AttackAction,
@@ -403,6 +409,371 @@ class EmpireAgent(CompositeAgent):
     )
 
 
+class KillbotAgent(AttackAgent):
+    """Python reimplementation of the Lux *Killbot* heuristic.
+
+    Killbot = BetterPixie continent strategy + Vulture weak-player
+    elimination + SmartAgentBase attack/card/HogWild utilities. Not the
+    original Java agent — see `Docs/HeuristicAgents.md` for the full spec,
+    source references, and fidelity notes. Three deliberate deviations from
+    Lux (documented there as "Decisions"):
+    - Uses exact `battle_win_probability` everywhere instead of Lux's
+      `outnumberBy` army-ratio proxy.
+    - Kill routes are walked greedily one attack at a time (always retarget
+      the best currently-reachable territory owned by `_kill_target`)
+      instead of Lux's precomputed `CountryRoute` — so there is no explicit
+      route list to keep in sync as territories change hands.
+    - The Occupy reserve rule approximates "is the remaining hostile
+      territory one connected cluster" with a plain enemy-neighbor count
+      instead of a full flood fill.
+    """
+
+    attack_threshold = 0.55
+    weights = HeuristicWeights(
+        attack_odds=1.0,
+        attacker_surplus=0.3,
+        continent=1.0,
+        bsr=0.5,
+        compactness=0.2,
+    )
+
+    # BetterPixie's setupOurConts constants.
+    CONTINENT_ENEMY_MULTIPLIER = 1.3
+    CONTINENT_ROUTE_MULTIPLIER = 1.2
+    CONTINENT_BUDGET_DIVISOR = 4.0
+    BORDER_FORCE_FLOOR = 20
+    # Vulture's kill-trigger ratio and card-discount divisor.
+    KILL_ARMY_RATIO = 2.0
+    CARD_SET_DIVISOR = 3.0
+
+    def __init__(
+        self,
+        player_id: int,
+        env: Optional[Environment] = None,
+        seed: Optional[int] = None,
+    ) -> None:
+        super().__init__(player_id=player_id, env=env, seed=seed)
+        self._our_conts: set[str] = set()
+        self._kill_target: Optional[int] = None
+        self._placed_to_kill = False
+
+    def act(self, events: Sequence[object], state: State) -> Optional[Action]:
+        # TRADE_IN is entered exactly once per turn (Environment._begin_turn_for),
+        # so this is a reliable once-per-turn reset point.
+        if state.phase is Phase.TRADE_IN:
+            self._our_conts = set()
+            self._kill_target = None
+            self._placed_to_kill = False
+        return super().act(events, state)
+
+    def _choose_trade(self, legal: Sequence[Action]) -> Optional[TradeInAction]:
+        trades = [a for a in legal if isinstance(a, TradeInAction)]
+        if not trades:
+            return None
+        assert self.env is not None
+        state = self.env.current_state()
+        topology = self.env.topology
+        pid = self.player_id
+        hand = state.hands[pid]
+
+        def bonus_count(action: TradeInAction) -> int:
+            return sum(
+                1
+                for i in action.card_indices
+                if not hand[i].is_wild and state.owners[topology.index_of(hand[i].territory_id)] == pid
+            )
+
+        return max(trades, key=bonus_count)
+
+    def _reinforce(self, state: State) -> Optional[ReinforcementAction]:
+        assert self.env is not None
+        self._our_conts = self._select_continents(state)
+        if state.reinforcement_budget <= 0:
+            self._placed_to_kill = False
+            return None
+
+        staging = self._find_kill_staging_territory(state)
+        if staging is not None:
+            self._placed_to_kill = True
+            territory = self.env.topology.territory_at(staging)
+            return ReinforcementAction(placements={territory: state.reinforcement_budget})
+
+        self._placed_to_kill = False
+        # BetterPixie's placeArmiesToTakeCont + placeNearEnemies collapse into
+        # the base top-N stacking here, since `_territory_score` below already
+        # boosts territories in `_our_conts` — no need to reimplement the
+        # continent/remainder split as separate placement passes.
+        return super()._reinforce(state)
+
+    def _find_kill_staging_territory(self, state: State) -> Optional[int]:
+        """Vulture's setToKillPlayer + placeToKill, simplified.
+
+        Returns the owned territory to dump this turn's whole budget onto,
+        or None if no kill is worth attempting. Requires an existing
+        foothold bordering the target (no multi-hop route search — see the
+        class docstring's kill-route deviation).
+        """
+        assert self.env is not None
+        pid = self.player_id
+        our_total = sum(state.armies[i] for i in _owned_indices(state, pid))
+
+        target: Optional[int] = None
+        target_discount: Optional[float] = None
+        for opp in range(len(state.hands)):
+            if opp == pid or opp in state.eliminated:
+                continue
+            discount = self._discounted_armies(state, opp)
+            if target_discount is None or discount < target_discount:
+                target, target_discount = opp, discount
+        if target is None or target_discount is None:
+            return None
+        if our_total <= self.KILL_ARMY_RATIO * target_discount:
+            return None
+
+        biggest = self._biggest_army_with_enemy_neighbor(state, pid)
+        if biggest is None:
+            return None
+        target_armies = sum(state.armies[i] for i in _owned_indices(state, target))
+        target_territories = len(_owned_indices(state, target))
+        if state.armies[biggest] + state.reinforcement_budget <= target_armies + target_territories:
+            return None
+
+        entry = self._biggest_army_bordering_player(state, target)
+        if entry is None:
+            return None
+        self._kill_target = target
+        return entry
+
+    def _discounted_armies(self, state: State, player_id: int) -> float:
+        total = sum(state.armies[i] for i in _owned_indices(state, player_id))
+        next_set_value = card_set_value(state.cards_traded_in_count)
+        hand_size = len(state.hands[player_id])
+        return total - next_set_value * (hand_size / self.CARD_SET_DIVISOR)
+
+    def _biggest_army_with_enemy_neighbor(self, state: State, player_id: int) -> Optional[int]:
+        assert self.env is not None
+        topology = self.env.topology
+        candidates = [i for i in _owned_indices(state, player_id) if _is_border(state, topology, i, player_id)]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda i: state.armies[i])
+
+    def _biggest_army_bordering_player(self, state: State, target_player: int) -> Optional[int]:
+        assert self.env is not None
+        topology = self.env.topology
+        pid = self.player_id
+        candidates = [
+            i
+            for i in _owned_indices(state, pid)
+            if any(
+                state.owners[topology.index_of(nb)] == target_player
+                for nb in topology.neighbors(topology.territory_at(i))
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda i: state.armies[i])
+
+    def _select_continents(self, state: State) -> set[str]:
+        """BetterPixie's setupOurConts: continents we're targeting or defending this turn."""
+        assert self.env is not None
+        topology = self.env.topology
+        pid = self.player_id
+        owned_conts = {c for c in topology.continents if topology.owns_continent(state.owners, c, pid)}
+        costs = self._continent_costs(state)
+        if not owned_conts:
+            if not costs:
+                return set()
+            return {min(costs, key=costs.get)}
+        budget_per_cont = state.reinforcement_budget / max(
+            1.0, len(topology.continents) / self.CONTINENT_BUDGET_DIVISOR
+        )
+        affordable = {c for c, cost in costs.items() if cost <= budget_per_cont}
+        return owned_conts | affordable
+
+    def _continent_costs(self, state: State) -> dict[str, float]:
+        """needed = enemy_armies * 1.3 - (our_armies_in_cont + border_armies * 1.2)."""
+        assert self.env is not None
+        topology = self.env.topology
+        pid = self.player_id
+        owned_territories = _owned_indices(state, pid)
+        costs: dict[str, float] = {}
+        for continent in topology.continents:
+            owned, total = topology.continent_owner_counts(state.owners, continent, pid)
+            if owned == total:
+                continue
+            members = set(topology.continent_member_indices(continent))
+            enemy_armies = sum(state.armies[i] for i in members if state.owners[i] != pid)
+            our_armies = sum(state.armies[i] for i in members if state.owners[i] == pid)
+            border_armies = sum(
+                state.armies[i]
+                for i in owned_territories
+                if i not in members
+                and any(topology.index_of(nb) in members for nb in topology.neighbors(topology.territory_at(i)))
+            )
+            costs[continent] = enemy_armies * self.CONTINENT_ENEMY_MULTIPLIER - (
+                our_armies + border_armies * self.CONTINENT_ROUTE_MULTIPLIER
+            )
+        return costs
+
+    def _continent_needs_help(self, state: State, continent: str) -> bool:
+        assert self.env is not None
+        topology = self.env.topology
+        pid = self.player_id
+        if not topology.owns_continent(state.owners, continent, pid):
+            return True
+        members = topology.continent_member_indices(continent)
+        borders = [i for i in members if _is_border(state, topology, i, pid)]
+        if not any(state.armies[i] < self.BORDER_FORCE_FLOOR for i in borders):
+            return False
+        surrounding = _surrounding_continents(topology, continent)
+        if surrounding and all(topology.owns_continent(state.owners, c, pid) for c in surrounding):
+            return False
+        return True
+
+    def _territory_score(self, state: State, index: int) -> float:
+        assert self.env is not None
+        topology = self.env.topology
+        score = _bsr(state, topology, index) + 0.05 * state.armies[index]
+        continent = topology.continent_of(topology.territory_at(index))
+        if continent in self._our_conts:
+            score += 1.0
+            if self._continent_needs_help(state, continent):
+                score += 1.0
+        return score
+
+    def _attack(self, state: State, legal: Sequence[Action]) -> Action:
+        assert self.env is not None
+        attacks = [a for a in legal if isinstance(a, AttackAction)]
+        if not attacks:
+            return StopAttackAction()
+
+        if self._placed_to_kill and self._kill_target is not None:
+            kill_action = self._best_kill_route_attack(state, attacks)
+            if kill_action is not None:
+                return kill_action
+            # Target eliminated or no longer reachable this turn.
+            self._placed_to_kill = False
+
+        threshold = 0.0 if self._is_hogwild(state) else self.attack_threshold
+
+        steal = self._continent_steal_attack(state, attacks)
+        if steal is not None:
+            return steal
+
+        chosen = self._best_scored_attack(state, attacks, threshold, require_our_continent=True)
+        if chosen is None:
+            chosen = self._best_scored_attack(state, attacks, threshold, require_our_continent=False)
+        if chosen is not None:
+            return chosen
+
+        if not state.conquered_this_turn:
+            card_attack = self._attack_for_card(state, attacks)
+            if card_attack is not None:
+                return card_attack
+
+        return StopAttackAction()
+
+    def _best_kill_route_attack(self, state: State, attacks: Sequence[AttackAction]) -> Optional[AttackAction]:
+        assert self.env is not None
+        topology = self.env.topology
+        options = [
+            a
+            for a in attacks
+            if self._is_full_force_attack(state, a)
+            and state.owners[topology.index_of(a.to_territory)] == self._kill_target
+            and self._battle_odds(state, a) > 0.0
+        ]
+        if not options:
+            return None
+        best = max(self._battle_odds(state, a) for a in options)
+        return self._rng.choice([a for a in options if self._battle_odds(state, a) == best])
+
+    def _best_scored_attack(
+        self,
+        state: State,
+        attacks: Sequence[AttackAction],
+        threshold: float,
+        *,
+        require_our_continent: bool,
+    ) -> Optional[AttackAction]:
+        assert self.env is not None
+        topology = self.env.topology
+        candidates = [
+            (self._attack_score(state, a), a)
+            for a in attacks
+            if self._is_full_force_attack(state, a)
+            and self._battle_odds(state, a) > threshold
+            and (not require_our_continent or topology.continent_of(a.to_territory) in self._our_conts)
+        ]
+        if not candidates:
+            return None
+        best_score = max(score for score, _ in candidates)
+        return self._rng.choice([a for score, a in candidates if score == best_score])
+
+    def _continent_steal_attack(self, state: State, attacks: Sequence[AttackAction]) -> Optional[AttackAction]:
+        """takeOutContinentCheck: grab a poorly-defended enemy continent, independent of `_our_conts`."""
+        assert self.env is not None
+        topology = self.env.topology
+        pid = self.player_id
+        owned_territories = _owned_indices(state, pid)
+        for continent in topology.continents:
+            if topology.owns_continent(state.owners, continent, pid):
+                continue
+            members = set(topology.continent_member_indices(continent))
+            enemy_defense = sum(
+                state.armies[i] for i in members if state.owners[i] is not None and state.owners[i] != pid
+            )
+            if enemy_defense <= 0:
+                continue
+            our_nearby = sum(
+                state.armies[i]
+                for i in owned_territories
+                if any(topology.index_of(nb) in members for nb in topology.neighbors(topology.territory_at(i)))
+            )
+            if our_nearby < self.KILL_ARMY_RATIO * enemy_defense:
+                continue
+            options = [
+                a
+                for a in attacks
+                if self._is_full_force_attack(state, a)
+                and topology.continent_of(a.to_territory) == continent
+                and self._battle_odds(state, a) > 0.5
+            ]
+            if options:
+                return max(options, key=lambda a: self._battle_odds(state, a))
+        return None
+
+    def _attack_for_card(self, state: State, attacks: Sequence[AttackAction]) -> Optional[AttackAction]:
+        options = [a for a in attacks if self._is_full_force_attack(state, a) and self._battle_odds(state, a) > 0.5]
+        if not options:
+            return None
+        return max(options, key=lambda a: self._battle_odds(state, a))
+
+    def _is_hogwild(self, state: State) -> bool:
+        pid = self.player_id
+        our_armies = sum(state.armies[i] for i in _owned_indices(state, pid))
+        enemy_armies = sum(
+            armies for i, armies in enumerate(state.armies) if state.owners[i] is not None and state.owners[i] != pid
+        )
+        return our_armies > enemy_armies
+
+    def _occupy(self, legal: Sequence[Action]) -> Optional[OccupyAction]:
+        occupiers = [a for a in legal if isinstance(a, OccupyAction)]
+        if not occupiers:
+            return None
+        assert self.env is not None
+        state = self.env.current_state()
+        pending = state.pending_attack
+        counts = [a.count for a in occupiers]
+        lo, hi = min(counts), max(counts)
+        if pending is not None and _enemy_neighbor_count(state, self.env.topology, pending.to_index, self.player_id) > 1:
+            desired = max(lo, hi // 2)
+        else:
+            desired = hi
+        return min(occupiers, key=lambda a: abs(a.count - desired))
+
+
 def _owned_indices(state: State, player_id: int) -> list[int]:
     return [i for i, owner in enumerate(state.owners) if owner == player_id]
 
@@ -437,6 +808,14 @@ def _enemy_neighbor_ratio(state: State, topology, index: int, player_id: int) ->
         1 for nb in neighbors if state.owners[topology.index_of(nb)] != player_id
     )
     return enemies / len(neighbors)
+
+
+def _enemy_neighbor_count(state: State, topology, index: int, player_id: int) -> int:
+    """Raw enemy-neighbor count — `_enemy_neighbor_ratio` discards this by dividing."""
+    territory = topology.territory_at(index)
+    return sum(
+        1 for nb in topology.neighbors(territory) if state.owners[topology.index_of(nb)] != player_id
+    )
 
 
 def _continent_attack_value(state: State, topology, player_id: int, target_index: int) -> float:
@@ -474,6 +853,18 @@ def _compactness_after_take(state: State, topology, player_id: int, target_index
     return friendly_neighbors / total
 
 
+def _surrounding_continents(topology, continent: str) -> set[str]:
+    """Continent ids adjacent to `continent`'s border (used by `continentNeedsHelp`)."""
+    members = set(topology.continent_member_indices(continent))
+    surrounding: set[str] = set()
+    for i in members:
+        for nb in topology.neighbors(topology.territory_at(i)):
+            ni = topology.index_of(nb)
+            if ni not in members:
+                surrounding.add(topology.continent_of(nb))
+    return surrounding
+
+
 def _owned_distances(state: State, topology, start: int, player_id: int) -> dict[int, int]:
     distances = {start: 0}
     queue: deque[int] = deque([start])
@@ -502,6 +893,7 @@ __all__ = [
     "ContinentAgent",
     "EmpireAgent",
     "HeuristicWeights",
+    "KillbotAgent",
     "ROLL_OUTCOMES",
     "RaiderAgent",
     "SentinelAgent",
