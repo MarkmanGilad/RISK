@@ -41,6 +41,7 @@ from risk.learning.train_constants import (
     REWARD_ATTACK_CONTINENT_DOMINATION_MARGIN,
     REWARD_ATTACK_CONQUER_TERRITORY,
     REWARD_ATTACK_CONQUER_WITH_CARD,
+    REWARD_ATTACK_ELIMINATE_OPPONENT_BASE,
     REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD,
     REWARD_ATTACK_FEWER_DICE,
     REWARD_ATTACK_RATIO_CAP,
@@ -48,6 +49,7 @@ from risk.learning.train_constants import (
     REWARD_ATTACK_RATIO_THRESHOLD,
     REWARD_ATTACK_STOP_WITHOUT_CARD,
     REWARD_CONTINENT_DELTA_RELATIVE,
+    REWARD_CONTINENT_LOST,
     REWARD_FORTIFY_BALANCE_SCALE,
     REWARD_FORTIFY_CONTINENT_PUSH,
     REWARD_FORTIFY_TOWARD_FRONTIER,
@@ -61,6 +63,7 @@ from risk.learning.train_constants import (
     REWARD_TERMINAL_LOSS,
     REWARD_TERMINAL_WIN,
     REWARD_TERRITORY_DELTA,
+    REWARD_TERRITORY_HOLD,
     REWARD_TRADE_IN_EARLY,
     REWARD_TRADE_IN_TERRITORY_MATCH,
 )
@@ -100,7 +103,7 @@ class RewardCalculator:
 
         trade_in = self._trade_in(action, before, reward_player)
         reinforce = self._reinforce(action, before, after, reward_player)
-        attack = self._attack(action, info, before, after, reward_player)
+        attack, eliminate = self._attack(action, info, before, after, reward_player)
         occupy = self._occupy(action, before, reward_player)
         fortify = self._fortify(action, before, after, reward_player)
         shaping_raw = trade_in + reinforce + attack + occupy + fortify
@@ -109,7 +112,8 @@ class RewardCalculator:
         self.last_components = {
             "trade_in": trade_in,
             "reinforce": reinforce,
-            "attack": attack,
+            "attack": attack - eliminate,
+            "eliminate": eliminate,
             "occupy": occupy,
             "fortify": fortify,
             "shaping_raw": shaping_raw,
@@ -136,6 +140,10 @@ class RewardCalculator:
         share_after = my_terr_after / len(after_turn.owners)
         territory_delta = REWARD_TERRITORY_DELTA * (share_after - share_before)
 
+        # Unlike territory_delta (0 when unchanged, negative only on loss),
+        # this pays out every turn so successful defense scores something.
+        territory_hold = REWARD_TERRITORY_HOLD * share_after
+
         my_army_before = sum(a for o, a in zip(before_turn.owners, before_turn.armies) if o == pid)
         my_army_after = sum(a for o, a in zip(after_turn.owners, after_turn.armies) if o == pid)
         total_army_before = sum(before_turn.armies)
@@ -145,6 +153,7 @@ class RewardCalculator:
         army_delta = REWARD_ARMY_DELTA_RELATIVE_SCALE * (army_share_after - army_share_before)
 
         continent_delta = 0.0
+        continent_lost = 0.0
         total_bonus = sum(self.topology.continent_bonus(c) for c in self.topology.continents)
         if total_bonus:
             my_bonus_before = sum(
@@ -160,13 +169,25 @@ class RewardCalculator:
             continent_delta = REWARD_CONTINENT_DELTA_RELATIVE * (
                 my_bonus_after / total_bonus - my_bonus_before / total_bonus
             )
+            # Asymmetric: an extra penalty only when continent bonus was lost
+            # this round, scaled by the fraction of total continent bonus given
+            # up (losing Asia stings more than losing Australia). Stacks on the
+            # symmetric continent_delta so a loss hurts more than a gain rewards.
+            if my_bonus_after < my_bonus_before:
+                continent_lost = REWARD_CONTINENT_LOST * (
+                    my_bonus_after - my_bonus_before
+                ) / total_bonus
 
         self.last_end_of_turn_components = {
             "territory_delta": territory_delta,
             "army_delta": army_delta,
             "continent_delta": continent_delta,
+            "territory_hold": territory_hold,
+            "continent_lost": continent_lost,
         }
-        return territory_delta + army_delta + continent_delta
+        return (
+            territory_delta + army_delta + continent_delta + territory_hold + continent_lost
+        )
 
     # --- terminal -------------------------------------------------------
 
@@ -312,10 +333,13 @@ class RewardCalculator:
 
     def _attack(
         self, action: Action, info: dict, before: State, after: State, reward_player: int
-    ) -> float:
+    ) -> tuple[float, float]:
+        """Returns `(total_reward, eliminate_component)` — the eliminate
+        portion is broken out so `compute()` can log it separately from the
+        rest of `attack` (`Docs/Reward.md`, Finding 11's open item)."""
         pid = before.current_player_index
         if pid != reward_player:
-            return 0.0
+            return 0.0, 0.0
 
         if isinstance(action, StopAttackAction):
             has_real_attack = any(
@@ -323,11 +347,11 @@ class RewardCalculator:
                 for i in range(len(before.owners))
             )
             if has_real_attack and not before.conquered_this_turn:
-                return REWARD_ATTACK_STOP_WITHOUT_CARD
-            return 0.0
+                return REWARD_ATTACK_STOP_WITHOUT_CARD, 0.0
+            return 0.0, 0.0
 
         if not isinstance(action, AttackAction):
-            return 0.0
+            return 0.0, 0.0
 
         fi = self.topology.index_of(action.from_territory)
         ti = self.topology.index_of(action.to_territory)
@@ -356,10 +380,12 @@ class RewardCalculator:
             info.get("defender_losses", 0) - info.get("attacker_losses", 0)
         )
 
+        eliminate = 0.0
         eliminated = info.get("eliminated")
         if eliminated is not None:
             cards_taken = len(before.hands[eliminated])
-            reward += REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD * (cards_taken + 1)
+            eliminate = REWARD_ATTACK_ELIMINATE_OPPONENT_BASE + REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD * cards_taken
+            reward += eliminate
 
         if info.get("conquered"):
             reward += REWARD_ATTACK_CONQUER_TERRITORY
@@ -376,7 +402,7 @@ class RewardCalculator:
                 if not drawn_card.is_wild and after.owners[self.topology.index_of(drawn_card.territory_id)] == pid:
                     reward += REWARD_ATTACK_CARD_TERRITORY_MATCH
 
-        return reward
+        return reward, eliminate
 
     # --- OCCUPY -------------------------------------------------------------
 

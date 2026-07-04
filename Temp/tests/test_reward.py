@@ -23,12 +23,15 @@ from risk.learning.train_constants import (
     REWARD_ATTACK_CONQUER_WITH_CARD,
     REWARD_ATTACK_CONTINENT_ADVANTAGE,
     REWARD_ATTACK_CONTINENT_DOMINATION,
+    REWARD_ATTACK_ELIMINATE_OPPONENT_BASE,
+    REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD,
     REWARD_ATTACK_FEWER_DICE,
     REWARD_ATTACK_RATIO_CAP,
     REWARD_ATTACK_RATIO_SCALE,
     REWARD_ATTACK_RATIO_THRESHOLD,
     REWARD_ATTACK_STOP_WITHOUT_CARD,
     REWARD_CONTINENT_DELTA_RELATIVE,
+    REWARD_CONTINENT_LOST,
     REWARD_FORTIFY_CONTINENT_PUSH,
     REWARD_FORTIFY_TOWARD_FRONTIER,
     REWARD_OCCUPY_FORWARD_MOMENTUM,
@@ -37,6 +40,7 @@ from risk.learning.train_constants import (
     REWARD_TERMINAL_LOSS,
     REWARD_TERMINAL_WIN,
     REWARD_TERRITORY_DELTA,
+    REWARD_TERRITORY_HOLD,
     REWARD_TRADE_IN_EARLY,
     REWARD_TRADE_IN_TERRITORY_MATCH,
 )
@@ -283,6 +287,47 @@ def test_attack_conquer_and_card_draw() -> None:
     assert reward == pytest.approx(expected)
 
 
+def test_attack_eliminate_opponent_scales_with_cards_taken() -> None:
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.owners = [1] * len(state.owners)
+    from_t, to_t = "Afghanistan", "China"
+    fi, ti = topo.index_of(from_t), topo.index_of(to_t)
+    state.owners[fi] = 0
+    state.armies[fi] = 3
+    state.armies[ti] = 2  # ratio == threshold -> ratio term is 0
+    state.current_player_index = 0
+    state.eliminated = set()
+    state.hands = [
+        [],
+        [Card(territory_id="Alaska", symbol="infantry"), Card(territory_id="Iceland", symbol="cavalry")],
+        [],
+    ]
+    state.conquered_this_turn = True  # already drew this turn -> no card-draw term to isolate the eliminate bonus
+
+    after = state.snapshot()
+    after.owners[ti] = 0
+
+    action = AttackAction(from_territory=from_t, to_territory=to_t, dice=2)  # == max dice, no fewer-dice penalty
+    info = {"defender_losses": 0, "attacker_losses": 0, "conquered": True, "eliminated": 1}
+
+    reward = calc.compute(
+        action=action, info=info, before=state, after=after,
+        reward_player=0, done=False, winner=None,
+    )
+
+    expected_eliminate = REWARD_ATTACK_ELIMINATE_OPPONENT_BASE + REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD * 2
+    expected = REWARD_ATTACK_CONQUER_TERRITORY + expected_eliminate
+    assert reward == pytest.approx(expected)
+
+    # The eliminate bonus is logged in its own bucket, split out of `attack`
+    # (Docs/Reward.md, Finding 11's open item), so W&B can see elimination
+    # frequency/magnitude independently of ordinary conquest reward.
+    assert calc.last_components["eliminate"] == pytest.approx(expected_eliminate)
+    assert calc.last_components["attack"] == pytest.approx(REWARD_ATTACK_CONQUER_TERRITORY)
+
+
 def test_attack_stop_without_card_penalty() -> None:
     calc, env = _calc_env()
     topo = env.topology
@@ -464,5 +509,60 @@ def test_end_of_turn_combines_territory_army_and_continent_delta() -> None:
         topo.continent_bonus(c) for c in topo.continents if topo.owns_continent(after_turn.owners, c, 0)
     )
     continent_term = REWARD_CONTINENT_DELTA_RELATIVE * (my_bonus_after / total_bonus - 0.0)
+    hold_term = REWARD_TERRITORY_HOLD * (1 / n)
 
-    assert reward == pytest.approx(territory_term + army_term + continent_term)
+    assert reward == pytest.approx(territory_term + army_term + continent_term + hold_term)
+
+
+def test_end_of_turn_hold_bonus_fires_even_without_territory_change() -> None:
+    calc, env = _calc_env()
+    topo = env.topology
+    n = len(topo)
+    before_turn = env.current_state().snapshot()
+    before_turn.owners = [0] * n
+    before_turn.armies = [1] * n
+    after_turn = before_turn.snapshot()
+
+    reward = calc.end_of_turn(before_turn, after_turn, 0)
+
+    assert calc.last_end_of_turn_components["territory_delta"] == pytest.approx(0.0)
+    assert calc.last_end_of_turn_components["territory_hold"] == pytest.approx(REWARD_TERRITORY_HOLD * 1.0)
+    assert reward > 0
+
+
+def test_end_of_turn_continent_loss_applies_extra_penalty() -> None:
+    calc, env = _calc_env()
+    topo = env.topology
+    n = len(topo)
+    # Fully own the smallest continent before the opponents' round, then lose
+    # one of its territories so the continent bonus is given up.
+    continent = min(topo.continents, key=lambda c: len(list(topo.continent_member_indices(c))))
+    members = list(topo.continent_member_indices(continent))
+    before_turn = env.current_state().snapshot()
+    before_turn.owners = [1] * n
+    before_turn.armies = [1] * n
+    for idx in members:
+        before_turn.owners[idx] = 0
+    after_turn = before_turn.snapshot()
+    after_turn.owners[members[0]] = 1  # opponent retakes one -> continent lost
+
+    calc.end_of_turn(before_turn, after_turn, 0)
+
+    total_bonus = sum(topo.continent_bonus(c) for c in topo.continents)
+    expected_lost = REWARD_CONTINENT_LOST * (-topo.continent_bonus(continent) / total_bonus)
+    assert calc.last_end_of_turn_components["continent_lost"] == pytest.approx(expected_lost)
+    assert calc.last_end_of_turn_components["continent_lost"] < 0
+
+
+def test_end_of_turn_no_continent_loss_penalty_when_holding() -> None:
+    calc, env = _calc_env()
+    topo = env.topology
+    n = len(topo)
+    before_turn = env.current_state().snapshot()
+    before_turn.owners = [0] * n
+    before_turn.armies = [1] * n
+    after_turn = before_turn.snapshot()
+
+    calc.end_of_turn(before_turn, after_turn, 0)
+
+    assert calc.last_end_of_turn_components["continent_lost"] == pytest.approx(0.0)
