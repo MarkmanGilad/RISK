@@ -34,7 +34,7 @@ def test_use_wandb_false_disables_wandb_and_is_a_noop(tmp_path: Path) -> None:
 
 
 def test_build_config_includes_constants_and_model_identity(tmp_path: Path) -> None:
-    logger = TrainingLogger(run_id=7, checkpoint_dir=tmp_path, use_wandb=False)
+    logger = TrainingLogger(run_id=7, checkpoint_dir=tmp_path, use_wandb=False, run_name="DQN_007")
     agent = _agent()
 
     config = logger._build_config(agent)
@@ -42,6 +42,8 @@ def test_build_config_includes_constants_and_model_identity(tmp_path: Path) -> N
     for name in train_constants.__all__:
         assert config[name] == getattr(train_constants, name)
     assert config["run_id"] == 7
+    assert config["run_name"] == "DQN_007"
+    assert config["agent_class"] == "GNN_DQN_Agent"
     assert config["model_class"] == "GNN_DQN"
     assert config["model_str"] == str(agent.net)
     assert config["target_model_str"] == str(agent.target_net)

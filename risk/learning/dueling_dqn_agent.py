@@ -1,15 +1,18 @@
-"""GNN+DQN inference agent (Net A) for self-play/training rollouts.
+"""Dueling-DQN inference agent for self-play/training rollouts.
 
-This class is the game-logic wrapper around `GNN_DQN`:
+Copy of `GNN_DQN_Agent` (`gnn_dqn_agent.py`) wired to `Dueling_DQN` instead
+of `GNN_DQN` — `Docs/DuelingDQN.md`'s minimal-diff policy: everything below
+is unchanged from `GNN_DQN_Agent` except where the dueling mean
+(`Q = V + A - mean(A)`) requires a `group_index` alongside the rows/phase/
+card_indices already built at each call site.
+
+This class is the game-logic wrapper around `Dueling_DQN`:
 
 - asks `env.legal_actions(state)`
 - builds one graph row per legal action (`ActionGraphBuilder` for graph
   stages; base graph for `TRADE_IN`)
-- batches and scores all rows with `GNN_DQN`
+- batches and scores all rows with `Dueling_DQN`
 - returns the selected `Action`
-
-Training/update code is intentionally deferred; this class provides action
-selection and owns a `ReplayBuffer` so training can be plugged in later.
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ from risk.game.phase import Phase
 from risk.game.state import State
 from risk.learning.action_encoder import ActionEncoder
 from risk.learning.action_graph_builder import ActionGraphBuilder
-from risk.learning.gnn_dqn import GNN_DQN
+from risk.learning.dueling_dqn import Dueling_DQN
 from risk.learning.graph_adapter import EDGE_ATTR_DIM, GraphAdapter
 from risk.learning.replay_buffer import ReplayBuffer
 from risk.learning.train_constants import GRAD_CLIP_MAX_NORM
@@ -45,10 +48,10 @@ def resolve_device(device: Optional[torch.device] = None) -> torch.device:
     return torch.device("cpu")
 
 
-class GNN_DQN_Agent(BaseAgent):
-    """`BaseAgent` wrapper for `GNN_DQN` action scoring."""
+class Dueling_DQN_Agent(BaseAgent):
+    """`BaseAgent` wrapper for `Dueling_DQN` action scoring."""
 
-    label = "DQN"
+    label = "Dueling_DQN"
 
     def __init__(self, player_id: int, env: Environment, *,
                  replay_buffer: ReplayBuffer | None = None, device: torch.device | None = None,
@@ -68,7 +71,7 @@ class GNN_DQN_Agent(BaseAgent):
         self._train_steps = 0
 
         sample = self.adapter(env.current_state(), perspective=self.player_id)
-        self.net = GNN_DQN(
+        self.net = Dueling_DQN(
             in_dim=sample.x.shape[1],
             hidden_dim=64,
             edge_dim=EDGE_ATTR_DIM,
@@ -92,7 +95,7 @@ class GNN_DQN_Agent(BaseAgent):
         call (that's the whole point — one learner trained over many
         self-play episodes); only the per-episode bindings are rebuilt,
         the same way `__init__` builds them the first time. Lets a trainer
-        reuse one `GNN_DQN_Agent` while reassigning it to a different
+        reuse one `Dueling_DQN_Agent` while reassigning it to a different
         physical seat (and a freshly built `env`/`GameContext`) every
         episode — see `Docs/RL-Prep-Changes.md`'s trainer.
         """
@@ -194,16 +197,25 @@ class GNN_DQN_Agent(BaseAgent):
         return legal_actions[best_index]
 
     def score_actions(self, state: State, legal_actions: Sequence[Action]) -> torch.Tensor:
-        """Score each legal action with the online net and return `[N]` Q values."""
+        """Score each legal action with the online net and return `[N]` Q values.
+
+        The first row is the clean, non-injected base graph used for `V(s)`;
+        the remaining rows are candidates for the same one decision and are
+        routed through the advantage heads. `Dueling_DQN.forward` returns one
+        Q value per action row, excluding the clean value row.
+        """
         base = self.adapter(state, perspective=self.player_id)
-        rows: list[Data] = []
+        rows: list[Data] = [base]
         for action in legal_actions:
             rows.append(self.builder(base, action, state))
 
         batch = Batch.from_data_list(rows).to(self.device)
         encoded = self.action_encoder.encode_many(legal_actions, state).to(self.device)
-        phase = encoded[:, 0]
-        card_indices = encoded[:, 1:4]
+        phase = torch.cat([encoded[:1, 0], encoded[:, 0]])
+        card_indices = torch.cat([torch.zeros((1, 3), dtype=torch.long, device=self.device), encoded[:, 1:4]])
+        group_index = torch.zeros(len(rows), dtype=torch.long, device=self.device)
+        value_mask = torch.zeros(len(rows), dtype=torch.bool, device=self.device)
+        value_mask[0] = True
 
         # Keep device placement explicit; this catches accidental CPU/GPU mismatches early.
         net_device = next(self.net.parameters()).device
@@ -218,7 +230,7 @@ class GNN_DQN_Agent(BaseAgent):
             )
 
         with torch.no_grad():
-            q_values = self.net(batch, phase, card_indices)
+            q_values = self.net(batch, phase, card_indices, group_index=group_index, value_mask=value_mask)
         return q_values
 
     def remember(self, state: State, action: Action, reward: float, next_state: State, done: bool,) -> None:
@@ -256,29 +268,69 @@ class GNN_DQN_Agent(BaseAgent):
         return self.learn_steps(batch_size, n_steps)
 
     def _score(self, net: torch.nn.Module, rows: list[Data], phase: torch.Tensor,
-               card_indices: torch.Tensor) -> torch.Tensor:
+               card_indices: torch.Tensor, group_index: torch.Tensor | None = None,
+               value_mask: torch.Tensor | None = None) -> torch.Tensor:
         """Batch `rows` and score them with `net`. Shared by the current-Q
-        and target-Q passes below — only the rows/net/grad-tracking differ."""
+        and target-Q passes below — only the rows/net/grad-tracking/
+        `group_index`/`value_mask` differ. `group_index` says which decision
+        each row belongs to, while `value_mask` marks clean rows for
+        `Dueling_DQN`'s `V(s)` stream."""
         batch = Batch.from_data_list(rows).to(self.device)
-        return net(batch, phase.to(self.device), card_indices.to(self.device))
+        group_idx = group_index.to(self.device) if group_index is not None else None
+        value_rows = value_mask.to(self.device) if value_mask is not None else None
+        return net(
+            batch,
+            phase.to(self.device),
+            card_indices.to(self.device),
+            group_index=group_idx,
+            value_mask=value_rows,
+        )
 
     def _q_value(self, states: Sequence[State], actions: Sequence[Action],
                  stage: torch.Tensor) -> torch.Tensor:
         """`Q(s, a)` for the taken `(state, action)` pairs, via the online net.
 
-        Each transition has its own `state`/`action` pair, unlike
-        `score_actions`'s "one state, many candidate actions" shape — so
-        rows/`card_indices` are built via `encode_batch` (one state per
-        action) rather than `encode_many` (one shared state for every
-        action). Each `state`'s own `.perspective` (set by
-        `ReplayBuffer.push`, `Docs/RL-Prep-Changes.md`'s trainer reassigns
-        this agent's seat every episode) is used to build its graph, not
-        this agent's current seat.
+        Unlike `GNN_DQN_Agent._q_value` (one row per sampled transition),
+        the dueling mean needs every legal action of each transition's own
+        state, not just the taken one (`Docs/DuelingDQN.md`'s "Important
+        training detail") — so this builds all of them, flattened into one
+        batch with a `group_index` (one group per transition), then selects
+        each group's row matching the replayed `action`. Each `state`'s own
+        `.perspective` (set by `ReplayBuffer.push`) is used to build its
+        graph, not this agent's current seat — same as `GNN_DQN_Agent`.
         """
-        rows = [self.builder(self.adapter(s, perspective=s.perspective), a, s)
-                for s, a in zip(states, actions)]
-        card_indices = self.action_encoder.encode_batch(actions, states)[:, 1:4]
-        return self._score(self.net, rows, stage, card_indices)
+        rows: list[Data] = []
+        groups: list[int] = []
+        value_rows: list[bool] = []
+        card_rows: list[tuple[int, int, int]] = []
+        taken_row: list[int] = []
+        action_row_count = 0
+        for i, (s, a) in enumerate(zip(states, actions)):
+            legal = self.env.legal_actions(s)
+            base = self.adapter(s, perspective=s.perspective)
+            rows.append(base)
+            groups.append(i)
+            value_rows.append(True)
+            card_rows.append((0, 0, 0))
+            taken_local_index = legal.index(a)
+            for local_index, legal_action in enumerate(legal):
+                if local_index == taken_local_index:
+                    taken_row.append(action_row_count)
+                rows.append(self.builder(base, legal_action, s))
+                groups.append(i)
+                value_rows.append(False)
+                card_rows.append(legal_action.dqn_index(self.env.topology, s)[1:])
+                action_row_count += 1
+
+        group_index = torch.tensor(groups, dtype=torch.long)
+        phase = stage[group_index]
+        card_indices = torch.tensor(card_rows, dtype=torch.long)
+        value_mask = torch.tensor(value_rows, dtype=torch.bool)
+        q_all = self._score(
+            self.net, rows, phase, card_indices, group_index=group_index, value_mask=value_mask
+        )
+        taken_row_index = torch.tensor(taken_row, dtype=torch.long, device=q_all.device)
+        return q_all[taken_row_index]
 
     def _max_next_q(self, next_states: Sequence[State], done: torch.Tensor,
                      next_stage: torch.Tensor) -> torch.Tensor:
@@ -288,18 +340,22 @@ class GNN_DQN_Agent(BaseAgent):
         across the whole minibatch is built/batched/scored in one shot, then
         reduced back to one max per transition with a per-row group index
         (`torch_geometric.utils.scatter(..., reduce="max")`) rather than
-        looping a separate forward pass per transition. Every legal action
-        of one `next_state` shares that state's `phase` (`Phase`/decision-
-        stage are 1:1 — `Docs/RL-Prep-Changes.md`), so the per-row `phase`
-        the head-routing needs is just `next_stage` broadcast per group,
-        not re-derived from each candidate's own `dqn_index()`. Likewise
-        every candidate of one `next_state` is built from that state's own
-        `.perspective` (set by `ReplayBuffer.push`), not this agent's
-        current seat.
+        looping a separate forward pass per transition. That same
+        `group_index` is also what `Dueling_DQN`'s grouped value/advantage
+        mean needs, so it's passed straight through to `_score` — no second
+        grouping scheme. Every legal action of one `next_state` shares that
+        state's `phase` (`Phase`/decision-stage are 1:1 — `Docs/
+        RL-Prep-Changes.md`), so the per-row `phase` the head-routing needs
+        is just `next_stage` broadcast per group, not re-derived from each
+        candidate's own `dqn_index()`. Likewise every candidate of one
+        `next_state` is built from that state's own `.perspective` (set by
+        `ReplayBuffer.push`), not this agent's current seat.
         """
         max_q = torch.zeros(len(next_states), dtype=torch.float32, device=self.device)
         rows: list[Data] = []
         groups: list[int] = []
+        value_rows: list[bool] = []
+        action_groups: list[int] = []
         card_rows: list[tuple[int, int, int]] = []
         for i, ns in enumerate(next_states):
             if bool(done[i]):
@@ -308,9 +364,15 @@ class GNN_DQN_Agent(BaseAgent):
             if not legal:
                 continue
             base = self.adapter(ns, perspective=ns.perspective)
+            rows.append(base)
+            groups.append(i)
+            value_rows.append(True)
+            card_rows.append((0, 0, 0))
             for a in legal:
                 rows.append(self.builder(base, a, ns))
                 groups.append(i)
+                value_rows.append(False)
+                action_groups.append(i)
                 card_rows.append(a.dqn_index(self.env.topology, ns)[1:])
 
         if not rows:
@@ -319,21 +381,33 @@ class GNN_DQN_Agent(BaseAgent):
         group_index = torch.tensor(groups, dtype=torch.long)
         phase = next_stage[group_index]
         card_indices = torch.tensor(card_rows, dtype=torch.long)
+        value_mask = torch.tensor(value_rows, dtype=torch.bool)
         with torch.no_grad():
-            q_all = self._score(self.target_net, rows, phase, card_indices)
-        group_index = group_index.to(self.device)
-        per_group_max = scatter(q_all, group_index, dim=0, dim_size=len(next_states), reduce="max")
+            q_all = self._score(
+                self.target_net, rows, phase, card_indices, group_index=group_index, value_mask=value_mask
+            )
+        action_group_index = torch.tensor(action_groups, dtype=torch.long, device=self.device)
+        per_group_max = scatter(q_all, action_group_index, dim=0, dim_size=len(next_states), reduce="max")
         touched = torch.zeros(len(next_states), dtype=torch.bool, device=self.device)
-        touched[group_index.unique()] = True
+        touched[action_group_index.unique()] = True
         max_q[touched] = per_group_max[touched]
         return max_q
 
     def _max_next_ddqn_q(self, next_states: Sequence[State], done: torch.Tensor,
                          next_stage: torch.Tensor) -> torch.Tensor:
-        """Double-DQN next-state value: online net selects, target net evaluates."""
+        """Double-DQN next-state value: online net selects, target net evaluates.
+
+        Per `Docs/DuelingDQN.md`'s minimal-diff policy, the per-group best-
+        online/target-value selection below (a plain Python dict loop) is
+        unchanged from `GNN_DQN_Agent` — only the `group_index` passed to
+        `_score` is new, so the online/target Q values it selects between
+        are already the dueling-combined `V + A - mean(A)` values.
+        """
         max_q = torch.zeros(len(next_states), dtype=torch.float32, device=self.device)
         rows: list[Data] = []
         groups: list[int] = []
+        value_rows: list[bool] = []
+        action_groups: list[int] = []
         card_rows: list[tuple[int, int, int]] = []
         for i, ns in enumerate(next_states):
             if bool(done[i]):
@@ -342,9 +416,15 @@ class GNN_DQN_Agent(BaseAgent):
             if not legal:
                 continue
             base = self.adapter(ns, perspective=ns.perspective)
+            rows.append(base)
+            groups.append(i)
+            value_rows.append(True)
+            card_rows.append((0, 0, 0))
             for a in legal:
                 rows.append(self.builder(base, a, ns))
                 groups.append(i)
+                value_rows.append(False)
+                action_groups.append(i)
                 card_rows.append(a.dqn_index(self.env.topology, ns)[1:])
 
         if not rows:
@@ -353,12 +433,17 @@ class GNN_DQN_Agent(BaseAgent):
         group_index = torch.tensor(groups, dtype=torch.long)
         phase = next_stage[group_index]
         card_indices = torch.tensor(card_rows, dtype=torch.long)
+        value_mask = torch.tensor(value_rows, dtype=torch.bool)
         with torch.no_grad():
-            q_online = self._score(self.net, rows, phase, card_indices)
-            q_target = self._score(self.target_net, rows, phase, card_indices)
+            q_online = self._score(
+                self.net, rows, phase, card_indices, group_index=group_index, value_mask=value_mask
+            )
+            q_target = self._score(
+                self.target_net, rows, phase, card_indices, group_index=group_index, value_mask=value_mask
+            )
 
         best_online_by_group: dict[int, float] = {}
-        for group, online_value, target_value in zip(groups, q_online, q_target):
+        for group, online_value, target_value in zip(action_groups, q_online, q_target):
             online_scalar = float(online_value.item())
             if group not in best_online_by_group or online_scalar > best_online_by_group[group]:
                 best_online_by_group[group] = online_scalar
@@ -398,4 +483,4 @@ class GNN_DQN_Agent(BaseAgent):
         return float(loss.item())
 
 
-__all__ = ["GNN_DQN_Agent"]
+__all__ = ["Dueling_DQN_Agent"]

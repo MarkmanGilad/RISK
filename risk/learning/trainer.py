@@ -29,7 +29,7 @@ each transition's `perspective` so it stays correct on replay even after
 the learner moves seats again.
 
     from risk.learning.trainer import Trainer
-    trainer = Trainer(seed=0)
+    trainer = Trainer(run_id, agent=agent)
     trainer.train(n_episodes=2000)
 
 Run as a script with: python -m risk.learning.trainer
@@ -55,6 +55,7 @@ from risk.app.setup import SetupStage
 from risk.agents.heuristic_agent import EmpireAgent, KillbotAgent, RaiderAgent, SentinelAgent
 from risk.agents.random_agent import RandomAgent
 from risk.game.actions import FortifyAction
+from risk.learning.dueling_dqn_agent import Dueling_DQN_Agent
 from risk.learning.evaluator import Evaluator
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.train_constants import (
@@ -89,28 +90,33 @@ class Trainer:
         self,
         run_id: int,
         *,
-        agent: Optional[GNN_DQN_Agent] = None,
+        agent: GNN_DQN_Agent,
         evaluator: Optional[Evaluator] = None,
         logger: Optional[TrainingLogger] = None,
+        checkpoint_dir: Optional[str | Path] = None,
         use_wandb: bool = True,
         resume: bool = True,
         notes: Optional[str] = None,
-        **agent_kwargs,
     ) -> None:
         self.run_id = run_id
-        self.checkpoint_dir = Path(CHECKPOINT_DIR) / f"run_{run_id:03d}"
+        self.run_name = f"{agent.label}_{run_id:03d}"
+        self.checkpoint_dir = (
+            Path(checkpoint_dir) if checkpoint_dir is not None
+            else Path(CHECKPOINT_DIR) / self.run_name
+        )
         self._rng = random.SystemRandom()
         self.episode = 0
         self._recent_wins: deque[int] = deque(maxlen=ROLLING_WIN_RATE_WINDOW)
 
-        if agent is None:
-            ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-            agent_kwargs.setdefault("epsilon", EPSILON_START)
-            agent = GNN_DQN_Agent(player_id=0, env=ctx.env, train_mode=True, **agent_kwargs)
         self.agent = agent
 
         self.logger = logger or TrainingLogger(
-            run_id, self.checkpoint_dir, use_wandb=use_wandb, resume=resume, notes=notes
+            run_id,
+            self.checkpoint_dir,
+            use_wandb=use_wandb,
+            run_name=self.run_name,
+            resume=resume,
+            notes=notes,
         )
         self.evaluator = evaluator or Evaluator(
             max_steps=EVAL_MAX_STEPS,
@@ -263,13 +269,30 @@ class Trainer:
 
 
 def main() -> None:
-    """Training entry point — the only value you change per run is RUN_ID.
+    """Training entry point — change RUN_ID and choose one agent block per run.
 
     Run it with: python -m risk.learning.trainer
     """
     RUN_ID = 30
 
-    trainer = Trainer(RUN_ID)
+    ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
+
+    # DQN agent
+    agent = GNN_DQN_Agent(
+        player_id=0,
+        env=ctx.env,
+        train_mode=True,
+        epsilon=EPSILON_START,
+    )
+    # Dueling_DQN agent
+    # agent = Dueling_DQN_Agent(
+    #     player_id=0,
+    #     env=ctx.env,
+    #     train_mode=True,
+    #     epsilon=EPSILON_START,
+    # )
+
+    trainer = Trainer(RUN_ID, agent=agent)
     trainer.train(n_episodes=TRAIN_EPISODES)
     trainer.logger.finish()
 

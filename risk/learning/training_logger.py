@@ -42,12 +42,14 @@ class TrainingLogger:
         *,
         use_wandb: bool = True,
         project_name: str = "Risk-GNN-DQN",
+        run_name: Optional[str] = None,
         resume: bool = True,
         notes: Optional[str] = None,
     ) -> None:
         self.run_id = run_id
         self.checkpoint_dir = Path(checkpoint_dir)
         self.project_name = project_name
+        self.run_name = run_name or f"run_{run_id:03d}"
         self.resume = resume
         self.notes = notes
         self._wandb_enabled = bool(use_wandb and wandb is not None)
@@ -64,7 +66,7 @@ class TrainingLogger:
             config.update(extra_config)
         wandb.init(
             project=self.project_name,
-            name=f"run_{self.run_id:03d}",
+            name=self.run_name,
             config=config,
             notes=self.notes,
         )
@@ -194,8 +196,10 @@ class TrainingLogger:
         config.update(
             {
                 "run_id": self.run_id,
+                "run_name": self.run_name,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "git_commit": self._git_commit(),
+                "agent_class": type(agent).__name__,
                 "model_class": type(agent.net).__name__,
                 "model_str": str(agent.net),
                 "target_model_str": str(agent.target_net),

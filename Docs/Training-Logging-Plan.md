@@ -156,6 +156,7 @@ methods:**
   used DDQN, which loss was active, and the actual clipping threshold.
 
 2. Model identity
+- `agent_class`: `type(agent).__name__` (e.g. `GNN_DQN_Agent`, `Dueling_DQN_Agent`)
 - `model_class`: `type(agent.net).__name__`
 - `model_str`: `str(agent.net)`
 - `target_model_str`: `str(agent.target_net)`
@@ -164,6 +165,7 @@ methods:**
 
 3. Run metadata
 - `run_id`
+- `run_name` (agent-labeled, e.g. `DQN_030` or `Dueling_DQN_030`)
 - timestamp
 - optional git commit hash (if available)
 - optional remark/notes field

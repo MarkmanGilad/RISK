@@ -1,0 +1,155 @@
+"""Tests for `Dueling_DQN`/`Dueling_DQN_Agent` (`Docs/DuelingDQN.md`).
+
+Narrow, focused tests per the build plan's "Tests" section — network-level
+grouping/value behavior plus the agent call sites that changed to pass a
+`group_index` (`score_actions`, `_max_next_ddqn_q`) or restructure around one
+(`_q_value`, exercised indirectly via `train_step` in the checkpoint test).
+Agent plumbing shared with `GNN_DQN_Agent` (device selection, `remember`,
+`act`) is already covered by `test_agents.py` and isn't re-tested here.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+from torch_geometric.data import Batch
+
+from risk.learning.dueling_dqn_agent import Dueling_DQN_Agent
+
+from .conftest import make_env
+
+
+def _agent(seed: int = 1, train_mode: bool = True) -> Dueling_DQN_Agent:
+    env = make_env(seed=seed, agent_kind="ai")
+    return Dueling_DQN_Agent(player_id=0, env=env, train_mode=train_mode)
+
+
+def test_dueling_dqn_forward_returns_one_q_per_action_row() -> None:
+    agent = _agent(seed=2)
+    state = agent.env.current_state()
+    legal = agent.env.legal_actions(state)
+
+    q = agent.score_actions(state, legal)
+
+    assert q.shape == (len(legal),)
+
+
+def test_equal_advantage_group_collapses_q_to_value() -> None:
+    agent = _agent(seed=3)
+    state = agent.env.current_state()
+    legal = agent.env.legal_actions(state)
+    assert len({a.phase for a in legal}) == 1  # one decision -> one dueling group
+
+    # Zero the head scoring this phase's actions so every row's advantage is
+    # 0 -> mean(A) is 0 -> Q must equal the clean-row V(s) for every row.
+    head = agent.net._heads_by_phase[int(legal[0].phase)]
+    with torch.no_grad():
+        for p in head.parameters():
+            p.zero_()
+
+    q = agent.score_actions(state, legal)
+
+    assert torch.allclose(q, q[0].expand_as(q), atol=1e-6)
+
+
+def test_two_groups_in_one_batch_normalize_independently() -> None:
+    agent = _agent(seed=4)
+    state = agent.env.current_state()
+    legal = agent.env.legal_actions(state)
+    assert len(legal) >= 6, "need enough legal actions to split into two groups"
+
+    group_a_actions = legal[:3]
+    group_b_actions = legal[3:6]
+
+    def _rows_phase_cards_value_mask(actions):
+        base = agent.adapter(state, perspective=agent.player_id)
+        rows = [base]
+        rows.extend(agent.builder(base, a, state) for a in actions)
+        encoded = agent.action_encoder.encode_many(actions, state)
+        phase = torch.cat([encoded[:1, 0], encoded[:, 0]])
+        cards = torch.cat([torch.zeros((1, 3), dtype=torch.long), encoded[:, 1:4]])
+        value_mask = torch.tensor([True] + [False] * len(actions), dtype=torch.bool)
+        return rows, phase, cards, value_mask
+
+    rows_a, phase_a, cards_a, value_mask_a = _rows_phase_cards_value_mask(group_a_actions)
+    rows_b, phase_b, cards_b, value_mask_b = _rows_phase_cards_value_mask(group_b_actions)
+
+    def _score_alone(rows, phase, cards, value_mask):
+        batch = Batch.from_data_list(rows).to(agent.device)
+        with torch.no_grad():
+            return agent.net(
+                batch,
+                phase.to(agent.device),
+                cards.to(agent.device),
+                group_index=torch.zeros(len(rows), dtype=torch.long),
+                value_mask=value_mask,
+            )
+
+    q_a_alone = _score_alone(rows_a, phase_a, cards_a, value_mask_a)
+    q_b_alone = _score_alone(rows_b, phase_b, cards_b, value_mask_b)
+
+    combined_rows = rows_a + rows_b
+    combined_phase = torch.cat([phase_a, phase_b])
+    combined_cards = torch.cat([cards_a, cards_b])
+    combined_group_index = torch.tensor([0] * len(rows_a) + [1] * len(rows_b), dtype=torch.long)
+    combined_value_mask = torch.cat([value_mask_a, value_mask_b])
+
+    combined_batch = Batch.from_data_list(combined_rows).to(agent.device)
+    with torch.no_grad():
+        q_combined = agent.net(
+            combined_batch,
+            combined_phase.to(agent.device),
+            combined_cards.to(agent.device),
+            group_index=combined_group_index,
+            value_mask=combined_value_mask,
+        )
+
+    assert torch.allclose(q_combined[:3], q_a_alone, atol=1e-6)
+    assert torch.allclose(q_combined[3:], q_b_alone, atol=1e-6)
+
+
+def test_score_actions_keeps_tensors_on_selected_device() -> None:
+    agent = _agent(seed=5, train_mode=False)
+    state = agent.env.current_state()
+    legal = agent.env.legal_actions(state)
+
+    q = agent.score_actions(state, legal)
+
+    assert q.shape == (len(legal),)
+    assert q.device.type == agent.device.type
+
+
+def test_max_next_ddqn_q_returns_zero_for_done_transitions() -> None:
+    agent = _agent(seed=6)
+    state = agent.env.current_state()
+
+    max_q = agent._max_next_ddqn_q(
+        next_states=[state],
+        done=torch.tensor([True]),
+        next_stage=torch.tensor([int(state.phase)], dtype=torch.long),
+    )
+
+    assert torch.equal(max_q, torch.zeros(1, device=agent.device))
+
+
+def test_save_and_load_checkpoint_round_trips_dueling_net_and_target(tmp_path: Path) -> None:
+    agent = _agent(seed=7)
+    state = agent.env.current_state()
+    action = agent.env.legal_actions(state)[0]
+    agent.remember(state, action, 1.0, state.snapshot(), False)
+    agent.remember(state, action, -1.0, state.snapshot(), True)
+    agent.train_step(batch_size=2)
+
+    ckpt_dir = tmp_path / "dueling_ckpt"
+    agent.save_checkpoint(ckpt_dir)
+
+    agent2 = Dueling_DQN_Agent(player_id=0, env=agent.env, train_mode=True)
+    agent2.load_checkpoint(ckpt_dir)
+
+    assert agent2._train_steps == agent._train_steps
+    assert agent2.epsilon == agent.epsilon
+    assert len(agent2.replay_buffer) == len(agent.replay_buffer)
+    for key, value in agent.net.state_dict().items():
+        assert torch.equal(value, agent2.net.state_dict()[key])
+    for key, value in agent.target_net.state_dict().items():
+        assert torch.equal(value, agent2.target_net.state_dict()[key])

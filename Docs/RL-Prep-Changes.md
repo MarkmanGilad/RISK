@@ -893,10 +893,13 @@ randomness:
 - `_build_episode_context(...)` now passes `seed=None` into
   `SetupStage.default_settings(...)` so each episode's game setup is not
   pinned to a fixed integer seed.
-- `main()` now constructs `Trainer()` without a fixed seed.
+- `main()` constructs the learner agent explicitly and passes it into
+  `Trainer(...)`; episode setup randomness remains non-deterministic inside
+  the trainer.
 
-Reproducibility is still available by explicitly passing `seed=...` to
-`Trainer(...)`.
+Reproducibility for learned weights/checkpoints is handled by the agent and
+logger checkpoint path; episode setup intentionally remains non-deterministic
+unless a future trainer option reintroduces fixed episode seeds.
 
 ## Follow-up pass: inline episode rollout inside train
 
@@ -1124,7 +1127,8 @@ it in place was actively misleading, not just unused.
   shape) and a new `test_training_logger.py` (config building, checkpoint
   cadence/latest-episode selection, no-op-when-disabled, resume-disabled).
   `python -m pytest Temp/tests -q` → 255 passed (7 new), 1 skipped.
-- Ran a full `Trainer(...).train(n_episodes=1)` with `use_wandb=False` end
+- Ran a full explicit-agent `Trainer(...).train(n_episodes=1)` with
+  `use_wandb=False` end
   to end (thousands of real steps) with no exceptions, confirming the
   logging/metrics wiring doesn't break the existing training loop.
 
@@ -1181,7 +1185,7 @@ remain owned by `TrainingLogger`.
 - `python -m pytest Temp/tests -q` → 262 passed, 1 skipped; the only
   failures are the pre-existing 3 `test_training_logger.py` cases unrelated
   to this change (confirmed via `git stash` against plain `main`).
-- Ran a real `Trainer(run_id=999, use_wandb=False, resume=False).train(
+- Ran a real explicit-agent `Trainer(..., use_wandb=False, resume=False).train(
   n_episodes=1)` with `EVAL_EVERY_EPISODES`/`MAX_STEPS_PER_EPISODE`
   temporarily lowered, end to end with no exceptions — confirmed it writes
   `Checkpoints/run_999/best/best_ep000001_score....pt` and `manifest.json`.
