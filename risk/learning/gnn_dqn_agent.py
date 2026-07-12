@@ -33,7 +33,14 @@ from risk.learning.action_graph_builder import ActionGraphBuilder
 from risk.learning.gnn_dqn import GNN_DQN
 from risk.learning.graph_adapter import EDGE_ATTR_DIM, GraphAdapter
 from risk.learning.replay_buffer import ReplayBuffer
-from risk.learning.train_constants import GRAD_CLIP_MAX_NORM
+from risk.learning.train_constants import (
+    BATCH_SIZE,
+    EPSILON_DECAY_EPISODES,
+    EPSILON_END,
+    EPSILON_START,
+    GRAD_CLIP_MAX_NORM,
+    TRAIN_STEPS_PER_CALL,
+)
 
 
 def resolve_device(device: Optional[torch.device] = None) -> torch.device:
@@ -52,7 +59,7 @@ class GNN_DQN_Agent(BaseAgent):
 
     def __init__(self, player_id: int, env: Environment, *,
                  replay_buffer: ReplayBuffer | None = None, device: torch.device | None = None,
-                 epsilon: float = 0.0, train_mode: bool = False, seed: int | None = None,
+                 epsilon: float = EPSILON_START, train_mode: bool = False, seed: int | None = None,
                  gamma: float = 0.99, lr: float = 1e-4, target_update_every: int = 1000,) -> None:
         super().__init__(player_id)
         self.env = env
@@ -145,6 +152,12 @@ class GNN_DQN_Agent(BaseAgent):
         self._train_steps = int(payload["train_steps"])
         self.epsilon = float(payload["epsilon"])
         self.replay_buffer = ReplayBuffer(capacity=self.replay_buffer.capacity, path=dir_path / "replay.pt")
+
+    def on_episode_start(self, episode: int) -> None:
+        """Linear epsilon decay from `EPSILON_START` to `EPSILON_END` over
+        `EPSILON_DECAY_EPISODES`, driven by `Trainer`'s own episode counter."""
+        progress = min(max(episode - 1, 0) / EPSILON_DECAY_EPISODES, 1.0)
+        self.epsilon = EPSILON_START + (EPSILON_END - EPSILON_START) * progress
 
     def set_train_mode(self, train: bool) -> None:
         self.train_mode = bool(train)
@@ -240,20 +253,22 @@ class GNN_DQN_Agent(BaseAgent):
         next_state_snapshot.perspective = self.player_id
         self.replay_buffer.push(state_snapshot, action, reward, next_state_snapshot, done)
 
-    def can_train(self, batch_size: int) -> bool:
-        return len(self.replay_buffer) >= batch_size
+    def can_train(self) -> bool:
+        return len(self.replay_buffer) >= BATCH_SIZE
 
-    def learn_steps(self, batch_size: int, n_steps: int) -> list[float]:
+    def learn_steps(self) -> list[float]:
         losses: list[float] = []
-        for _ in range(max(0, n_steps)):
-            loss = self.train_step(batch_size)
+        for _ in range(max(0, TRAIN_STEPS_PER_CALL)):
+            loss = self.train_step(BATCH_SIZE)
             losses.append(loss)
         return losses
 
-    def learn(self, *, batch_size: int, n_steps: int) -> list[float]:
-        if not self.can_train(batch_size):
+    def learn(self, *, reached_max_steps: bool = False) -> list[float]:
+        """Run DQN updates; the cutoff flag is reserved for on-policy agents."""
+        del reached_max_steps
+        if not self.can_train():
             return []
-        return self.learn_steps(batch_size, n_steps)
+        return self.learn_steps()
 
     def _score(self, net: torch.nn.Module, rows: list[Data], phase: torch.Tensor,
                card_indices: torch.Tensor) -> torch.Tensor:

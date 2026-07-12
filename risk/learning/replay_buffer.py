@@ -55,8 +55,7 @@ import torch
 
 from risk.game.actions import Action
 from risk.game.state import State
-
-DEFAULT_CAPACITY = 500_000
+from risk.learning.train_constants import REPLAY_BUFFER_CAPACITY
 
 Transition = tuple   # (state, action, reward, next_state, done, stage, next_stage)
 
@@ -92,7 +91,7 @@ class ReplayBuffer:
     """
 
     def __init__(
-        self, capacity: int = DEFAULT_CAPACITY, path: Optional[Union[str, Path]] = None
+        self, capacity: int = REPLAY_BUFFER_CAPACITY, path: Optional[Union[str, Path]] = None
     ) -> None:
         self.capacity = capacity
         if path is not None:
@@ -145,4 +144,4 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
-__all__ = ["ReplayBuffer", "Transition", "DEFAULT_CAPACITY"]
+__all__ = ["ReplayBuffer", "Transition"]

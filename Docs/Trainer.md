@@ -15,22 +15,22 @@ Run training with:
 python -m risk.learning.trainer
 ```
 
-`main()` is intentionally the place where the agent is built. The current script
-path constructs the classic `GNN_DQN_Agent` and then passes it into `Trainer`:
+`main()` is intentionally the place where the learner is selected. It creates
+the agent against a temporary sizing environment, then passes it into
+`Trainer`:
 
 ```python
 ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-agent = GNN_DQN_Agent(
-    player_id=0,
-    env=ctx.env,
-    train_mode=True,
-    epsilon=EPSILON_START,
-)
+agent = build_learner_agent("DQN", ctx)
 
 trainer = Trainer(RUN_ID, agent=agent)
 trainer.train(n_episodes=TRAIN_EPISODES)
 trainer.logger.finish()
 ```
+
+`build_learner_agent` currently accepts `"DQN"`, `"Dueling_DQN"`, and `"PPO"`; an
+unknown label raises `ValueError` immediately rather than failing later with
+an unbound local variable.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and future agents
@@ -83,7 +83,13 @@ were collected under.
 `Trainer.train(n_episodes)` is the only public training method. For each
 episode it:
 
-1. Increments `self.episode` and sets `agent.epsilon` from the linear schedule.
+1. Increments `self.episode` and calls `agent.on_episode_start(self.episode)`
+   — a no-op-by-default `BaseAgent` hook, the same pattern as the existing
+   `on_turn_start`/`on_turn_end` hooks. `GNN_DQN_Agent`/`Dueling_DQN_Agent`
+   override it to recompute their own `epsilon` from the linear decay
+   schedule. Episode 1 uses `EPSILON_START`; it reaches `EPSILON_END` at
+   episode `EPSILON_DECAY_EPISODES + 1`. `Trainer` itself no longer knows
+   what epsilon is.
 2. Builds a fresh episode context and advances opponents until the learner's
    first turn.
 3. Repeats learner turns until game-over, learner elimination, or
@@ -98,7 +104,9 @@ episode it:
    that boundary.
 7. Stores exactly one transition for the learner turn with
    `agent.remember(state, action, reward_total, next_state, done)`.
-8. Calls `agent.learn(batch_size=BATCH_SIZE, n_steps=TRAIN_STEPS_PER_CALL)`.
+8. Calls `agent.learn(reached_max_steps=...)`, where the flag reports whether
+   this learner transition reached `MAX_STEPS_PER_EPISODE`; `done` continues to
+   represent only a real terminal state.
 
 The trainer does not inspect replay-buffer internals or optimizer internals.
 Those are agent-owned responsibilities.
@@ -114,8 +122,30 @@ At the end of each episode, the trainer logs one metrics row through
 - `learn_loss_mean`
 - `territories_conquered`
 - `agent_turns_survived`
+- `cumulative_learner_turns` â€” running learner-turn budget for comparing
+  sample efficiency across agents in one uninterrupted training run
+- `learner_update_calls_in_episode` and `optimizer_steps_in_episode` â€” the
+  agent-level learn calls and actual optimizer minibatches executed, which
+  differ for PPO because one rollout update may contain many minibatches
+- `samples_processed_in_episode`, `cumulative_optimizer_steps`, and
+  `cumulative_samples_processed` â€” common compute/sample-presentation axes;
+  PPO supplies exact counters while fixed-batch DQN derives samples from its
+  optimizer-step count
 - `reward_component_*` totals from `RewardCalculator.last_components` and
   `last_end_of_turn_components`
+
+An agent may optionally provide `last_update_metrics` after a non-empty
+`learn()` result and a `progress_metrics()` mapping. The trainer collects
+**every** update mapping in the episode rather than retaining only the last:
+ordinary fields are averaged and fields ending in `_max` keep their maximum.
+Agents may nominate a per-update weight (PPO uses executed minibatches) so
+minibatch-derived means are not biased toward short, early-stopped updates;
+rollout-level fields remain equally weighted. A non-finite diagnostic count is
+logged even though invalid values are excluded from numeric aggregates.
+It merges the result generically, without checking an agent type. PPO uses
+this for KL, loss/return/value diagnostics, entropy/action-set statistics,
+gradient norms, rollout fill, and rollout-update count; DQN-family agents
+simply provide neither mapping.
 
 If the episode hits the eval cadence, evaluation metrics are merged into the
 same row before logging.
@@ -158,11 +188,22 @@ The new agent must provide the interface the trainer/logger/evaluator call:
 - `attach(player_id, env)`
 - callable action selection via `agent((), state)`
 - `remember(state, action, reward, next_state, done)`
-- `learn(batch_size=..., n_steps=...) -> list[float]`
+- `learn(*, reached_max_steps=False) -> list[float]` — the trainer supplies
+  only the dynamic time-limit boundary of the transition it just stored. The
+  DQN agents currently ignore it; PPO uses it to stop GAE crossing into the
+  next reset game without changing the non-terminal `done=False` bootstrap.
+  `batch_size`/`n_steps`/rollout length remain agent-owned constants in
+  `train_constants.py`.
 - `save_checkpoint(path)` and `load_checkpoint(path)`
 - `save_params(path)` for best-policy checkpoints
 - `set_train_mode(train)` for evaluation
-- `epsilon` and `train_mode` attributes
+- `epsilon` and `train_mode` attributes — `Evaluator` reads/zeroes/restores
+  `epsilon` around eval games regardless of agent type, so every agent needs
+  the attribute even if it's inert (e.g. `PPO_Agent`, `Docs/PPO.md`)
+- `on_episode_start(episode)` — optional, inherited as a no-op from
+  `BaseAgent`. `GNN_DQN_Agent`/`Dueling_DQN_Agent` override it to decay their
+  own `epsilon`; an agent that doesn't need per-episode state (PPO) needs no
+  code at all
 - `net` and `target_net` attributes for logging identity/config
 - `label` class attribute (a short string like `"DQN"`/`"Dueling_DQN"`) used
   to build the default `run_name`/`checkpoint_dir` — there is no fallback if
@@ -177,7 +218,6 @@ agent = Dueling_DQN_Agent(
     player_id=0,
     env=ctx.env,
     train_mode=True,
-    epsilon=EPSILON_START,
 )
 
 trainer = Trainer(RUN_ID, agent=agent, resume=False, notes="Dueling_DQN_Agent")

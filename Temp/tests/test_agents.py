@@ -1,6 +1,7 @@
 """Tests for the agent interface and the bundled agents (Phase 5)."""
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 import torch
@@ -33,6 +34,13 @@ from risk.game.environment import Environment
 from risk.game.player import Player
 from risk.game.settings import GameSettings
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
+from risk.learning.train_constants import (
+    BATCH_SIZE,
+    EPSILON_DECAY_EPISODES,
+    EPSILON_END,
+    EPSILON_START,
+    TRAIN_STEPS_PER_CALL,
+)
 
 
 def _settings(n: int = 3, seed: int = 42) -> GameSettings:
@@ -266,6 +274,93 @@ def test_gnn_dqn_agent_save_and_load_checkpoint_round_trip(tmp_path: Path) -> No
         assert torch.equal(value, agent2.net.state_dict()[key])
     for key, value in agent.optimizer.state_dict()["state"].items():
         assert key in agent2.optimizer.state_dict()["state"]
+
+
+def test_gnn_dqn_agent_on_episode_start_decays_epsilon() -> None:
+    env = _fresh_env(seed=5)
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=True)
+
+    agent.on_episode_start(0)
+    assert agent.epsilon == EPSILON_START
+
+    agent.on_episode_start(1)
+    assert agent.epsilon == EPSILON_START
+
+    agent.on_episode_start(EPSILON_DECAY_EPISODES)
+    expected = EPSILON_START + (EPSILON_END - EPSILON_START) * (
+        (EPSILON_DECAY_EPISODES - 1) / EPSILON_DECAY_EPISODES
+    )
+    assert agent.epsilon == pytest.approx(expected)
+
+    agent.on_episode_start(EPSILON_DECAY_EPISODES + 1)
+    assert agent.epsilon == pytest.approx(EPSILON_END)
+
+    agent.on_episode_start(EPSILON_DECAY_EPISODES * 10)
+    assert agent.epsilon == pytest.approx(EPSILON_END)
+
+
+def test_gnn_dqn_agent_learn_accepts_reached_max_steps() -> None:
+    agent = GNN_DQN_Agent(player_id=0, env=_fresh_env(seed=5), train_mode=True)
+
+    assert agent.learn(reached_max_steps=True) == []
+
+
+def test_gnn_dqn_agent_can_train_threshold_matches_batch_size() -> None:
+    """`can_train()`/`learn()` now read `BATCH_SIZE`/`TRAIN_STEPS_PER_CALL`
+    directly instead of receiving them as call-time arguments
+    (`Docs/ChangeLog.md`'s 2026-07-05 entry) — this pins down that the
+    threshold behavior is unchanged by that refactor."""
+    env = _fresh_env(seed=5)
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=True)
+    state = env.current_state()
+    action = env.legal_actions(state)[0]
+
+    for _ in range(BATCH_SIZE - 1):
+        agent.remember(state, action, 0.0, state.snapshot(), False)
+    assert agent.can_train() is False
+    assert agent.learn() == []
+
+    agent.remember(state, action, 0.0, state.snapshot(), False)
+    assert agent.can_train() is True
+    losses = agent.learn()
+    assert len(losses) == TRAIN_STEPS_PER_CALL
+
+
+def test_gnn_dqn_agent_reached_max_steps_flag_is_inert_with_full_replay() -> None:
+    """`reached_max_steps` is reserved for on-policy agents (`Docs/PPO.md`)
+    — for `GNN_DQN_Agent` it must not change the update at all. Compares
+    the returned losses (not raw net weights: the GNN encoder's scatter
+    aggregation is not bit-deterministic across forward passes even with
+    fixed seeds, confirmed empirically against `HEAD`, so a tolerant
+    comparison on the observable output is the meaningful check here)."""
+
+    def _make_and_fill(seed: int) -> GNN_DQN_Agent:
+        torch.manual_seed(seed)
+        env = _fresh_env(seed=5)
+        agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=True, seed=seed)
+        state = env.current_state()
+        action = env.legal_actions(state)[0]
+        for i in range(BATCH_SIZE):
+            agent.remember(state, action, float(i), state.snapshot(), False)
+        return agent
+
+    agent_true = _make_and_fill(seed=42)
+    agent_false = _make_and_fill(seed=42)
+
+    random.seed(123)
+    losses_true = agent_true.learn(reached_max_steps=True)
+    random.seed(123)
+    losses_false = agent_false.learn(reached_max_steps=False)
+
+    assert losses_true == pytest.approx(losses_false, rel=1e-2)
+
+
+def test_base_agent_on_episode_start_is_a_harmless_no_op() -> None:
+    env = _fresh_env(seed=5)
+    agent = RandomAgent(player_id=0, env=env, seed=1)
+
+    agent.on_episode_start(0)
+    agent.on_episode_start(1000)
 
 
 def test_gnn_dqn_agent_auto_device_selection() -> None:

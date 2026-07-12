@@ -1,9 +1,13 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.defaultInterpreterPath": "C:\\venvs\\ai-rl\\Scripts\\python.exe",
     "python.terminal.activateEnvironment": true,
     "python.analysis.extraPaths": ["${workspaceFolder}"],
     "python.testing.pytestEnabled": true,
-    "python.testing.pytestArgs": ["Temp/tests"],
+    "python.testing.pytestArgs": [
+        "Temp/tests",
+        "-p",
+        "no:cacheprovider"
+    ],
     "terminal.integrated.cwd": "${workspaceFolder}",
-    "python-envs.defaultEnvManager": "ms-python.python:pipenv"
+    "python-envs.defaultEnvManager": "ms-python.python:venv"
 }

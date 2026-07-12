@@ -1,475 +1,291 @@
-# Network architectures — DQN × PPO, injection × lookup (plan)
+# Network architectures — action-injection roadmap
 
-Planning/reference doc for the network(s) that sit on top of
-[`GraphAdapter`](GraphAdapter.md) and [`Action.md`](Action.md) to choose
-actions. The shared foundation and Net A (`GNN_DQN`, the DQN + injection
-variant) are implemented; the lookup/PPO variants remain planned comparison
-points. This supersedes the earlier split into `QNetwork.md` (DQN) and
-`PPOPolicy.md` (PPO) — those covered one combination each and would have
-repeated the shared structure twice; this doc covers all four combinations
-against one shared foundation instead.
+This doc is the current architecture reference for the learning networks built
+on top of [`GraphAdapter`](GraphAdapter.md),
+[`ActionGraphBuilder`](ActionGraphBuilder.md), and [`Action.md`](Action.md).
 
----
+The decision is now settled: **every learner injects the candidate action into
+the graph before the GNN encoder runs.** The comparison we care about is the
+learning algorithm, not a second action-representation family.
 
-## Two independent axes, four nets
+## Settled action representation
 
-Two separate design questions turned out to be orthogonal:
+Earlier planning considered a cheaper **lookup** alternative where the GNN
+encoded the plain board once and the action entered later in the scoring head.
+That would have reduced the number of GNN rows per decision, but it also meant
+message passing never saw "this board plus this specific action" as one object.
+For Risk, that was the wrong tradeoff to keep pursuing: attacks, fortifies,
+occupy decisions, and reinforcements are local graph changes whose value often
+depends on how the proposed action alters neighboring territory relations.
 
-1. **Algorithm** — DQN (`Q(s,a)`, off-policy, replay buffer, target network)
-   vs. PPO (`π(a|s)` + `V(s)`, on-policy, rollout buffer, GAE + clipped
-   surrogate).
-2. **How the action enters the network** — **inject** it into the graph
-   before the GNN runs (modify `x`/`edge_attr` per action, one GNN pass
-   per action), vs. **look it up** from one GNN pass over the
-   unmodified state graph (read `H[t1]`/`H[t2]` after the fact, one GNN
-   pass per decision, regardless of how many legal actions exist).
+Action injection has already proven viable in the implemented DQN path and the
+Dueling DQN path. Its per-decision cost has not been the blocker in the W&B
+runs; system metrics point more toward Python/game/action-graph overhead than a
+pure GNN-compute limit. So the roadmap stays on one representation:
 
-Neither axis implies the other — the algorithm decides what the output
-scalar(s) mean and how training works; the action representation decides
-how an action gets *into* the network and at what cost. That's four nets:
-
-| | **Inject** | **Lookup** |
-|---|---|---|
-| **DQN** | **Net A** — `Q(s,a)` from a per-action modified graph | **Net B** — `Q(s,a)` from one shared graph + embedding lookup |
-| **PPO** | **Net C** — `logit(s,a)` from a per-action modified graph, `V(s)` from the base graph | **Net D** — `logit(s,a)` and `V(s)` both from one shared graph |
-
-The plan is to build and train all four against the same self-play setup
-and find out empirically which fits Risk best, rather than deciding by
-argument — see "Experiment plan" at the end.
-
-Current Net A training uses `_max_next_ddqn_q`, a Double-DQN target: the
-online net selects the best next action, while the target net evaluates that
-selected action. The original target-net max helper remains in
-`GNN_DQN_Agent` so the trainer can be switched back by changing one call site.
-
----
-
-## Shared foundation (all four nets)
-
-This is the structure that would otherwise be duplicated four times. Build
-it once, in its own module(s), and have all four nets import it.
-
-### Base graph — unchanged, from `GraphAdapter`
-
-`Data(x=[42,13], edge_index=[2,166], u=[1,34])`, exactly as documented in
-[GraphAdapter.md](GraphAdapter.md). None of the four nets touch
-`GraphAdapter` itself — it stays the action-independent state encoding.
-
-**One addition all four nets benefit from:** append a `num_legal_actions`
-scalar (raw count, or `log1p`-scaled) to `u`. This was a real gap in the
-lookup-based design specifically — a per-action head reading `H[t1]`/
-`H[t2]` has no way to know "is this one of 3 options or one of 40" unless
-that's surfaced somewhere global — but since it lives in `u`, every net
-gets it for free (pooled into the critic/Q-head for Nets A-C, and available
-to Net D's lookup heads via the same `u` they already read). Goes in
-`GraphAdapter._global_features`, sourced from `len(env.legal_actions())` at
-adapter-call time — a small, deliberate exception to `GraphAdapter`'s
-"per-state, not per-action" framing, justified because it's a *property of
-the state* (how open the position is) rather than of any one action.
-
-### `Encoder` — one shared module, `risk/learning/encoder.py`
-
-**Implemented**, exactly as planned below — `TransformerConv` is a graph
-*attention* layer, not a spectral GCN, so the class keeps the name
-`Encoder` rather than something GCN-flavored:
-
-```python
-class Encoder(nn.Module):
-    def __init__(self, in_dim, hidden_dim, edge_dim, n_layers=4):
-        self.input_proj = nn.Linear(in_dim, hidden_dim)
-        self.convs = nn.ModuleList([
-            TransformerConv(hidden_dim, hidden_dim, edge_dim=edge_dim)
-            for _ in range(n_layers)
-        ])
-
-    def forward(self, x, edge_index, edge_attr):
-        h = self.input_proj(x)
-        for conv in self.convs:
-            h = h + F.relu(conv(h, edge_index, edge_attr))   # residual
-        return h   # [num_nodes, hidden_dim]
+```text
+State graph + candidate action -> injected graph row -> shared encoder -> scalar(s)
 ```
 
-Verified against real action batches from `ActionGraphBuilder`
-(`in_dim=13`, `edge_dim=2`, `hidden_dim=64`, `n_layers=4`): encodes a full
-74-action `ATTACK`-phase batch to `[3108, 64]` (3108 = sum of nodes
-across all action graphs), encodes a single base graph with zero
-`edge_attr` (the lookup-style call) to `[42, 64]`, and gradients flow back
-through every layer.
+Everything below assumes that representation.
 
-Identical module for all four nets. What differs is only what gets passed
-in:
+## Learners we are building
 
-- **Inject (A, C):** `edge_attr` carries the real per-action marker for
-  `ATTACK` (`[selected_attack, dice_count]`, zero on every other edge —
-  see "Edge injection" below); `x` carries the per-action node
-  perturbation for `REINFORCE_PLACE`/`OCCUPY`/`FORTIFY`. Called once per
-  *action* (batched via `Batch.from_data_list`).
-- **Lookup (B, D):** `edge_attr` is zero-filled (or omitted, `edge_dim=0`)
-  and `x` is the unmodified base graph's. Called once per *decision*.
-  `TransformerConv`'s attention still runs — it just has nothing from the
-  edge term to contribute, degrading to plain neighbor-attention over `h`,
-  not a no-op.
-
-One encoder, reused, regardless of which net is being trained — this was
-already the settled answer to "do we need two encoders for attack vs.
-other stages" (we don't; zero `edge_attr` degrades gracefully) and it
-applies the same way to "do we need different encoders for injection vs.
-lookup" (we don't; the encoder doesn't know or care where its `x`/`edge_attr`
-came from).
-
-### Action injection (used by Nets A, C only) — `ActionGraphBuilder`
-
-**Implemented** — `risk/learning/action_graph_builder.py`, reference doc
-[ActionGraphBuilder.md](ActionGraphBuilder.md). One difference from
-the original plan below: the per-territory perturbation writes directly
-into `x`'s existing army-count column rather than a parallel
-`proposed_delta` column (see that doc's "Design decision" section for why,
-and when to revisit).
-
-For an `AttackAction(from=A, to=B, dice=d)`:
-
-```python
-edge_attr.shape = [166, 2]                  # [selected_attack, dice_count]
-edge_attr[index_of(A -> B)] = [1, d / MAX_ATTACK_DICE]
-edge_attr[index_of(B -> A)] = [0, 0]        # reverse edge unmarked -> direction
-# every other edge: [0, 0]
-```
-
-For `REINFORCE_PLACE` / `OCCUPY` / `FORTIFY`, the affected territory row(s)
-in a **copy** of `x` get a perturbation (open question: write into the
-existing army-count column directly, or add a parallel `proposed_delta`
-column so the signal stays legible to attention rather than pre-merged
-into the real count — lean toward the parallel column, revisit
-empirically). `StopAttackAction`/skip-`FortifyAction` are the unmodified
-base graph itself — no perturbation, nothing to encode.
-
-`edge_index` never changes per action, only `edge_attr`/`x` do — and
-`topology.edge_index()`'s row order is stable (`BoardTopology` sorts once
-at load time), so `index_of(A -> B)` can be precomputed once, not searched
-per action.
-
-`ActionGraphBuilder` never mutates the base `Data` — every action
-needs its own unmodified copy to diverge from.
-
-### Action lookup (used by Nets B, D only) — embedding heads
-
-For one legal action's `(stage, t1, t2, n)` (from the already-implemented
-`Action.dqn_index()` / `ActionEncoder`, see [Action.md](Action.md)):
-
-```python
-def head_input(stage, t1, t2, n, H, none_vec):
-    h1 = none_vec if t1 == Action.NONE_INDEX else H[t1]
-    h2 = none_vec if t2 == Action.NONE_INDEX else H[t2]
-    return torch.cat([h1, h2, encode_n(stage, n)])
-```
-
-`none_vec` is one learned `nn.Parameter([hidden_dim])`, shared across every
-stage's sentinel case (`StopAttackAction`, skip-`FortifyAction`) — the
-`-1 -> fixed learned "none" vector` idea from `Action.md`. `TRADE_IN`
-doesn't read `H` at all regardless of net — its `t1`/`t2`/`n` are
-card-hand-slot indices, so its head reads `nn.Embedding(MAX_TRANSIENT_HAND_
-SIZE, d)` lookups concatenated with pooled global context instead — sized
-to the hand's worst momentary size mid-attack, not the steady-state
-`MAX_CARDS_IN_HAND` (see `TradeInHead` below).
-
-### Per-stage heads (all four nets)
-
-**Implemented** — `risk/learning/heads.py`'s `ScoringHead`/`TradeInHead`
-classes, one *named submodule per stage* rather than a `ModuleDict` with
-internal stage-keyed dispatch:
-
-```python
-class ScoringHead(nn.Module):       # REINFORCE_PLACE/ATTACK/OCCUPY/FORTIFY —
-    def __init__(self, g_dim):      # identical shape, 4 separate instances
-        self.net = _mlp(g_dim)      # (independent weights, shared class)
-
-    def forward(self, g, card_indices):   # card_indices unused — kept only
-        return self.net(g).squeeze(-1)    # so every head shares one call shape
-
-class TradeInHead(nn.Module):       # different input shape -> its own class
-    def __init__(self, g_dim, card_embed_dim=8):
-        self.card_embedding = nn.Embedding(MAX_TRANSIENT_HAND_SIZE + 1, card_embed_dim)
-        self.net = _mlp(g_dim + 3 * card_embed_dim)
-
-    def forward(self, g, card_indices):
-        ...
-```
-
-Both heads now share one call signature, `(g, card_indices) -> Q`, even
-though `ScoringHead` ignores the second argument — purely so
-`GNN_DQN.forward` (see Net A below) can route *every* row through
-`self._heads_by_phase[stage](g[mask], card_indices[mask])` in a single
-uniform loop, with no `if`/branch distinguishing `TRADE_IN` from the rest.
-`card_indices` itself is `[N, 3]` long and not optional at that call site
-— rows that aren't `TRADE_IN` just carry zeros (or anything; ignored), so
-the tensor's shape never depends on which stages are actually present.
-Each head class is still just `(its input) -> scalar` with no dispatch
-logic of its own — deciding *which* head scores a given row stays
-`GNN_DQN.forward`'s job, not something the agent has to do by hand. Five
-small heads, same reasoning in all four nets: the stages are different
-decisions with different
-`n`-semantics and value scales, so one head per stage avoids forcing a
-shared tail to disambiguate that implicitly. What differs per net is only
-the **input** to each head (pooled action-graph embedding for A/C,
-`head_input(...)` lookup for B/D) and the **output's meaning** (`Q` for
-A/B, `logit` for C/D).
-
-`TradeInHead`'s embedding table is sized `MAX_TRANSIENT_HAND_SIZE + 1`
-rows, not `MAX_CARDS_IN_HAND + 1`: a real hand-slot index (`dqn_index()`'s
-`t1`/`t2`/`n` for `TradeInAction`) can momentarily exceed `MAX_CARDS_IN_
-HAND` mid-attack, between an elimination's card transfer
-(`Environment._apply_attack`, `risk/game/environment.py`) and the forced
-trade-in(s) that bring the hand back down — `MAX_TRANSIENT_HAND_SIZE`
-(`risk/constants.py`) is the proven worst case (two players' steady-state
-hands plus one conquest-card draw), not an arbitrary pad. The table's last
-row is reserved for the `SkipTradeAction` sentinel (`dqn_index()`'s
-`(-1, -1, 0)`) — detected per *row* (`t1 < 0`), not per element, since
-`n == 0` is `SkipTradeAction`'s placeholder but a legitimate real
-card-slot index for `TradeInAction`; per-element masking would silently
-mis-embed that slot. Verified directly: a real rollout exercising the
-sentinel row through `TradeInHead` produces the dedicated "none" embedding
-rather than colliding with card slot 0.
-
-`Phase` doubles as the DQN action-representation stage directly
-(`Docs/Action.md`), so any one decision's legal actions are always a
-single stage now — the agent never needs to handle a mixed-stage batch
-*within one decision* (it still will across a sampled replay-buffer
-minibatch, which spans many decisions — `Docs/RL-Prep-Changes.md`).
-
-### Pooling (used wherever a whole-graph scalar is needed)
-
-**Implemented** — `risk/learning/pooling.py`'s `pool(h, batch, u)` function
-(needs the PyG `batch` index tensor too, to know which nodes belong to
-which graph — omitted from the snippet below for brevity).
-
-```python
-g = torch.cat([global_mean_pool(H), global_max_pool(H), u], dim=-1)
-```
-
-`u` concatenated in after pooling, not fed through the GNN — it's already
-global (phase, budget, eliminations, now `num_legal_actions`), nothing for
-message passing to refine, and pure node pooling alone is blind to it.
-
----
-
-## Net A — DQN + injection
-
-The network and the game-logic orchestration around it are two separate
-classes (mirroring `Temp/Examples/DQN_Agent.py` wrapping a bare `DQN`):
-
-- **`risk/learning/gnn_dqn.py`'s `GNN_DQN`** — **implemented**, all 5
-  stages in one call, one uniform loop: `forward(state, phase,
-  card_indices) -> Q`.
-  - `state` — always a `Batch`, one graph per row being scored, even for
-    `N=1` (`Batch.from_data_list([one_graph])`) — same convention as
-    carrying a batch dimension of 1 in any other PyTorch net; `forward`
-    doesn't detect/special-case a bare single `Data`, that's the caller's
-   job. *Injected* (`ActionGraphBuilder`) for the 4 graph-based stages;
-   for `TRADE_IN` the builder returns an unmodified copy of
-   `GraphAdapter`'s base graph (repeated once per candidate in that
-   decision, since none of them perturb the graph) — `GraphAdapter`
-   already gives every base graph a zero-filled `edge_attr` of its own
-   (`Docs/GraphAdapter.md`), so `forward` doesn't need to default
-   anything; every graph that reaches it already has the same fields
-   regardless of stage.
-  - `phase` — `[N]` long, one `Phase` value per row, same convention as
-    `ReplayBuffer`'s `stage`/`next_stage`.
-  - `card_indices` — `[N, 3]` long, **not optional**: each row's
-    `dqn_index()` `(t1, t2, n)` for `TRADE_IN` rows, zeros (or anything;
-    ignored) for every other row. Required unconditionally — not just
-    whenever a `TRADE_IN` row happens to be present — specifically so its
-    shape never depends on which stages are actually in the batch.
-
-  Internally: `Encoder` + `pool` once for the *whole* batch regardless of
-  stage mix, then **one loop, no branching**: over the 5 DQN phase/head
-  slots (`TRADE_IN`, `REINFORCE_PLACE`, `ATTACK`, `OCCUPY`, `FORTIFY`),
-  scoring only rows whose mask is present with
-  `self._heads_by_phase[stage](g[mask], card_indices[mask])`.
-  This only works because every head — `ScoringHead` and `TradeInHead`
-  alike — shares the same `(g, card_indices) -> Q` call signature now (see
-  "Per-stage heads" above); there's no separate `if is_trade_in` path
-  anymore. The dict lookup is built once in `__init__`, aliasing the same
-  submodule instances already registered as named attributes (not a
-  second registration). The only game-adjacent import is the leaf `Phase`
-  enum itself (no dependencies of its own) — not `Action`/
-  `ActionGraphBuilder`/`Environment`.
-
-  Verified against a real 400-step rollout (driven manually, playing the
-  agent's role by hand — see below, with a uniform `[N, 3]` `card_indices`
-  passed every call, zeros for non-`TRADE_IN` decisions) plus a fabricated,
-  fully mixed batch — `TRADE_IN` rows (including a `SkipTradeAction`
-  sentinel) *and* graph-based rows from a different decision, scored
-  together in one `forward` call through the same uniform loop, the shape
-  a sampled replay-buffer minibatch would actually be: every row scored
-  correctly, gradients confirmed flowing.
-- **`GNN_DQN_Agent`** — **implemented**, including `train_step`. Owns
-  `ActionGraphBuilder`, builds/batches the per-candidate graphs, builds the
-  `phase`/`card_indices` tensors, merges scores back to `legal_actions()`'s
-  order, `argmax`s. This is the piece that actually knows what a
-  `State`/`Action` is.
-   - `train_step(batch_size)` — one Double-DQN TD-error update: samples a
-    minibatch from `self.replay_buffer`, scores the taken `(state,
-      action)` pairs with the online net, lets the online net select the best
-      legal action of each `next_state`, evaluates those selected actions
-      with the target net, then applies Huber loss against the Double-DQN
-      target plus gradient clipping before one optimizer step. Target net is hard-synced to
-    the online net every `target_update_every` calls (an `Adam` optimizer
-    and `gamma`/`lr`/`target_update_every` are now `GNN_DQN_Agent`
-    constructor kwargs). Verified against a real self-play rollout: online
-    net params change after `train_step`, target net is unchanged between
-    syncs and exactly matches the online net immediately after one.
-  - `risk/learning/trainer.py`'s `Trainer` (not part of this doc's shared
-    foundation, but the thing that actually runs Net A's training step
-    from "Experiment plan" step 3) reuses one `GNN_DQN_Agent` across many
-    self-play episodes, reassigning it to a random seat/`n_players` every
-    episode via `attach(...)` — see `GraphAdapter`'s `perspective`
-    parameter (`Docs/GraphAdapter.md`) for how the net still sees one
-    consistent "this is me" frame despite the seat changing, and
-    `Docs/RL-Prep-Changes.md`'s "perspective-relative encoding + `Trainer`"
-    entry for the full writeup.
-
-```
-base Data(state)
-   │  + one legal action (per action)            <- the agent's job from here down
-   ▼
-ActionGraphBuilder  ──▶  N graphs (injected, or base copy for TRADE_IN), phase + card_indices tensors
-   ▼
-Batch.from_data_list
-   ▼
-GNN_DQN.forward(state, phase, card_indices) ──▶ Q(s, a)  [N]   <- the net's job: encode + pool + route to head
-   ▼
-argmax -> chosen action                                          <- back to the agent
-```
-
-`N` GNN forward passes per decision (batched into one call, but still `N`
-node-sets through the encoder). Training uses off-policy replay with a
-Double-DQN target: the online net selects the next action and the target net
-evaluates that selected action. This is the design originally in `QNetwork.md`,
-with the training target updated after the first stability runs.
-
-## Net B — DQN + lookup
-
-```
-base Data(state)
-   ▼
-Encoder (once)          ──▶  H  [42, hidden_dim]
-   │
-   ├─ pool(H, u) ──▶ available if a head wants global context too
-   ▼
-for each legal action (stage, t1, t2, n):
-   head_input(stage, t1, t2, n, H, none_vec)
-   ▼
-heads[stage](head_input)  ──▶  Q(s, a)  [N]
-   ▼
-argmax -> chosen action
-```
-
-**1** GNN forward pass per decision, regardless of `N`. Same DQN loss/target
-network/replay buffer as Net A — only the action representation changes.
-Cheaper per step; the open empirical question is whether `Q` estimates
-degrade without the GNN seeing the action during message passing.
-
-## Net C — PPO + injection
-
-```
-base Data(state)                                    base Data(state)
-   │  + one legal action (per action)                     │  (unmodified)
-   ▼                                                       ▼
-ActionGraphBuilder ──▶ N modified graphs             Encoder (once) ──▶ H_base
-   ▼                                                       ▼
-Batch.from_data_list                                pool(H_base, u) ──▶ g_base
-   ▼                                                       ▼
-Encoder (batched) ──▶ H per graph                    critic_head(g_base) ──▶ V(s)
-   ▼
-pool(H, u) ──▶ g  [N, g_dim]
-   ▼
-heads[stage](g) ──▶ logit(s, a)  [N]
-   ▼
-softmax -> Categorical -> sample
-```
-
-`N + 1` GNN forward passes per decision — the `+1` is real and worth
-calling out: `V(s)` doesn't depend on any action, so it has to come from
-a pass over the *unmodified* base graph, separate from the `N` action
-passes the actor needs. This is the most expensive of the four nets.
-
-## Net D — PPO + lookup
-
-```
-base Data(state)
-   ▼
-Encoder (once) ──▶  H  [42, hidden_dim]
-   │
-   ├──────────────────────────┬───────────────────────┐
-   ▼                          ▼                         ▼
-for each legal action:   pool(H, u) ──▶ g          (g reused, no extra pass)
-  head_input(...)              ▼
-   ▼                     critic_head(g) ──▶ V(s)
-heads[stage](...)
-   ▼ logit(s,a) [N]
-softmax -> Categorical -> sample
-```
-
-**1** GNN forward pass per decision, shared between the actor (via `H`
-lookups) and the critic (via pooling the same `H`). Cheapest of the four —
-the actor and critic aren't just both cheap, they share the *same* encoder
-output, so there's no `+1` the way Net C has. This was the design
-originally in `PPOPolicy.md`.
-
----
-
-## Comparing the four
-
-| | Algorithm | Action entry | GNN passes / decision | What the GNN "sees" |
+| Learner | Status | Main output | Training style | Reference |
 |---|---|---|---|---|
-| **A** | DQN | inject | `N` | board + this specific action, jointly, during message passing |
-| **B** | DQN | lookup | `1` | board only; the action enters after, at the head |
-| **C** | PPO | inject | `N + 1` | board + action jointly (actor); board alone (critic) |
-| **D** | PPO | lookup | `1` | board only; the action enters after, at the head |
+| **DQN** | implemented | `Q(s, a)` | off-policy replay + Double-DQN target | `risk/learning/gnn_dqn.py`, `risk/learning/gnn_dqn_agent.py` |
+| **Dueling DQN** | implemented | `V(s)` + `A(s, a)` -> `Q(s, a)` | off-policy replay + Double-DQN target | `Docs/DuelingDQN.md` |
+| **PPO** | planned | policy logits + `V(s)` | on-policy rollout + clipped surrogate | `Docs/PPO.md` |
+| **PQN** | planned | dueling Q-values plus policy from advantages | replay-based value + policy improvement | `Docs/PQN.md` |
 
-The honest trade is expressiveness (inject) vs. throughput (lookup) — not
-"PPO vs. DQN" by itself, since both algorithms can pair with either action
-representation. DQN's off-policy replay buffer means each transition gets
-reused across many gradient steps, partially amortizing inject's per-step
-cost; PPO is on-policy and typically more sample-hungry, so inject's `N+1`
-cost is paid more often per unit of policy improvement. That's a reason to
-expect B/D to train faster wall-clock-for-wall-clock, but it's exactly the
-kind of claim this experiment plan exists to check rather than assume.
+The order is deliberate. DQN is the working baseline. Dueling DQN isolates the
+effect of adding a value stream. PPO changes the optimization method while
+keeping the same injected-action encoder shape. PQN is the later unified idea:
+keep replay efficiency, use the dueling value/advantage structure, and add an
+explicit policy-improvement objective.
 
----
+## Shared foundation
 
-## Experiment plan
+All four learners use the same graph/action foundation unless a design doc says
+otherwise.
 
-1. **Build the shared foundation first** — `Encoder`, `ActionGraphBuilder`,
-   the lookup `head_input`/`none_vec` helper, the per-stage scoring heads
-   (`ScoringHead`/`TradeInHead`), and the `num_legal_actions` addition to
-   `GraphAdapter`. Verify each in isolation against real `Environment`
-   states (same style as `GraphAdapter.md`'s/`Action.md`'s "Verified"
-   sections) before any of the four nets are assembled — a bug shared by
-   all four is much cheaper to catch once than four times.
-2. **Assemble all four nets as thin wrappers** over the shared pieces —
-   ideally one `risk/learning/` module per net (or one configurable class
-   with `algorithm: Literal["dqn","ppo"]` / `action_entry:
-   Literal["inject","lookup"]` flags, if the four wrappers turn out to be
-   mostly boilerplate around the same shared calls). Confirm each one plays
-   a full legal game via `SelfPlay.play_headless` with an untrained network
-   before training anything — sampling/arg-maxing from random weights
-   should still only ever produce legal moves.
-3. **Train all four against the same self-play setup** — same opponent
-   roster (`RaiderAgent`/`SentinelAgent`/`EmpireAgent`/`RandomAgent`, as in
-   `self_play.py`'s `main()`), same `n_players`/seeds where feasible.
-   Track wall-clock time and env-step count separately, since A/C and B/D
-   have different per-decision cost — comparing by wall-clock alone would
-   conflate "trains better" with "computes cheaper per step."
-4. **Evaluate head-to-head** — round-robin tournament among the four
-   trained agents plus the existing heuristic baselines via
-   `SelfPlay.play_headless`/`play_rendered`, tracking win rate. This is the
-   actual answer to "which one is better" — empirical, not argued from
-   architecture diagrams.
-5. **Only then** tune hyperparameters (clip `eps`, GAE `λ`/`γ` for C/D;
-   target-update frequency, replay size for A/B; learning rate, entropy
-   coefficient, epochs per batch) — on whichever net(s) the tournament
-   says are worth the investment, not all four equally.
+### Base state graph
 
-Steps 1-2 are the actual subject of this doc; 3-5 are the experiment that
-decides which of the four nets to keep building on.
+`GraphAdapter` converts a `State` into a PyG `Data` object with territory node
+features, directed board edges, edge attributes, and global features:
+
+```text
+Data(x=[42, 13], edge_index=[2, 166], edge_attr=[166, 2], u=[1, 34])
+```
+
+The base graph is action-independent. It represents the board from the
+learner's perspective, so the model sees a stable "me versus others" frame even
+when `Trainer` reassigns the learner to different seats across episodes.
+
+### Candidate action graph
+
+`ActionGraphBuilder` takes the base graph, one legal action, and the state, then
+returns an injected graph row for that candidate. It never mutates the base
+graph.
+
+For attacks, the selected directed edge receives action-specific edge features:
+
+```python
+edge_attr[index_of(from_territory -> to_territory)] = [1, dice / MAX_ATTACK_DICE]
+```
+
+For reinforcement, occupy, and fortify choices, the relevant territory row(s)
+receive the proposed army-count perturbation. Sentinel/no-op decisions such as
+stop attack or skip fortify use an unmodified base copy.
+
+The action graph is the unit scored by the network. One legal decision becomes
+one batch of graph rows, one row per legal action, plus a clean base row when an
+algorithm needs a state-value stream.
+
+### Shared encoder
+
+`risk/learning/encoder.py` provides the common GNN encoder. It projects node
+features into `hidden_dim`, runs residual `TransformerConv` layers, and returns
+one embedding per territory node:
+
+```python
+h = self.input_proj(x)
+for conv in self.convs:
+    h = h + F.relu(conv(h, edge_index, edge_attr))
+return h
+```
+
+`TransformerConv` is graph attention, not a spectral GCN, so the neutral name
+`Encoder` is intentional. The same encoder class is reused by DQN, Dueling DQN,
+PPO, and PQN.
+
+### Pooling
+
+`risk/learning/pooling.py` turns node embeddings into one graph embedding per
+row:
+
+```python
+g = torch.cat([global_mean_pool(h), global_max_pool(h), u], dim=-1)
+```
+
+Global features `u` are concatenated after node pooling because they are already
+graph-level inputs; message passing has nothing to refine there.
+
+### Phase heads
+
+`risk/learning/heads.py` contains the per-phase scalar heads:
+
+- `TradeInHead` for `TRADE_IN`, including card-slot embeddings.
+- `ScoringHead` for `REINFORCE_PLACE`, `ATTACK`, `OCCUPY`, and `FORTIFY`.
+
+The call shape is uniform:
+
+```python
+head(g_rows, card_indices_rows) -> scalar_rows
+```
+
+The same head classes can output different meanings depending on the learner:
+
+- DQN: direct Q-values.
+- Dueling DQN: action advantages.
+- PPO: policy logits.
+- PQN: action advantages used for both Q-values and policy logits.
+
+The input representation stays the same; only the training objective and final
+interpretation change.
+
+## Shared agent/trainer contract
+
+`Trainer` does not build hidden default agents. The run entry point constructs
+the agent explicitly and passes it into `Trainer`:
+
+```python
+trainer = Trainer(RUN_ID, agent=agent)
+trainer.train(n_episodes=TRAIN_EPISODES)
+```
+
+Every learner should provide the interface documented in
+[`Trainer.md`](Trainer.md): `attach`, callable action selection, `remember`,
+`learn`, checkpoint methods, `set_train_mode`, `epsilon`, `train_mode`, `net`,
+`target_net`, and a short `label` used for run/checkpoint naming.
+
+The trainer loop remains shared unless an algorithm truly needs a different
+rollout contract. DQN and Dueling DQN already fit it. PPO is planned to keep the
+same public calls while making rollout collection/update boundaries agent-owned.
+PQN should also keep replay/update logic inside the agent.
+
+## DQN
+
+**Implemented.** `GNN_DQN` scores one scalar per injected action row:
+
+```text
+base state
+  + legal action a_i
+  -> ActionGraphBuilder
+  -> Batch.from_data_list([...])
+  -> GNN_DQN.forward(batch, phase, card_indices)
+  -> Q(s, a_i)
+```
+
+`GNN_DQN_Agent` owns legal-action enumeration, graph construction, batching,
+epsilon-greedy action selection, replay storage, and learning. Training uses
+off-policy replay and a Double-DQN target: the online network selects the next
+action and the target network evaluates it.
+
+The default run label is `DQN`, so run/checkpoint names look like `DQN_030`.
+
+## Dueling DQN
+
+**Implemented.** Dueling DQN keeps the same injected action rows but adds one
+clean state row for the value stream:
+
+```text
+(s, clean), (s, a_1), (s, a_2), ..., (s, a_N)
+```
+
+The clean row is routed to a value head:
+
+$$
+V(s)
+$$
+
+Each injected action row is routed to the phase head as an advantage:
+
+$$
+A(s, a_i)
+$$
+
+The network combines them per decision group:
+
+$$
+Q(s, a_i) = V(s) + A(s, a_i) - \operatorname{mean}_j A(s, a_j)
+$$
+
+The clean row is explicit through `value_mask`; `group_index` identifies which
+rows belong to the same decision. This is important for replay minibatches,
+where each sampled transition may require reconstructing all legal actions for
+that sampled state so the advantage mean is correct.
+
+The default run label is `Dueling_DQN`, so run/checkpoint names look like
+`Dueling_DQN_040`.
+
+## PPO
+
+**Planned.** PPO reuses the Dueling batch shape because it needs both action
+logits and a state value:
+
+```text
+(s, clean) -> value head -> V(s)
+(s, a_i)  -> phase head -> logit(s, a_i)
+```
+
+The policy is a categorical distribution over legal-action logits:
+
+$$
+\pi(a_i \mid s) = \operatorname{softmax}(\operatorname{logit}(s, a_i))
+$$
+
+The main change is not the graph encoder; it is the learning rhythm. PPO is
+on-policy: the agent collects an ordered rollout, stores collection-time
+`old_log_prob` and `old_value`, computes GAE, then runs clipped-surrogate
+updates over that rollout. `Docs/PPO.md` records the detailed plan, including
+detached rollout storage and planned `PPO_*` constants.
+
+The default run label should be `PPO`, so run/checkpoint names look like
+`PPO_<id>` once implemented.
+
+## PQN
+
+**Planned.** PQN is the new unified value-policy learner. It starts from the
+Dueling architecture and interprets the advantage stream as both value-learning
+structure and policy logits:
+
+```text
+(s, clean) -> V(s)
+(s, a_i)  -> A(s, a_i)
+
+Q(s, a_i) = V(s) + A(s, a_i) - mean(A)
+pi(a_i|s) = softmax(A(s, a_i))
+```
+
+The Bellman part stays close to Dueling Double DQN. The policy part adds a
+replay-based policy-improvement objective, not a PPO-style on-policy gradient.
+That distinction matters: PQN keeps replay efficiency and does not store old
+policy probabilities in the replay buffer. See [`PQN.md`](PQN.md) for the full
+motivation and loss design.
+
+The default run label should be `PQN`, so run/checkpoint names look like
+`PQN_<id>` once implemented.
+
+## Comparison plan
+
+The comparison is now among algorithms that share the same injected-action
+foundation.
+
+| Learner | Representation | Main question |
+|---|---|---|
+| DQN | injected action -> direct Q | Baseline: how strong is the current replay/value learner? |
+| Dueling DQN | clean state + injected actions -> V/A/Q | Does separating state value from action advantage improve ranking and stability? |
+| PPO | clean state + injected actions -> logits/V | Does on-policy policy optimization outperform replay-based value learning? |
+| PQN | clean state + injected actions -> V/A/Q/policy | Can one replay-based dueling scorer learn both values and a useful policy? |
+
+Recommended experiment order:
+
+1. Keep DQN as the baseline with known-good checkpoints and W&B history.
+2. Finish the Dueling DQN comparison run and evaluate against DQN.
+3. Build PPO only after Dueling has a meaningful comparison window.
+4. Build PQN after PPO has results, so PQN is compared against both pure value
+   learning and pure on-policy policy optimization.
+5. Compare agents by eval score, eval win rate, `win_rate_last_50`, wall-clock
+   throughput, and system metrics. Do not judge speed from parallel runs on the
+   same GPU; W&B system GPU memory/utilization is device-level and will combine
+   active processes.
+
+## Non-goals
+
+- Do not add another action representation in v1 of these learners.
+- Do not create separate trainers for architecture changes alone.
+- Do not refactor the working DQN/Dueling code while building PPO or PQN unless
+  the same fix is required for correctness across all learners.
+- Do not tune every algorithm equally before the first comparison. Get a clean
+  baseline run first, then spend tuning effort where the results justify it.

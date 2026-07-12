@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import random
 from collections import deque
-import math
 from pathlib import Path
 from typing import Optional
 
@@ -59,9 +58,7 @@ from risk.game.actions import FortifyAction
 from risk.learning.dueling_dqn_agent import Dueling_DQN_Agent
 from risk.learning.evaluator import Evaluator
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
-from risk.learning.ppo_agent import PPO_Agent
 from risk.learning.train_constants import (
-    BATCH_SIZE,
     CHECKPOINT_DIR,
     EVAL_EVERY_EPISODES,
     EVAL_KEEP_BEST,
@@ -74,50 +71,6 @@ from risk.learning.train_constants import (
     TRAIN_EPISODES,
 )
 from risk.learning.training_logger import TrainingLogger
-
-
-def _aggregate_update_metrics(
-    rows: list[dict[str, float]],
-    *,
-    weight_key: str | None = None,
-    unweighted_fields: frozenset[str] = frozenset(),
-) -> dict[str, float]:
-    """Aggregate every agent update in an episode instead of keeping the last."""
-    aggregated: dict[str, float] = {}
-    nonfinite_count = 0
-    keys = {key for row in rows for key in row}
-    for key in keys:
-        values: list[tuple[float, float]] = []
-        for row in rows:
-            try:
-                value = float(row[key])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if not math.isfinite(value):
-                nonfinite_count += 1
-                continue
-            weight = 1.0
-            if weight_key is not None and key not in unweighted_fields:
-                try:
-                    weight = float(row[weight_key])
-                except (KeyError, TypeError, ValueError):
-                    weight = 1.0
-                if not math.isfinite(weight):
-                    nonfinite_count += 1
-                    weight = 1.0
-            values.append((value, max(weight, 0.0)))
-        if not values:
-            continue
-        if key.endswith("_max"):
-            aggregated[key] = max(value for value, _ in values)
-            continue
-        total_weight = sum(weight for _, weight in values)
-        aggregated[key] = (
-            sum(value * weight for value, weight in values) / total_weight
-            if total_weight > 0 else sum(value for value, _ in values) / len(values)
-        )
-    aggregated["update_metrics_nonfinite_count"] = float(nonfinite_count)
-    return aggregated
 
 
 class Trainer:
@@ -148,7 +101,6 @@ class Trainer:
         )
         self._rng = random.SystemRandom()
         self.episode = 0
-        self.cumulative_learner_turns = 0
         self._recent_wins: deque[int] = deque(maxlen=ROLLING_WIN_RATE_WINDOW)
 
         self.agent = agent
@@ -185,10 +137,6 @@ class Trainer:
             episode_reward = 0.0
             territories_conquered = 0
             losses: list[float] = []
-            update_metric_rows: list[dict[str, float]] = []
-            learner_update_calls = 0
-            optimizer_steps_before = self._agent_optimizer_steps()
-            samples_processed_before = self._agent_samples_processed()
             done = False
             reward_components: dict[str, float] = {}
             
@@ -237,30 +185,12 @@ class Trainer:
                 episode_reward += reward_total
 
                 self.agent.remember(state, action, reward_total, next_state, done)
-                reached_max_steps = step_count >= MAX_STEPS_PER_EPISODE
-                step_losses = self.agent.learn(reached_max_steps=reached_max_steps)
+                step_losses = self.agent.learn()
 
                 losses.extend(step_losses)
-                if step_losses:
-                    learner_update_calls += 1
-                    optional_metrics = getattr(self.agent, "last_update_metrics", {})
-                    if isinstance(optional_metrics, dict):
-                        update_metric_rows.append(dict(optional_metrics))
                 if done:
                     break
 
-            self.cumulative_learner_turns += agent_turns
-            progress_metrics = getattr(self.agent, "progress_metrics", None)
-            agent_progress = progress_metrics() if callable(progress_metrics) else {}
-            optimizer_steps = self._agent_optimizer_steps()
-            samples_processed = self._agent_samples_processed()
-            update_metrics = _aggregate_update_metrics(
-                update_metric_rows,
-                weight_key=getattr(self.agent, "update_metric_weight_key", None),
-                unweighted_fields=getattr(
-                    self.agent, "unweighted_update_metrics", frozenset()
-                ),
-            )
             winner = env.winner()
             win = int(winner == seat)
             self._recent_wins.append(win)
@@ -271,18 +201,10 @@ class Trainer:
                 "learn_loss_mean": (sum(losses) / len(losses)) if losses else 0.0,
                 "territories_conquered": territories_conquered,
                 "agent_turns_survived": agent_turns,
-                "cumulative_learner_turns": self.cumulative_learner_turns,
-                "learner_update_calls_in_episode": learner_update_calls,
-                "optimizer_steps_in_episode": optimizer_steps - optimizer_steps_before,
-                "samples_processed_in_episode": samples_processed - samples_processed_before,
-                "cumulative_optimizer_steps": optimizer_steps,
-                "cumulative_samples_processed": samples_processed,
                 **{
                     f"reward_component_{name}": total
                     for name, total in reward_components.items()
                 },
-                **update_metrics,
-                **agent_progress,
             }
             if self.episode % EVAL_EVERY_EPISODES == 0:
                 eval_result = self.evaluator.evaluate(self.agent, episode=self.episode)
@@ -300,13 +222,6 @@ class Trainer:
         "per-component logging") — diagnostic only, no effect on training."""
         for name, value in components.items():
             totals[name] = totals.get(name, 0.0) + value
-
-    def _agent_optimizer_steps(self) -> int:
-        return int(getattr(self.agent, "optimizer_steps", getattr(self.agent, "train_steps", 0)))
-
-    def _agent_samples_processed(self) -> int:
-        exact = getattr(self.agent, "samples_processed", None)
-        return int(exact if exact is not None else self._agent_optimizer_steps() * BATCH_SIZE)
 
     def _build_episode_context(self):
         n_players = self._rng.randint(MIN_PLAYERS, MAX_PLAYERS)
@@ -342,25 +257,29 @@ class Trainer:
             step_count=step_count, agent_turns=agent_turns, seat=seat, current_state=current_state, )
         print(f"\033[K{status_line}", end="\r", flush=True)
 
-def build_learner_agent(agent_kind: str, ctx):
-    """Construct the selected learner against the temporary sizing environment."""
-    if agent_kind == "DQN":
-        return GNN_DQN_Agent(player_id=0, env=ctx.env, train_mode=True)
-    if agent_kind == "Dueling_DQN":
-        return Dueling_DQN_Agent(player_id=0, env=ctx.env, train_mode=True)
-    if agent_kind == "PPO":
-        return PPO_Agent(player_id=0, env=ctx.env, train_mode=True)
-    raise ValueError(f"Unknown learner agent kind {agent_kind!r}")
 
 def main() -> None:
     """Training entry point — change RUN_ID and choose one agent block per run.
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 45
+    RUN_ID = 40
 
     ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-    agent = build_learner_agent("PPO", ctx)
+
+    # DQN agent
+    # agent = GNN_DQN_Agent(
+    #     player_id=0,
+    #     env=ctx.env,
+    #     train_mode=True,
+    # )
+    # Dueling_DQN agent
+    agent = Dueling_DQN_Agent(
+        player_id=0,
+        env=ctx.env,
+        train_mode=True,
+    )
+
     trainer = Trainer(RUN_ID, agent=agent)
     trainer.train(n_episodes=TRAIN_EPISODES)
     trainer.logger.finish()

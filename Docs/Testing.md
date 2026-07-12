@@ -36,18 +36,30 @@ set it in the shell before running the suite).
 | `test_reward.py` | `RewardCalculator` — terminal semantics (win/loss/not-done) plus one case per phase shaping helper (`TRADE_IN`/`REINFORCE_PLACE`/`ATTACK`/`OCCUPY`/`FORTIFY`/`end_of_turn`) |
 | `test_evaluator.py` | `Evaluator` (`Docs/Eval.md`) — `evaluate(...)`'s returned metric keys/determinism and `epsilon`/`train_mode` restore, `maybe_save_best(...)`'s top-N retention and manifest sorting |
 | `test_training_logger.py` | `TrainingLogger` — config building, checkpoint path/cadence orchestration (`save_checkpoint`/`try_resume`), no-op behavior with W&B disabled. Agent-internals round-tripping stays in `test_agents.py` (below) |
+| `test_trainer.py` | `Trainer` (`Docs/Trainer.md`) — the `reached_max_steps` contract passed to `agent.learn(...)` (only the final learn call of a truncated episode gets `True`), short end-to-end smoke runs through `Trainer.train()` for `GNN_DQN_Agent`/`Dueling_DQN_Agent` with a monkeypatched small `MAX_STEPS_PER_EPISODE`, and the logged per-episode metric keys |
 
 `risk/learning/` (the RL layer — `GraphAdapter`, `ActionGraphBuilder`,
 `Encoder`, `Heads`, `GNN_DQN`, `ReplayBuffer`, `ActionEncoder`) has limited
 checked-in tests so far, with `RewardCalculator` (`test_reward.py`),
-`TrainingLogger` (`test_training_logger.py`), and `Evaluator`
-(`test_evaluator.py`) the exceptions — each fully covered per their
-respective design docs. `test_agents.py` also covers
-`GNN_DQN_Agent.save_checkpoint`/`load_checkpoint` (full training-state
+`TrainingLogger` (`test_training_logger.py`), `Evaluator`
+(`test_evaluator.py`), and `Trainer` (`test_trainer.py`) the exceptions —
+each fully covered per their respective design docs. `test_agents.py` also
+covers `GNN_DQN_Agent.save_checkpoint`/`load_checkpoint` (full training-state
 round trip) alongside its existing `save_params`/`load_params` (policy-only)
 test — see "Ad-hoc verification" below for how the rest has been validated
 instead, and consider promoting some of those scripts into real tests once
 these modules stop changing shape every session.
+
+Note on GNN determinism: `GNN_DQN`/`Dueling_DQN`'s encoder uses
+`torch_geometric`'s scatter-based `TransformerConv` aggregation, which is
+**not** bit-deterministic across separate forward passes even with fixed
+`torch`/env/agent seeds (confirmed empirically — running the identical code
+twice produces ~1e-5 relative differences in individual weight values after
+one gradient step). Tests that need to compare training outcomes across two
+runs should compare the returned loss values (stable to displayed precision
+in practice) with `pytest.approx`, not raw `net.state_dict()` weights with
+exact equality — see `test_*_reached_max_steps_flag_is_inert_with_full_replay`
+in `test_agents.py`/`test_dueling_dqn.py` for the pattern.
 
 ## Shared fixtures — `conftest.py`
 
@@ -57,6 +69,15 @@ get a `GameSettings`/`Environment` without hand-rolling `Player` tuples.
 Use `human_ids={0}` etc. to mark specific seats human for UI tests. Most
 test files alias these locally as `_settings()`/`_fresh_env()` with their
 own defaults.
+
+`test_ppo.py` covers the standalone PPO implementation: policy/value output
+shape, GAE cutoff boundaries, collection-time action metadata, rollout gating,
+cached action-index validation, grouped minibatches, checkpoint restoration,
+rollout-progress metrics, and the non-negative k3 KL estimate used for PPO
+early stopping. It also verifies diagnostic optimizer/sample counters and
+their checkpoint round trip, plus the separation between optimized Huber
+critic loss and raw MSE/RMSE diagnostics. `test_trainer.py` covers common compute metrics
+and aggregation of every update in an episode, including `_max` fields.
 
 ## Conventions worth mirroring
 

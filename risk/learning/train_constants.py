@@ -1,4 +1,4 @@
-"""Training hyperparameters for `GNN_DQN_Agent` self-play.
+"""Training hyperparameters for reinforcement-learning self-play agents.
 
 Edit this file to tune a run. Every value is a plain module constant —
 no classes, importable with ``from risk.learning.train_constants import *``.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final
 
-# --- Episode setup ----------------------------------------------------------
+# region Episode setup
 
 MIN_PLAYERS: Final[int] = 3       # minimum opponents per episode (inclusive)
 MAX_PLAYERS: Final[int] = 6       # maximum opponents per episode (inclusive)
@@ -23,22 +23,40 @@ TRAIN_OPPONENT_AGENT_KINDS: Final[tuple[str, ...]] = (
     "empire",
     "killbot",
 )
+# endregion
 
-# --- Replay / gradient update -----------------------------------------------
+# region DQN replay and gradient update
 
+REPLAY_BUFFER_CAPACITY: Final[int] = 100_000
 BATCH_SIZE: Final[int] = 64
 TRAIN_STEPS_PER_CALL: Final[int] = 1  # gradient steps taken each time
 TARGET_ALGORITHM: Final[str] = "ddqn"
 LOSS_NAME: Final[str] = "smooth_l1"
 GRAD_CLIP_MAX_NORM: Final[float] = 10.0
+# endregion
 
-# --- Exploration (epsilon-greedy, linear decay by episode) ------------------
+# region PPO rollout and gradient update
+
+PPO_ROLLOUT_LENGTH: Final[int] = 256
+PPO_EPOCHS: Final[int] = 4
+PPO_MINIBATCH_SIZE: Final[int] = 64
+PPO_CLIP_EPS: Final[float] = 0.2
+PPO_TARGET_KL: Final[float] = 0.02
+PPO_GAE_LAMBDA: Final[float] = 0.95
+PPO_VALUE_LOSS_COEF: Final[float] = 0.5
+PPO_VALUE_HUBER_BETA: Final[float] = 1.0
+PPO_ENTROPY_COEF: Final[float] = 0.01
+PPO_LR: Final[float] = 1e-4
+# endregion
+
+# region Exploration
 
 EPSILON_START: Final[float] = 1.0
 EPSILON_END: Final[float] = 0.05
 EPSILON_DECAY_EPISODES: Final[int] = 200  # episode at which epsilon reaches EPSILON_END
+# endregion
 
-# --- Run control -------------------------------------------------------------
+# region Run control
 
 # Default episode count when running `python -m risk.learning.trainer`.
 TRAIN_EPISODES: Final[int] = 10000
@@ -48,20 +66,23 @@ PROGRESS_EVERY: Final[int] = 10
 
 # Rolling window (in episodes) for the win_rate_last_n W&B metric.
 ROLLING_WIN_RATE_WINDOW: Final[int] = 50
+# endregion
 
-# --- Checkpointing ----------------------------------------------------------
+# region Checkpointing
 
 CHECKPOINT_DIR: Final[str] = "Checkpoints"
 CHECKPOINT_AFTER: Final[int] = 200   # don't checkpoint before this episode
 CHECKPOINT_EVERY: Final[int] = 200   # save every N episodes after that
+# endregion
 
-# --- Evaluation (see Docs/Eval.md) -------------------------------------------
+# region Evaluation
 
-EVAL_EVERY_EPISODES: Final[int] = 50
+EVAL_EVERY_EPISODES: Final[int] = 25
 EVAL_KEEP_BEST: Final[int] = 5
 EVAL_MAX_STEPS: Final[int] = MAX_STEPS_PER_EPISODE
+# endregion
 
-# --- Reward (see Docs/Reward.md) ---------------------------------------------
+# region Reward
 
 REWARD_SHAPING_STEP_CAP: Final[float] = 10.0
 
@@ -105,18 +126,31 @@ REWARD_CONTINENT_DELTA_RELATIVE: Final[float] = 2.50
 REWARD_TERRITORY_HOLD: Final[float] = 0.05
 REWARD_CONTINENT_LOST: Final[float] = 5.00
 REWARD_TERMINAL_TIMEOUT: Final[float] = 0.0
+# endregion
 
 
+# region Public constants
 __all__ = [
     "MIN_PLAYERS",
     "MAX_PLAYERS",
     "MAX_STEPS_PER_EPISODE",
     "TRAIN_OPPONENT_AGENT_KINDS",
+    "REPLAY_BUFFER_CAPACITY",
     "BATCH_SIZE",
     "TRAIN_STEPS_PER_CALL",
     "TARGET_ALGORITHM",
     "LOSS_NAME",
     "GRAD_CLIP_MAX_NORM",
+    "PPO_ROLLOUT_LENGTH",
+    "PPO_EPOCHS",
+    "PPO_MINIBATCH_SIZE",
+    "PPO_CLIP_EPS",
+    "PPO_TARGET_KL",
+    "PPO_GAE_LAMBDA",
+    "PPO_VALUE_LOSS_COEF",
+    "PPO_VALUE_HUBER_BETA",
+    "PPO_ENTROPY_COEF",
+    "PPO_LR",
     "EPSILON_START",
     "EPSILON_END",
     "EPSILON_DECAY_EPISODES",
@@ -164,3 +198,4 @@ __all__ = [
     "REWARD_TERRITORY_HOLD",
     "REWARD_CONTINENT_LOST",
 ]
+# endregion

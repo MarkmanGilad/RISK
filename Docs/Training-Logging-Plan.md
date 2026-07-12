@@ -112,17 +112,22 @@ Only local artifacts required:
 - `agent.target_net.state_dict()`
 - `agent.optimizer.state_dict()`
 - `agent._train_steps`
-- `agent.epsilon` — set by `Trainer` at the start of every episode via a
-  linear decay schedule (`EPSILON_START`/`EPSILON_END`/`EPSILON_DECAY_EPISODES`
-  in `train_constants.py`, `Trainer._epsilon_for_episode`), so this field is
-  meaningful to checkpoint/resume even though the decay itself is recomputed
-  from `episode` on every episode (not read back from the checkpoint).
+- `agent.epsilon` — recomputed by the agent itself at the start of every
+  episode via `on_episode_start(episode)` (`GNN_DQN_Agent`/
+  `Dueling_DQN_Agent`'s own linear decay schedule,
+  `EPSILON_START`/`EPSILON_END`/`EPSILON_DECAY_EPISODES` in
+  `train_constants.py`; `Trainer` just calls the hook with its own episode
+  counter and no longer knows what epsilon is, `Docs/Trainer.md`), so this
+  field is meaningful to checkpoint/resume even though the decay itself is
+  recomputed from `episode` on every episode (not read back from the
+  checkpoint).
 - replay buffer contents (`agent.replay_buffer.save(...)` or embedded payload)
 - optional trainer counters (`episode`, any rolling stats needed for scheduling)
 
-Current exploration schedule: epsilon decays linearly from `EPSILON_START`
-to `EPSILON_END` over 200 episodes (`EPSILON_DECAY_EPISODES = 200`) so
-early training keeps exploration active longer before mostly exploiting.
+Current exploration schedule: episode 1 uses `EPSILON_START`; epsilon then
+decays linearly for 200 episode transitions and reaches `EPSILON_END` at
+episode 201 (`EPSILON_DECAY_EPISODES = 200`) so early training keeps
+exploration active longer before mostly exploiting.
 Training episodes are truncated at `MAX_STEPS_PER_EPISODE = 2000` total
 environment steps, counting both learner and opponent actions.
 
@@ -154,6 +159,8 @@ methods:**
 - includes training-behavior labels/knobs such as `TARGET_ALGORITHM`,
   `LOSS_NAME`, and `GRAD_CLIP_MAX_NORM`, so W&B config shows whether a run
   used DDQN, which loss was active, and the actual clipping threshold.
+- includes `REPLAY_BUFFER_CAPACITY`, so the sampled-data retention window is
+  recorded with the run rather than hidden in `ReplayBuffer` implementation.
 
 2. Model identity
 - `agent_class`: `type(agent).__name__` (e.g. `GNN_DQN_Agent`, `Dueling_DQN_Agent`)
@@ -221,6 +228,26 @@ metric below earns its place as a distinct, non-redundant signal:
   faster than the one-time terminal reward as episodes lengthen, show up
   directly instead of only being inferred from `reward_per_agent_turn`/
   `territories_conquered` moving opposite to `win`.
+
+Additional compute and agent diagnostics are logged alongside that primary
+set:
+
+- `learner_update_calls_in_episode`, `optimizer_steps_in_episode`,
+  `samples_processed_in_episode`, `cumulative_optimizer_steps`, and
+  `cumulative_samples_processed` provide exact compute axes when one PPO
+  rollout update contains a variable number of optimizer minibatches because
+  KL early stopping may truncate it.
+- Optional agent update diagnostics are aggregated across every update in the
+  episode (weighted mean for optimizer-derived values, ordinary mean for
+  rollout-level values, maximum for names ending `_max`). A separate count
+  exposes non-finite diagnostics instead of silently hiding them. PPO reports KL,
+  raw and normalized entropy/legal-action counts, loss components,
+  return/value/advantage scale, value RMSE/explained variance, gradient norms,
+  and optimizer/sample counts. These belong on diagnostic panels rather than
+  the small primary dashboard.
+  For PPO_045, `ppo_value_huber_loss` is the optimized critic objective;
+  `ppo_value_loss` and `ppo_value_mse` intentionally remain raw MSE and
+  `ppo_value_rmse` remains its square root for comparison with older runs.
 
 Everything else previously tracked (`episode_reward`, `eliminated`, `done`,
 `epsilon`, `max_agent_territories`, `terminal_steps`,

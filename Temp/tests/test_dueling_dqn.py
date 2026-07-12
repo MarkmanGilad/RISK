@@ -9,12 +9,21 @@ Agent plumbing shared with `GNN_DQN_Agent` (device selection, `remember`,
 """
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
+import pytest
 import torch
 from torch_geometric.data import Batch
 
 from risk.learning.dueling_dqn_agent import Dueling_DQN_Agent
+from risk.learning.train_constants import (
+    BATCH_SIZE,
+    EPSILON_DECAY_EPISODES,
+    EPSILON_END,
+    EPSILON_START,
+    TRAIN_STEPS_PER_CALL,
+)
 
 from .conftest import make_env
 
@@ -130,6 +139,83 @@ def test_max_next_ddqn_q_returns_zero_for_done_transitions() -> None:
     )
 
     assert torch.equal(max_q, torch.zeros(1, device=agent.device))
+
+
+def test_dueling_dqn_agent_on_episode_start_decays_epsilon() -> None:
+    agent = _agent(seed=8)
+
+    agent.on_episode_start(0)
+    assert agent.epsilon == EPSILON_START
+
+    agent.on_episode_start(1)
+    assert agent.epsilon == EPSILON_START
+
+    agent.on_episode_start(EPSILON_DECAY_EPISODES)
+    expected = EPSILON_START + (EPSILON_END - EPSILON_START) * (
+        (EPSILON_DECAY_EPISODES - 1) / EPSILON_DECAY_EPISODES
+    )
+    assert agent.epsilon == pytest.approx(expected)
+
+    agent.on_episode_start(EPSILON_DECAY_EPISODES + 1)
+    assert agent.epsilon == pytest.approx(EPSILON_END)
+
+    agent.on_episode_start(EPSILON_DECAY_EPISODES * 10)
+    assert agent.epsilon == pytest.approx(EPSILON_END)
+
+
+def test_dueling_dqn_agent_learn_accepts_reached_max_steps() -> None:
+    agent = _agent(seed=8)
+
+    assert agent.learn(reached_max_steps=True) == []
+
+
+def test_dueling_dqn_agent_can_train_threshold_matches_batch_size() -> None:
+    """`can_train()`/`learn()` now read `BATCH_SIZE`/`TRAIN_STEPS_PER_CALL`
+    directly instead of receiving them as call-time arguments
+    (`Docs/ChangeLog.md`'s 2026-07-05 entry) — this pins down that the
+    threshold behavior is unchanged by that refactor."""
+    agent = _agent(seed=9)
+    state = agent.env.current_state()
+    action = agent.env.legal_actions(state)[0]
+
+    for _ in range(BATCH_SIZE - 1):
+        agent.remember(state, action, 0.0, state.snapshot(), False)
+    assert agent.can_train() is False
+    assert agent.learn() == []
+
+    agent.remember(state, action, 0.0, state.snapshot(), False)
+    assert agent.can_train() is True
+    losses = agent.learn()
+    assert len(losses) == TRAIN_STEPS_PER_CALL
+
+
+def test_dueling_dqn_agent_reached_max_steps_flag_is_inert_with_full_replay() -> None:
+    """`reached_max_steps` is reserved for on-policy agents (`Docs/PPO.md`)
+    — for `Dueling_DQN_Agent` it must not change the update at all. Compares
+    the returned losses (not raw net weights: the GNN encoder's scatter
+    aggregation is not bit-deterministic across forward passes even with
+    fixed seeds, confirmed empirically against `HEAD`, so a tolerant
+    comparison on the observable output is the meaningful check here)."""
+
+    def _make_and_fill(seed: int) -> Dueling_DQN_Agent:
+        torch.manual_seed(seed)
+        env = make_env(seed=5, agent_kind="ai")
+        agent = Dueling_DQN_Agent(player_id=0, env=env, train_mode=True, seed=seed)
+        state = env.current_state()
+        action = env.legal_actions(state)[0]
+        for i in range(BATCH_SIZE):
+            agent.remember(state, action, float(i), state.snapshot(), False)
+        return agent
+
+    agent_true = _make_and_fill(seed=42)
+    agent_false = _make_and_fill(seed=42)
+
+    random.seed(123)
+    losses_true = agent_true.learn(reached_max_steps=True)
+    random.seed(123)
+    losses_false = agent_false.learn(reached_max_steps=False)
+
+    assert losses_true == pytest.approx(losses_false, rel=1e-2)
 
 
 def test_save_and_load_checkpoint_round_trips_dueling_net_and_target(tmp_path: Path) -> None:

@@ -54,5 +54,11 @@ class BaseAgent(ABC):
         """Optional hook called at the end of each owned turn."""
         return None
 
+    def on_episode_start(self, episode: int) -> None:
+        """Optional hook called once per training episode, before the
+        episode plays. No-op by default; DQN-style agents override it to
+        update per-episode exploration state (`Docs/Trainer.md`)."""
+        return None
+
 
 __all__ = ["BaseAgent"]

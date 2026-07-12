@@ -290,12 +290,14 @@ from training episode metrics.
 Add constants in `train_constants.py`:
 
 ```python
-EVAL_EVERY_EPISODES = 50
+EVAL_EVERY_EPISODES = 25
 EVAL_KEEP_BEST = 5
 EVAL_MAX_STEPS = MAX_STEPS_PER_EPISODE
 ```
 
-Start with every 50 episodes. If eval is too slow, use 100. This is separate
+For the 500-episode run horizon, evaluate every 25 episodes. This gives 20
+policy measurements instead of 10 while retaining the deterministic six-game
+suite. If evaluation proves too slow, use 50. This is separate
 from resume checkpointing; both can exist:
 
 - resume checkpoint: every `CHECKPOINT_EVERY`,
@@ -438,14 +440,14 @@ Suggested tests:
 
 ## Open tuning choices
 
-- Eval every 50 vs 100 episodes.
+- Eval every 25 vs 50 episodes.
 - 2 vs 3 fixed seeds per eval suite.
 - Whether fixed learner seat is enough or eval should rotate learner seat.
 - Whether `eval_score` should include final board strength later.
 
 Recommended v1:
 
-- `EVAL_EVERY_EPISODES = 50`
+- `EVAL_EVERY_EPISODES = 25`
 - `EVAL_KEEP_BEST = 5`
 - two eval suites,
 - 3 seeds per suite,
