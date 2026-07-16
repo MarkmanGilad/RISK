@@ -276,6 +276,44 @@ def test_gnn_dqn_agent_save_and_load_checkpoint_round_trip(tmp_path: Path) -> No
         assert key in agent2.optimizer.state_dict()["state"]
 
 
+def test_gnn_dqn_agent_progress_metrics_reports_epsilon_and_replay_state() -> None:
+    env = _fresh_env(seed=5)
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=True, epsilon=0.3)
+    state = env.current_state()
+    action = env.legal_actions(state)[0]
+    agent.remember(state, action, 1.0, state.snapshot(), False)
+
+    metrics = agent.progress_metrics()
+
+    assert metrics["epsilon"] == agent.epsilon == 0.3
+    assert metrics["dqn_replay_buffer_size"] == len(agent.replay_buffer) == 1
+    assert metrics["dqn_train_steps_since_target_sync"] == 0.0
+
+
+def test_gnn_dqn_agent_train_step_populates_last_update_metrics() -> None:
+    env = _fresh_env(seed=5)
+    agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=True)
+    state = env.current_state()
+    action = env.legal_actions(state)[0]
+    agent.remember(state, action, 1.0, state.snapshot(), False)
+    agent.remember(state, action, -1.0, state.snapshot(), True)
+
+    assert agent.last_update_metrics == {}
+    agent.train_step(batch_size=2)
+
+    metrics = agent.last_update_metrics
+    expected_keys = {
+        "dqn_td_error_mean", "dqn_td_error_abs_mean", "dqn_td_error_std",
+        "dqn_td_error_abs_max", "dqn_q_value_mean", "dqn_q_value_std",
+        "dqn_target_q_mean", "dqn_target_q_std", "dqn_grad_norm",
+        "dqn_grad_norm_clipped",
+    }
+    assert expected_keys.issubset(metrics.keys())
+    assert metrics["dqn_grad_norm"] >= 0.0
+    assert metrics["dqn_td_error_abs_mean"] >= 0.0
+    assert metrics["dqn_grad_norm_clipped"] in (0.0, 1.0)
+
+
 def test_gnn_dqn_agent_on_episode_start_decays_epsilon() -> None:
     env = _fresh_env(seed=5)
     agent = GNN_DQN_Agent(player_id=0, env=env, train_mode=True)

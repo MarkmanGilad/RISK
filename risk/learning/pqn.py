@@ -1,16 +1,17 @@
-"""Dueling variant of Net A's network — `Docs/DuelingDQN.md`.
+"""PQN's injected-action policy/value network — `Docs/PQN.md`.
 
-`Dueling_DQN` is a copy of `GNN_DQN` (`gnn_dqn.py`) with one architectural
-change: instead of scoring `Q(s, a)` directly, each per-phase head now
-outputs an advantage `A(s, a)`, and a new `value_head` estimates `V(s)`.
-They combine as `Q(s, a) = V(s) + A(s, a) - mean(A(s, legal_actions))`, the
-mean taken over the legal actions of the same decision (`group_index`).
-Per the minimal-diff policy in `Docs/DuelingDQN.md`, everything else —
-encoder, pooling, per-phase head routing, call convention — stays identical
-to `GNN_DQN`.
+`PQN` is a copy of `Dueling_DQN` (`dueling_dqn.py`) with one change: instead
+of combining `V(s)` and `A(s, a)` into a fused `Q(s, a)` and returning that,
+`forward` returns the two raw streams uncombined. Per `Docs/PQN.md` §24.A,
+combining them into `Q`, and turning `A` into a policy, is `pqn_agent.py`'s
+job, not the net's — the same "picking which head to call... is the agent's
+job, not the net's" split `heads.py` already documents for phase-head
+routing, just applied one step further. Everything else — encoder, pooling,
+per-phase head routing, `value_mask`/`group_index` call convention — stays
+identical to `Dueling_DQN`.
 
-    net = Dueling_DQN(in_dim=13, hidden_dim=64, edge_dim=2, u_dim=34)
-    q = net(state, phase, card_indices, group_index=group_ix, value_mask=value_mask)
+    net = PQN(in_dim=13, hidden_dim=64, edge_dim=2, u_dim=34)
+    value, advantage = net(state, phase, card_indices, value_mask=value_mask, group_index=group_ix)
 """
 from __future__ import annotations
 
@@ -25,8 +26,8 @@ from risk.learning.heads import ScoringHead, TradeInHead
 from risk.learning.pooling import pool
 
 
-class Dueling_DQN(nn.Module):
-    """`(state graph(s), phase per graph, card_indices, group_index) -> Q(s, a)`."""
+class PQN(nn.Module):
+    """`(state graph(s), phase per graph, card_indices, group_index) -> (V(s), A(s, a))`."""
 
     def __init__(
         self,
@@ -50,9 +51,8 @@ class Dueling_DQN(nn.Module):
             nn.Linear(256, 128), nn.ReLU(),
             nn.Linear(128, 1),
         )
-        # Same plain-dict alias map as `GNN_DQN` — see its docstring for why
-        # this isn't a `ModuleDict`. These heads now output `A(s, a)`, not
-        # final `Q(s, a)`; `forward` combines them with `value_head` below.
+        # Same plain-dict alias map as `Dueling_DQN` — see its docstring for
+        # why this isn't a `ModuleDict`. These heads output `A(s, a)`.
         self._heads_by_phase = {
             int(Phase.TRADE_IN): self.trade_in_head,
             int(Phase.REINFORCE_PLACE): self.reinforce_place_head,
@@ -68,23 +68,20 @@ class Dueling_DQN(nn.Module):
         card_indices: torch.Tensor,
         value_mask: torch.Tensor,
         group_index: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Same row/phase/card_indices convention as `GNN_DQN.forward`.
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Same row/phase/card_indices/value_mask/group_index convention as
+        `Dueling_DQN.forward` (see its docstring for the full contract).
 
-        `value_mask`: `[N]` bool tensor marking clean, non-injected state rows
-        used for `V(s)`. All unmasked rows are action-injected rows routed to
-        the phase advantage heads. Required — `V(s)` must come from a clean
-        row, not be approximated by averaging over action-injected rows
-        (`Docs/DuelingDQN.md`'s "Dead-code review" note). Returns one Q value
-        per action row, not for the clean value rows.
+        Returns `(value, advantage)` uncombined, not a fused `Q`:
 
-        `group_index`: `[N]` long tensor saying which decision each row
-        belongs to — the dueling mean is taken over each group's rows.
-        Omit it (or pass all-zeros) when every row in the batch belongs to
-        one decision, e.g. `score_actions`' "one state, all legal actions"
-        shape. Pass real group ids (`0..B-1`) for a flattened replay
-        minibatch where each group is one sampled transition's legal-action
-        set (`Docs/DuelingDQN.md`'s "Important training detail").
+        - `value`: `[n_groups]`, one `V(s)` per decision group, from the
+          clean (non-injected) row.
+        - `advantage`: `[N_action_rows]`, one `A(s, a_i)` per action row.
+
+        `Q(s, a_i) = V(s) + A(s, a_i) - mean_j(A(s, a_j))` and
+        `pi(a_i | s) = softmax(A(s, legal_actions))[i]` are both
+        `pqn_agent.py`'s responsibility (`Docs/PQN.md` §24.A-B), not this
+        method's — it only produces the two raw streams the heads compute.
         """
         h = self.encoder(state.x, state.edge_index, state.edge_attr)
         g = pool(h, state.batch, state.u)
@@ -101,11 +98,10 @@ class Dueling_DQN(nn.Module):
                 f"group_index shape {tuple(group_index.shape)}"
             )
         if not value_mask.any():
-            raise ValueError("Dueling_DQN.forward requires at least one clean value row")
+            raise ValueError("PQN.forward requires at least one clean value row")
 
         n_groups = int(group_index.max().item()) + 1
         action_mask = ~value_mask
-        action_group_index = group_index[action_mask]
         action_phase = phase.to(device=g.device)[action_mask]
         action_card_indices = card_indices.to(device=g.device)[action_mask]
         action_g = g[action_mask]
@@ -120,11 +116,8 @@ class Dueling_DQN(nn.Module):
         value_mean = scatter(
             value, group_index[value_mask], dim=0, dim_size=n_groups, reduce="mean"
         )
-        adv_mean = scatter(
-            advantage, action_group_index, dim=0, dim_size=n_groups, reduce="mean"
-        )
 
-        return value_mean[action_group_index] + advantage - adv_mean[action_group_index]
+        return value_mean, advantage
 
 
-__all__ = ["Dueling_DQN"]
+__all__ = ["PQN"]

@@ -14,6 +14,208 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-07-16
+
+- **Pinned PQN's detached TD-advantage contract.** `PQN_Agent` now centralizes
+  the replay policy loss in `_policy_loss(...)`, and a focused test proves its
+  value-weight input receives no policy-loss gradient. Corrected the policy
+  coefficient's stale documentation reference. Files:
+  `risk/learning/pqn_agent.py`, `risk/learning/train_constants.py`,
+  `Temp/tests/test_pqn.py`, `Docs/PQN.md`, `Docs/Testing.md`.
+
+- **Implemented PQN and wired it into the trainer.** New `risk/learning/pqn.py`
+  (`PQN` network — copy of `Dueling_DQN` returning raw `(value_mean,
+  advantage)` per `Docs/PQN.md` §24.A) and `risk/learning/pqn_agent.py`
+  (`PQN_Agent` — `_combine_q`, `_current_state_terms`/`_next_state_terms`,
+  `train_step` implementing §24.C's Bellman + replay-based policy-improvement
+  loss, `act()` sampling/argmaxing `softmax(advantage)`, no `epsilon`).
+  `train_constants.py` gained `PQN_POLICY_LOSS_COEF = 0.1` (the initial
+  policy-loss weight from §24.C). `trainer.py`'s `build_learner_agent(...)` gained a `"PQN"`
+  branch and the matching import — the only change made to that file (all
+  other trainer/agent classes left untouched per explicit scope). Fixed one
+  real bug found via a `Trainer.train()` smoke run: `_next_state_terms` built
+  a compact per-transition `group_index` (skipping `done`/no-legal-action
+  transitions) but then indexed the full-length `next_stage` tensor with it
+  directly, silently reading the wrong transition's phase for any batch with
+  a skipped transition — fixed by remapping `next_stage` through
+  `active_indices` first. New `Temp/tests/test_pqn.py` (11 tests: network
+  output shape, `_combine_q` on one/two groups, `act()` sampling vs. argmax,
+  learn/threshold parity with Dueling, `reached_max_steps` inertness,
+  `progress_metrics`/`last_update_metrics` keys, checkpoint round-trip).
+  Full suite green (314 passed, 1 skipped) and a 3-episode `Trainer` smoke
+  run completed without incident. Not yet run as a real training experiment.
+  Files: `risk/learning/pqn.py` (new), `risk/learning/pqn_agent.py` (new),
+  `risk/learning/train_constants.py`, `risk/learning/trainer.py`,
+  `Temp/tests/test_pqn.py` (new), `Docs/PQN.md`, `Docs/Testing.md`.
+
+- **Reversed course again on PQN's network return contract: raw `(V, A)`,
+  agent combines.** `pqn.py`'s `forward(...)` now returns the two
+  uncombined head outputs instead of a fused `Q` — no new head, no new
+  computation, just a different return signature — matching `heads.py`'s
+  own stated precedent that orchestration ("which head", now also "how to
+  combine/read them") is the agent's job, not the net's. `pqn_agent.py`
+  gains one shared `_combine_q(value, advantage, group_index)` helper
+  (reusing the `scatter(..., reduce="mean")` pattern already validated in
+  `dueling_dqn.py`/`ppo_net.py`) so the grouped-mean formula is written
+  once and reused at all three call sites (`s` online, `s'` online, `s'`
+  target) instead of risking a repeat of the already-fixed
+  `value_mask is None` bug. Policy logits now read directly from `A`
+  (`softmax(A)`, per group) rather than from `Q`. Updated §24.A-B
+  accordingly; §24.C's loss formulas were already written in terms of the
+  derived `Q_online`/`V_online`/`pi`, so they needed no changes. Doc-only,
+  no code. Files: `Docs/PQN.md`.
+
+- **Deleted the now-redundant `mean_i(Q) = V(s)` derivation from `Docs/PQN.md`.**
+  Since `pqn.py` returns `V(s)` directly (previous entry), the algebraic
+  "recover it by averaging Q instead" alternative has no reason to stay in
+  the doc — it documented a path not taken. §24.A now states only the
+  chosen design. Doc-only, no code. Files: `Docs/PQN.md`.
+
+- **Reversed the PQN plan's "recover V(s) by averaging Q" approach in favor
+  of returning it directly.** Both are mathematically exact
+  (`mean_i(Q(s,aᵢ)) = V(s)` is an unconditional algebraic identity given
+  Dueling's combination formula), but computing `V(s)` → folding it into
+  `Q` → recovering it by averaging `Q` back is a round trip with no real
+  benefit over just returning it. `pqn.py`'s `forward(...)` now returns
+  `(Q, V)` — `V` is `value_mean`, already computed internally from the
+  clean row and previously discarded, so this is a small additive change
+  (no new computation, no new head), not a redesign. Policy logits still
+  use `Q` directly (`softmax(Q) == softmax(A)`, §14), so raw `A(s,a_i)` is
+  never needed standalone anywhere in the agent. Updated §24.A-C
+  accordingly. Doc-only, no code. Files: `Docs/PQN.md`.
+
+- **Deferred PQN entropy regularization.** The initial PQN objective now has
+  only Bellman and policy losses; entropy is documented as a future isolated
+  experiment after the baseline has a comparison window. Files: `Docs/PQN.md`.
+
+- **Specified PQN policy-loss reduction over replay samples.** The policy-loss
+  formula now takes the minibatch mean, making it a scalar compatible with the
+  total loss. Files: `Docs/PQN.md`.
+
+- **Reviewed the PQN design doc for correctness; fixed two inconsistencies,
+  added one simplification.** (1) §13's Bellman loss said plain squared
+  error, contradicting §24.C's Smooth-L1 — fixed to Smooth-L1, matching
+  Dueling DQN's actual loss. (2) §16's total loss added the entropy term
+  (`+ λ_H H(π)`), which under gradient descent would push the policy toward
+  *lower* entropy — the opposite of the intent; fixed to `-`, matching
+  §24.C and PPO's actual `- PPO_ENTROPY_COEF * entropy.mean()`. (3) Added a
+  derivation showing `V(s)` and the policy are both exact algebraic
+  identities (`mean`/`softmax`) over Dueling's existing single fused-`Q`
+  output — no network return-signature change is needed at all, `pqn.py`
+  can be an unmodified copy of `dueling_dqn.py`. Also flagged (not
+  specified) that diagnostics/tests/checkpoint format are still open,
+  pointing at PPO's encoder-gradient-norm split as precedent given PQN
+  trains two losses through one shared encoder. Doc-only, no code. Files:
+  `Docs/PQN.md`.
+
+- **Made PQN's stop-gradient operation concrete.** The policy-loss formula now
+  shows `td_advantage.detach()` directly and explains that it blocks policy
+  gradients from changing the value estimate. Files: `Docs/PQN.md`.
+
+- **Separated PQN head outputs from derived calculations.** The plan now
+  identifies value and per-action advantage as the only network-head outputs,
+  then derives Q-values, logits, Softmax policy probabilities, and replayed
+  action terms explicitly. Files: `Docs/PQN.md`.
+
+- **Deleted the superseded PQN implementation plan section.** The old
+  "section 24" (a more elaborate copy-Dueling-then-add-policy-learning plan)
+  was already marked as replaced by the newer, simpler section 25; removed
+  it and renumbered the replacement down to 24 so the doc has no gap or
+  dangling "(replaces section 24)" reference. Files: `Docs/PQN.md`.
+
+- **Simplified the PQN implementation plan around the existing Dueling net.**
+  The replacement section states only the unchanged Dueling head outputs, the
+  required current/next-state calculations, and the added Softmax and
+  policy-loss calculation. Files: `Docs/PQN.md`.
+
+- **Added the missing "Loss" section to `Docs/DuelingDQN.md`.** The doc
+  documented network architecture and training-detail bookkeeping but never
+  spelled out the actual objective: Smooth L1 against the Double-DQN
+  bootstrap target, Adam + gradient clipping, hard target-network sync
+  cadence, and the `dqn_*` diagnostics now logged (`Docs/Trainer.md`). Doc
+  gap only — no code changed. Files: `Docs/DuelingDQN.md`.
+
+- **Added a copy-from-Dueling PQN implementation plan.** `Docs/PQN.md` now
+  specifies the new files, preserves Dueling's clean-row/grouped batch
+  contract, and defines the policy, replay-loss, logging, checkpoint, test,
+  and staged-rollout changes required for PQN without modifying DQN or
+  Dueling. Files: `Docs/PQN.md`.
+
+- **Brought DQN/Dueling DQN training diagnostics up to parity with PPO's.**
+  `GNN_DQN_Agent`/`Dueling_DQN_Agent` previously logged nothing beyond
+  `learn_loss_mean` — no `epsilon`, no gradient norm (already computed by
+  `clip_grad_norm_` and discarded), no TD-error/Q-value visibility. Both
+  agents now implement the same generic `progress_metrics()`/
+  `last_update_metrics` hooks PPO already used, needing zero `Trainer`
+  changes: `progress_metrics()` reports `epsilon`, `dqn_replay_buffer_size`,
+  `dqn_train_steps_since_target_sync`; `train_step()` reports
+  `dqn_td_error_mean`/`_abs_mean`/`_std`/`_abs_max`, `dqn_q_value_mean`/`_std`,
+  `dqn_target_q_mean`/`_std`, `dqn_grad_norm`/`_clipped` — same `dqn_` prefix
+  for both agents so their runs land in one shared chart namespace. Verified
+  end to end through a real `Trainer` run for both agent classes. Files:
+  `risk/learning/gnn_dqn_agent.py`, `risk/learning/dueling_dqn_agent.py`,
+  `Temp/tests/test_agents.py`, `Temp/tests/test_dueling_dqn.py`,
+  `Docs/Trainer.md`, `Docs/Training-Logging-Plan.md`.
+
+- **Corrected the test-environment PATH guidance.** The documented
+  `C:\\venvs\\ai-rl` interpreter is valid, but the system `python` can still
+  resolve first; agent guidance now requires the explicit interpreter command.
+  Files: `AGENTS.md`, `CLAUDE.md`.
+
+- **Corrected the documented test venv path — it pointed at an incomplete
+  environment.** `CLAUDE.md`/`AGENTS.md` told sessions to use
+  `C:\Users\Gilad\venvs\ai-rl`, but that venv is missing `svg.path`, which
+  spuriously fails `test_game_loop.py`/`test_ui.py` (`ModuleNotFoundError:
+  No module named 'svg'` from `risk/ui/render/risk_map.py`). The complete
+  venv is `C:\venvs\ai-rl` — already on `PATH`, so plain `python`/`pytest`
+  resolves to it — confirmed via a full run: 299 passed, 1 skipped, 0
+  failures. Files: `CLAUDE.md`, `AGENTS.md`.
+
+- **Recorded the project test environment in agent guidance.** `AGENTS.md`
+  and `CLAUDE.md` now point to the recovered `ai-rl` Python environment and
+  give full-suite and focused-test commands, preventing future sessions from
+  using the dependency-free system interpreter. Files: `AGENTS.md`,
+  `CLAUDE.md`.
+
+- **Validated the Dueling value-mask cleanup against DQN and PPO.** Using the
+  recovered `ai-rl` environment, the focused Dueling DQN, classic DQN, and PPO
+  regression files all passed (42 tests). The change stays confined to
+  Dueling's private wrapper; no DQN or PPO behavior regressed. Files:
+  `Temp/tests/test_dueling_dqn.py`, `Temp/tests/test_agents.py`,
+  `Temp/tests/test_ppo.py`, `Docs/DuelingDQN.md`.
+
+- **Aligned Dueling's private scoring wrapper with the required value-mask
+  contract.** `_score(...)` no longer accepts or forwards `None` for
+  `value_mask`, matching `Dueling_DQN.forward(...)`; all four Dueling training
+  call sites already pass it explicitly. DQN's separate `_score(...)` and
+  PPO's independent network interface are untouched. Files:
+  `risk/learning/dueling_dqn_agent.py`, `Docs/DuelingDQN.md`.
+
+- **Removed the dead `value_mask is None` fallback from `Dueling_DQN.forward`.**
+  `value_mask` is now a required argument (`group_index` stays optional,
+  unchanged); the old fallback branch that approximated `V(s)` by averaging
+  over action-injected rows is gone, since every real call site
+  (`dueling_dqn_agent.py`'s `score_actions`/`_score`/`_q_value`/
+  `_max_next_q`/`_max_next_ddqn_q`) and all of `test_dueling_dqn.py` already
+  passed `value_mask` explicitly — the branch was unreachable in practice.
+  Docstrings updated to match; `Docs/DuelingDQN.md`'s "Recommended network
+  API" text and `Docs/NetworkArchitectures.md` already described `value_mask`
+  as required, so no doc-text changes were needed there beyond the review
+  note. Could not execute `Temp/tests/test_dueling_dqn.py` in this session's
+  sandbox — no network access to `download.pytorch.org` to install
+  `torch`/`torch_geometric` — so this is unverified by an actual pytest run;
+  the change is a pure deletion of an already-unreachable branch (no
+  reachable code path changed), but running the suite locally is recommended
+  before treating this as fully verified. Files: `risk/learning/dueling_dqn.py`,
+  `Docs/DuelingDQN.md`.
+- **Confirmed the Dueling value-mask fallback is removable.** The documented
+  repository-wide call-site review confirms every current Dueling forward pass
+  supplies clean value rows and an explicit `value_mask`; removal will make
+  unsupported external calls fail fast instead of using the superseded
+  action-injected value approximation. Corrected the review's stale test count
+  and scoped its reachability claim to this repository. Files:
+  `Docs/DuelingDQN.md`.
+
 ## 2026-07-12
 
 - **Bounded PPO critic outlier gradients for PPO_045.** The critic now trains

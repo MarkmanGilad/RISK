@@ -250,13 +250,20 @@ set:
   `ppo_value_rmse` remains its square root for comparison with older runs.
 
 Everything else previously tracked (`episode_reward`, `eliminated`, `done`,
-`epsilon`, `max_agent_territories`, `terminal_steps`,
-`progress/agent_territory_share` and the other army/continent-share
-metrics, `alive_opponents`, `replay_size`, `train_steps`, and the whole
-intra-episode `log_progress` path) was cut from W&B. `epsilon` specifically:
-it's a known linear decay schedule (`EPSILON_START`/`EPSILON_END`/
-`EPSILON_DECAY_EPISODES` in `train_constants.py`), not something that needs
-a live graph to understand.
+`max_agent_territories`, `terminal_steps`, `progress/agent_territory_share`
+and the other army/continent-share metrics, `alive_opponents`, and the whole
+intra-episode `log_progress` path) was cut from W&B.
+
+`epsilon` and replay-buffer size were also cut originally on the same
+"known/derivable, doesn't need a live graph" reasoning, but are now logged
+after all: `GNN_DQN_Agent`/`Dueling_DQN_Agent.progress_metrics()` reports
+`epsilon` and `dqn_replay_buffer_size` every episode (`Docs/Trainer.md`'s
+"Metrics" section). The reasoning flipped once PPO's much richer diagnostic
+set made the DQN-family's near-total lack of comparable visibility an actual
+gap, not a deliberate simplification — see PPO's `last_update_metrics` in
+the same section for the fuller comparison. `train_steps` stays available
+via the pre-existing `cumulative_optimizer_steps`/`optimizer_steps_in_episode`
+fields, not a separate metric.
 
 ## Monitoring strategy for slow training (hours per run)
 
@@ -331,7 +338,10 @@ Secondary diagnostics (log them, but do not build the whole dashboard
 around them):
 - `army_share_at_20`
 - `epsilon`
-- `replay_size`
+- `dqn_replay_buffer_size`, `dqn_train_steps_since_target_sync`,
+  `dqn_td_error_mean`/`_abs_mean`/`_std`/`_abs_max`, `dqn_q_value_mean`/`_std`,
+  `dqn_target_q_mean`/`_std`, `dqn_grad_norm`/`_clipped` (`GNN_DQN_Agent`/
+  `Dueling_DQN_Agent` only, `Docs/Trainer.md`)
 - `checkpoint_saved`
 
 Interpretation rule:

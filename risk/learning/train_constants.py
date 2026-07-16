@@ -49,6 +49,11 @@ PPO_ENTROPY_COEF: Final[float] = 0.01
 PPO_LR: Final[float] = 1e-4
 # endregion
 
+# region PQN replay-based policy improvement
+
+PQN_POLICY_LOSS_COEF: Final[float] = 0.1  # Initial policy-loss weight; Docs/PQN.md §24.C
+# endregion
+
 # region Exploration
 
 EPSILON_START: Final[float] = 1.0
@@ -151,6 +156,7 @@ __all__ = [
     "PPO_VALUE_HUBER_BETA",
     "PPO_ENTROPY_COEF",
     "PPO_LR",
+    "PQN_POLICY_LOSS_COEF",
     "EPSILON_START",
     "EPSILON_END",
     "EPSILON_DECAY_EPISODES",

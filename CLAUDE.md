@@ -1,5 +1,15 @@
 # Code style
 
+## Tests
+
+- Use the project test environment at `C:\\venvs\\ai-rl`. Do not use
+  `C:\\Users\\Gilad\\venvs\\ai-rl` — it's a separate, incomplete venv missing
+  `svg.path`, which spuriously fails `test_game_loop.py`/`test_ui.py`.
+- From the repository root, run the full suite with:
+  `& "C:\\venvs\\ai-rl\\Scripts\\python.exe" -m pytest Temp/tests -q`
+- For focused coverage, replace `Temp/tests` with the relevant test file(s),
+  for example `Temp/tests/test_dueling_dqn.py Temp/tests/test_agents.py`.
+
 - Prefer simple code over complicated code. Default to the smallest, most direct implementation that solves the problem in front of you.
 - Before writing new code, check whether an existing function/method already does what you need. Don't duplicate logic that exists elsewhere.
 - Don't use static methods unless there's no other option, or an instance method would be noticeably more complicated to use. Default to instance methods.

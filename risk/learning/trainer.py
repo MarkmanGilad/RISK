@@ -60,6 +60,7 @@ from risk.learning.dueling_dqn_agent import Dueling_DQN_Agent
 from risk.learning.evaluator import Evaluator
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.ppo_agent import PPO_Agent
+from risk.learning.pqn_agent import PQN_Agent
 from risk.learning.train_constants import (
     BATCH_SIZE,
     CHECKPOINT_DIR,
@@ -350,6 +351,8 @@ def build_learner_agent(agent_kind: str, ctx):
         return Dueling_DQN_Agent(player_id=0, env=ctx.env, train_mode=True)
     if agent_kind == "PPO":
         return PPO_Agent(player_id=0, env=ctx.env, train_mode=True)
+    if agent_kind == "PQN":
+        return PQN_Agent(player_id=0, env=ctx.env, train_mode=True)
     raise ValueError(f"Unknown learner agent kind {agent_kind!r}")
 
 def main() -> None:

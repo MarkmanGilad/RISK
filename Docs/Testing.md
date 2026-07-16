@@ -37,13 +37,15 @@ set it in the shell before running the suite).
 | `test_evaluator.py` | `Evaluator` (`Docs/Eval.md`) — `evaluate(...)`'s returned metric keys/determinism and `epsilon`/`train_mode` restore, `maybe_save_best(...)`'s top-N retention and manifest sorting |
 | `test_training_logger.py` | `TrainingLogger` — config building, checkpoint path/cadence orchestration (`save_checkpoint`/`try_resume`), no-op behavior with W&B disabled. Agent-internals round-tripping stays in `test_agents.py` (below) |
 | `test_trainer.py` | `Trainer` (`Docs/Trainer.md`) — the `reached_max_steps` contract passed to `agent.learn(...)` (only the final learn call of a truncated episode gets `True`), short end-to-end smoke runs through `Trainer.train()` for `GNN_DQN_Agent`/`Dueling_DQN_Agent` with a monkeypatched small `MAX_STEPS_PER_EPISODE`, and the logged per-episode metric keys |
+| `test_pqn.py` | `PQN`/`PQN_Agent` (`Docs/PQN.md` §24) — `score_actions` returning raw `(V, A)`, `_combine_q`'s grouped-mean formula on one and two groups, policy-loss TD-weight detachment, `act()` sampling/argmaxing `softmax(A)`, `learn`/`can_train` threshold parity with Dueling, `reached_max_steps` inertness, `progress_metrics`/`last_update_metrics` (`pqn_*` keys, no `epsilon`), checkpoint round-trip |
 
 `risk/learning/` (the RL layer — `GraphAdapter`, `ActionGraphBuilder`,
 `Encoder`, `Heads`, `GNN_DQN`, `ReplayBuffer`, `ActionEncoder`) has limited
 checked-in tests so far, with `RewardCalculator` (`test_reward.py`),
 `TrainingLogger` (`test_training_logger.py`), `Evaluator`
-(`test_evaluator.py`), and `Trainer` (`test_trainer.py`) the exceptions —
-each fully covered per their respective design docs. `test_agents.py` also
+(`test_evaluator.py`), `Trainer` (`test_trainer.py`), and `PQN_Agent`
+(`test_pqn.py`) the exceptions — each fully covered per their respective
+design docs. `test_agents.py` also
 covers `GNN_DQN_Agent.save_checkpoint`/`load_checkpoint` (full training-state
 round trip) alongside its existing `save_params`/`load_params` (policy-only)
 test — see "Ad-hoc verification" below for how the rest has been validated

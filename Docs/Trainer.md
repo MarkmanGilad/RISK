@@ -144,8 +144,15 @@ rollout-level fields remain equally weighted. A non-finite diagnostic count is
 logged even though invalid values are excluded from numeric aggregates.
 It merges the result generically, without checking an agent type. PPO uses
 this for KL, loss/return/value diagnostics, entropy/action-set statistics,
-gradient norms, rollout fill, and rollout-update count; DQN-family agents
-simply provide neither mapping.
+gradient norms, rollout fill, and rollout-update count. `GNN_DQN_Agent`/
+`Dueling_DQN_Agent` supply the DQN-family equivalent: `progress_metrics()`
+reports `epsilon` (otherwise invisible in the logged metrics, `Docs/
+Training-Logging-Plan.md`), replay buffer size, and steps since the last
+target-network sync; `train_step`'s `last_update_metrics` reports TD-error
+mean/std/max, Q-value and target-Q mean/std, and the pre-clip gradient norm
+(`torch.nn.utils.clip_grad_norm_`'s return value, previously computed and
+discarded) plus whether it was clipped — all prefixed `dqn_` so DQN and
+Dueling DQN runs share one chart namespace for direct comparison.
 
 If the episode hits the eval cadence, evaluation metrics are merged into the
 same row before logging.

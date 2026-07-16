@@ -259,6 +259,57 @@ elsewhere in the same file — that would be an unrelated cleanup of code the
 dueling build doesn't need to touch, and the same argument for "fixing" it
 would then apply to the old agent too.
 
+## Loss
+
+`train_step(...)` (`dueling_dqn_agent.py`) is unchanged from classic DQN per
+the minimal-diff policy — same loss, same target formula, same clipping —
+only the Q-values it operates on come from the dueling `V + A - mean(A)`
+combination instead of a direct `Q` head.
+
+**Objective:** Smooth L1 (Huber) loss between predicted `Q(s, a)` and the
+Double-DQN bootstrap target:
+
+```python
+q_value = self._q_value(states, actions, stage)              # online net, gradients on
+max_next_q = self._max_next_ddqn_q(next_states, done, next_stage)
+target_q = reward + self.gamma * (~done).float() * max_next_q
+
+loss = F.smooth_l1_loss(q_value, target_q.detach())
+```
+
+**Double-DQN target:** `max_next_q` decorrelates action *selection* from
+action *evaluation* to reduce Q-overestimation bias — the online net's Q
+values pick the best next action per group, the target net's Q value for
+that same action is what gets used (`_max_next_ddqn_q`'s per-group
+best-online/target-value selection, `Docs/DuelingDQN.md`'s "Important
+training detail" above). `target_q` is a bootstrap target and must never
+receive gradients; `max_next_q` is already computed under `torch.no_grad()`
+inside `_max_next_ddqn_q`, and `.detach()` on `target_q` is the belt-and-
+braces guard against that ever changing silently.
+
+**Optimizer/clipping:** Adam (`lr` defaults to `1e-4`, a constructor
+parameter, not a `train_constants.py` value — DQN and Dueling DQN can be
+given different learning rates per run), gradient-clipped to
+`GRAD_CLIP_MAX_NORM` via `torch.nn.utils.clip_grad_norm_` after
+`loss.backward()` and before `optimizer.step()`.
+
+**Target network sync:** hard copy (`target_net.load_state_dict(net.state_dict())`),
+not a soft/Polyak update, every `target_update_every` calls (constructor
+parameter, default `1000`).
+
+**Logged diagnostics (`Docs/Trainer.md`'s "Metrics" section):** `train_step`
+populates `self.last_update_metrics` every call — `dqn_td_error_mean`/
+`_abs_mean`/`_std`/`_abs_max` (`target_q - q_value`, the standard DQN health
+signal: a growing or non-decaying TD-error usually means instability),
+`dqn_q_value_mean`/`_std` and `dqn_target_q_mean`/`_std` (are the Q estimates
+in a sane, stable range), and `dqn_grad_norm`/`_grad_norm_clipped` (the
+pre-clip gradient norm `clip_grad_norm_` already computes — previously
+discarded, now captured). `progress_metrics()` separately reports `epsilon`,
+`dqn_replay_buffer_size`, and `dqn_train_steps_since_target_sync` every
+episode regardless of whether a training step happened that episode. Same
+`dqn_` prefix and same fields on classic `GNN_DQN_Agent`, so DQN and Dueling
+DQN runs share one chart namespace for direct comparison.
+
 ## Trainer notes for dueling
 
 Shared trainer behavior lives in `Docs/Trainer.md`. Dueling does not need its
@@ -281,8 +332,9 @@ The dueling-specific run rules are:
 
 ## Tests
 
-**Implemented** in `Temp/tests/test_dueling_dqn.py` (all 6 pass, alongside
-the full existing suite):
+**Implemented** in `Temp/tests/test_dueling_dqn.py`. The initial six focused
+tests are listed below; the current file has 10 tests alongside the full
+existing suite:
 
 1. `Dueling_DQN.forward` returns one Q per action row.
 2. If all advantages in a group are equal, `Q` equals `V` for every action in
@@ -408,3 +460,83 @@ The build is complete when:
 - Do not refactor shared helpers.
 - Do not replace the existing trainer in place.
 - Do not migrate old checkpoints.
+
+## Dead-code review: `value_mask is None` fallback (2026-07-16)
+
+**Observation.** `Dueling_DQN.forward(...)` (`dueling_dqn.py:97-108`) still has
+a `value_mask is None` branch that computes `V(s)` the *old* way — averaging
+the value head over every action-injected row and grouping by
+`group_index` — instead of the current, correct design of reading `V(s)`
+from a clean, non-injected row. That old averaging approach is exactly the
+approximation the "Follow-up design change from the user" note above (Review
+log, 2026-07-04) replaced, because it let action perturbations leak into the
+value stream.
+
+Checked every call site in the repo for whether this fallback is still
+reachable:
+
+- `dueling_dqn_agent.py`: `score_actions`, `_q_value`, `_max_next_q`, and
+  `_max_next_ddqn_q` all pass `value_mask` explicitly (lines 246, 301, 345,
+  402, 454, 457).
+- `Temp/tests/test_dueling_dqn.py`: all 10 current tests pass `value_mask`
+  explicitly; none exercise the `None` path.
+- `trainer.py` and `ppo_agent.py` only reference `Dueling_DQN_Agent`/
+  `resolve_device` by name — they never call `net.forward(...)` directly.
+- No other file in the repo calls `Dueling_DQN.forward` at all.
+- `Docs/NetworkArchitectures.md` documents only the `value_mask` call
+  convention as current; no doc describes the `None` fallback as an
+  intentionally supported second mode.
+
+**Conclusion.** For every call path in this repository, the fallback branch is
+unreachable dead code left over from before the value-row redesign, not a
+supported backward-compatibility path. As a public method, `forward(...)`
+could still be called without `value_mask` by external, out-of-repository code;
+removing the branch intentionally makes such a call fail fast rather than
+silently select the superseded approximation. Keeping it duplicates the
+value/advantage combination logic in two slightly different forms (one of them
+the design that was deliberately abandoned for correctness reasons), which
+violates the project's minimal-diff / no-duplicate-logic conventions and risks
+the two forms silently drifting apart.
+
+**Plan (not yet executed):**
+
+1. In `dueling_dqn.py`, remove the `if value_mask is None: ...` branch
+   (lines 95-108) from `Dueling_DQN.forward`, make `value_mask` a required
+   (non-`Optional`) argument, and update the docstring/module-level example
+   at the top of the file accordingly (drop the "Omit it" language, keep
+   `group_index`'s own optional behavior untouched — that fallback is
+   unrelated and still used).
+2. Update the "Recommended network API" / value-stream sections of this doc
+   (`Docs/DuelingDQN.md`) and `Docs/NetworkArchitectures.md` if either still
+   implies `value_mask` is optional.
+3. Re-run `Temp/tests/test_dueling_dqn.py` (and the full suite per
+   `Docs/Testing.md`) to confirm nothing relied on the old signature.
+4. Add a `Docs/ChangeLog.md` entry noting the removal and why (dead code from
+   the pre-redesign value-averaging approach), per this repo's changelog
+   convention.
+
+No code changes have been made yet — this section only records the
+investigation and the intended follow-up.
+
+**Executed (2026-07-16).** Steps 1-2 done: `dueling_dqn.py`'s `forward` no
+longer has the `value_mask is None` branch, `value_mask` is now a required
+argument (`group_index` keeps its own optional default, unrelated), and the
+docstring was updated. `Dueling_DQN_Agent._score(...)` now also requires and
+forwards a concrete `value_mask`, so its private wrapper contract cannot
+reintroduce the removed fallback. Docs already described `value_mask` as
+required in prose, so no further doc-text changes were needed for step 2. Step 3 (run
+`Temp/tests/test_dueling_dqn.py` and the full suite) could **not** be run in
+this session — the sandbox has no `torch`/`torch_geometric` installed and no
+network access to `download.pytorch.org` to install them. The change is a
+pure deletion of a branch that was already unreachable from every real call
+site (verified by grep across the repo, see above), so no reachable behavior
+changed — but this should still be confirmed with an actual
+`python -m pytest Temp/tests -q` run in an environment with the project's
+dependencies before relying on it. Step 4 done: `Docs/ChangeLog.md` entry
+added.
+
+**Validation update (2026-07-16).** The previously used
+`C:\\Users\\Gilad\\venvs\\ai-rl` environment was recovered and ran the focused
+Dueling, classic-DQN, and PPO regression files successfully: `42 passed` in
+20.83 seconds. The only warnings were third-party deprecations and the
+existing optional `torch-scatter` acceleration warning; no test failed.

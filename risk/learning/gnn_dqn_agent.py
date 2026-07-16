@@ -73,6 +73,7 @@ class GNN_DQN_Agent(BaseAgent):
         self.gamma = float(gamma)
         self.target_update_every = int(target_update_every)
         self._train_steps = 0
+        self.last_update_metrics: dict[str, float] = {}
 
         sample = self.adapter(env.current_state(), perspective=self.player_id)
         self.net = GNN_DQN(
@@ -91,6 +92,17 @@ class GNN_DQN_Agent(BaseAgent):
     @property
     def train_steps(self) -> int:
         return self._train_steps
+
+    def progress_metrics(self) -> dict[str, float]:
+        """Cheap per-episode diagnostics for the generic trainer logger —
+        `epsilon` isn't otherwise visible in the logged metrics, and the
+        replay/target-sync state helps read `dqn_*` training diagnostics
+        in context (`Docs/Trainer.md`)."""
+        return {
+            "epsilon": self.epsilon,
+            "dqn_replay_buffer_size": float(len(self.replay_buffer)),
+            "dqn_train_steps_since_target_sync": float(self._train_steps % self.target_update_every),
+        }
 
     def attach(self, player_id: int, env: Environment) -> None:
         """Rebind this agent to a new episode's seat/env.
@@ -403,12 +415,26 @@ class GNN_DQN_Agent(BaseAgent):
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.net.parameters(), GRAD_CLIP_MAX_NORM)
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.net.parameters(), GRAD_CLIP_MAX_NORM)
         self.optimizer.step()
 
         self._train_steps += 1
         if self._train_steps % self.target_update_every == 0:
             self.target_net.load_state_dict(self.net.state_dict())
+
+        td_error = target_q - q_value.detach()
+        self.last_update_metrics = {
+            "dqn_td_error_mean": float(td_error.mean()),
+            "dqn_td_error_abs_mean": float(td_error.abs().mean()),
+            "dqn_td_error_std": float(td_error.std(unbiased=False)),
+            "dqn_td_error_abs_max": float(td_error.abs().max()),
+            "dqn_q_value_mean": float(q_value.detach().mean()),
+            "dqn_q_value_std": float(q_value.detach().std(unbiased=False)),
+            "dqn_target_q_mean": float(target_q.mean()),
+            "dqn_target_q_std": float(target_q.std(unbiased=False)),
+            "dqn_grad_norm": float(grad_norm),
+            "dqn_grad_norm_clipped": float(grad_norm > GRAD_CLIP_MAX_NORM),
+        }
 
         return float(loss.item())
 
