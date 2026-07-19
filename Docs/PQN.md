@@ -468,7 +468,11 @@ pi(a_i | s) = softmax(A_online(s, legal_actions))[i]
 ```
 
 Then select the replayed action `a` to obtain `Q_online(s, a)` for the
-Bellman prediction and `log(pi(a | s))` for the policy term.
+Bellman prediction and `log(pi(a | s))` for the policy term. The same
+`Categorical(logits=A_online(s, .))` distribution also provides its
+`entropy()` for each replayed state; this is logged now and kept attached to
+the graph so a later entropy-loss experiment can reuse it without another
+forward pass.
 
 For the next state `s'`, run both copied networks over the same legal-action
 set:
@@ -523,13 +527,16 @@ the policy loss changes only the action-ranking outputs. Keep this in a small
 `_policy_loss(td_advantage, log_pi_taken)` agent helper so a focused regression
 test can protect the detach contract. Begin with an explicit
 policy-loss weight in `train_constants.py`, log it, and keep every other
-Dueling setting the same for the first comparison run. **Future development:**
-test entropy regularization only as a separate experiment after this baseline
-has a meaningful comparison window.
+Dueling setting the same for the first comparison run. `pqn_policy_entropy`
+logs the mean `Categorical.entropy()` over the replay minibatch; it is
+diagnostic only and is not part of `total_loss`. **Future development:** test
+entropy regularization only as a separate experiment after this baseline has a
+meaningful comparison window, using this already-calculated tensor.
 
-During training, sample actions from `pi`; during evaluation, select the
-largest-probability action. That is the full behavioral change from Dueling
-DQN.
+In the current `policy_sample` mode, training samples actions from `pi` and
+evaluation selects the largest-probability action. That is the current
+behavioral change from Dueling DQN; the planned comparison mode below is a
+separate option.
 
 **Not yet specified, deliberately deferred until implementation starts:**
 `pqn_*` diagnostic fields, checkpoint format, and test coverage. Start from
@@ -543,23 +550,102 @@ PPO's actor/critic split need separate encoder-gradient-norm diagnostics
 the same split here rather than only discovering the need after an
 unexplained training instability, as happened with PPO.
 
-### D. Implementation status
+### D. PQN, PQN_e, and PQN_e0 comparison modes
+
+The first PQN comparison isolates the new replay policy-loss term, rather than
+also changing how the replay buffer is explored. `PQN_Agent` has two action
+selection modes:
+
+```text
+policy_sample       current behavior: sample Categorical(logits=A(s, .))
+epsilon_greedy_q    comparison behavior: Dueling DQN's epsilon-greedy rule
+```
+
+`policy_sample` remains the default so the original PQN behavior is not lost.
+The trainer exposes these as two learner names:
+
+```text
+PQN     policy_sample
+PQN_e   epsilon_greedy_q
+PQN_e0  epsilon_greedy_q with policy_loss_coef = 0
+```
+
+Their instance labels match those names, so W&B runs and default checkpoint
+folders remain separate. `PQN_e0` is the Bellman-only ablation: it retains the
+PQN/Dueling network, replay construction, entropy and policy-loss diagnostics,
+and Dueling-identical epsilon-greedy behavior, but optimizes
+`total_loss = q_loss` because its per-agent `policy_loss_coef` is zero.
+
+In `epsilon_greedy_q` mode, PQN uses exactly Dueling DQN's schedule and
+behavior policy:
+
+```text
+epsilon(episode) = EPSILON_START
+                 + (EPSILON_END - EPSILON_START)
+                   * clamp((episode - 1) / EPSILON_DECAY_EPISODES, 0, 1)
+
+training action = uniformly random legal action     with probability epsilon
+                = argmax_a Q_online(s, a)           otherwise
+evaluation action = argmax_a Q_online(s, a)
+```
+
+The agent will calculate `Q_online(s, a)` with its existing `_combine_q(...)`
+helper. `argmax Q_online(s, a)` and `argmax A_online(s, a)` are identical for
+one decision because the value and mean-advantage terms are shared by all its
+legal actions; use `Q` anyway so the comparison follows Dueling DQN's action
+rule directly.
+
+This changes only `PQN_Agent`'s behavior policy. `pqn.py`, the heads, legal
+action batching, Double-DQN target, Bellman loss, policy loss, and entropy
+diagnostic stay unchanged. `Categorical(logits=A)` also stays in the training
+calculation for `log_prob` and entropy, but `act()` does not sample it in
+`epsilon_greedy_q` mode.
+
+**Implemented `PQN_Agent` surface:**
+
+- `action_selection: str = "policy_sample"` accepts `"policy_sample"` or
+  `"epsilon_greedy_q"`. The default keeps the original behavior, so existing
+  direct `PQN_Agent(...)` construction does not change silently.
+- `policy_loss_coef: float = PQN_POLICY_LOSS_COEF` is stored on the agent.
+  `build_learner_agent("PQN_e0", ctx)` passes `0.0`; ordinary `PQN` and
+  `PQN_e` retain the configured `0.1` default.
+- `epsilon` is a real constructor parameter with Dueling's `EPSILON_START`
+  default. It is consulted only by `epsilon_greedy_q`; it is logged in both
+  modes for a directly comparable W&B curve.
+- `on_episode_start(episode)` applies Dueling's exact decay formula in both
+  modes. In `policy_sample` it has no action-selection effect.
+- Full checkpoints persist `action_selection`, `epsilon`, and
+  `policy_loss_coef`; legacy checkpoints use the original defaults.
+- W&B config records the agent's effective `action_selection` and
+  `PQN_POLICY_LOSS_COEF`, rather than blindly recording only the module
+  default. Per-episode metrics also include `pqn_policy_loss_coef`.
+
+Tests cover the unchanged sampled-policy mode; random versus greedy branches
+in PQN_e; exact decay endpoints; checkpoint round-trip, including an old
+checkpoint without the new fields; trainer selection of `PQN`, `PQN_e`, and
+`PQN_e0`; the zero-coefficient loss equality;
+and that `argmax Q` equals `argmax A` for each legal-action decision.
+
+### E. Implementation status
 
 §A-C above are implemented as written: [pqn.py](../risk/learning/pqn.py)
 (the network, returning raw `(value_mean, advantage)`) and
 [pqn_agent.py](../risk/learning/pqn_agent.py) (`PQN_Agent` — `_combine_q`,
 `_current_state_terms`, `_next_state_terms`, `train_step`), wired into
-`build_learner_agent("PQN", ctx)` in `trainer.py`. `PQN_POLICY_LOSS_COEF`
+`build_learner_agent("PQN", ctx)`, `build_learner_agent("PQN_e", ctx)`, and
+`build_learner_agent("PQN_e0", ctx)` in `trainer.py`. `PQN_POLICY_LOSS_COEF`
 (the initial policy-loss weight from §24.C, `0.1`) lives in `train_constants.py`.
-`pqn_agent.py` has no `epsilon` — `act()` always samples/argmaxes the
-`softmax(A)` policy, matching PPO's "no epsilon-greedy" pattern rather than
-Dueling's.
+`pqn_agent.py` supports all three variants described in §24.D. `PQN`
+keeps the sampled/argmaxed `softmax(A)` policy, while `PQN_e` uses Dueling's
+epsilon-greedy behavior and greedy combined-Q action rule. `PQN_e0` uses that
+same behavior with only the Bellman loss contributing gradients.
 
 `last_update_metrics` follows Dueling's shape rather than PPO's split
 encoder-gradient-norm diagnostics for now (`pqn_q_loss`, `pqn_policy_loss`,
-`pqn_total_loss`, `pqn_td_error_mean`/`_abs_mean`, `pqn_td_advantage_mean`/
+`pqn_policy_entropy`, `pqn_total_loss`, `pqn_td_error_mean`/`_abs_mean`, `pqn_td_advantage_mean`/
 `_abs_mean`, `pqn_q_value_mean`, `pqn_value_mean`, `pqn_target_q_mean`,
-`pqn_grad_norm`/`_clipped`); `progress_metrics()` reports
+`pqn_grad_norm`/`_clipped`); `progress_metrics()` reports `epsilon` and
+`pqn_policy_loss_coef` (all variants, for directly comparable curves) plus
 `pqn_replay_buffer_size`/`pqn_train_steps_since_target_sync`. Revisit the
 encoder-gradient-norm split called out above if a real training run shows
 the same critic-dominance-style instability PPO had.

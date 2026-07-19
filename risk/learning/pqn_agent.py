@@ -41,6 +41,9 @@ from risk.learning.pqn import PQN
 from risk.learning.replay_buffer import ReplayBuffer
 from risk.learning.train_constants import (
     BATCH_SIZE,
+    EPSILON_DECAY_EPISODES,
+    EPSILON_END,
+    EPSILON_START,
     GRAD_CLIP_MAX_NORM,
     PQN_POLICY_LOSS_COEF,
     TRAIN_STEPS_PER_CALL,
@@ -63,12 +66,19 @@ class PQN_Agent(BaseAgent):
 
     def __init__(self, player_id: int, env: Environment, *,
                  replay_buffer: ReplayBuffer | None = None, device: torch.device | None = None,
+                 epsilon: float = EPSILON_START, action_selection: str = "policy_sample",
+                 policy_loss_coef: float = PQN_POLICY_LOSS_COEF,
                  train_mode: bool = False, seed: int | None = None,
                  gamma: float = 0.99, lr: float = 1e-4, target_update_every: int = 1000,) -> None:
         super().__init__(player_id)
+        if action_selection not in {"policy_sample", "epsilon_greedy_q"}:
+            raise ValueError(f"Unknown PQN action selection {action_selection!r}")
         self.env = env
         self.device = resolve_device(device)
-        self.epsilon = 0.0  # Evaluator compatibility only; PQN never consults it — it samples the policy, not epsilon-greedy (Docs/PQN.md).
+        self.action_selection = action_selection
+        self.policy_loss_coef = float(policy_loss_coef)
+        self._refresh_label()
+        self.epsilon = float(epsilon)
         self._rng = random.Random(seed)
         self.replay_buffer = replay_buffer or ReplayBuffer()
         self.adapter = GraphAdapter(env.topology, env.settings)
@@ -94,15 +104,25 @@ class PQN_Agent(BaseAgent):
         self.set_train_mode(train_mode)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
 
+    def _refresh_label(self) -> None:
+        if self.action_selection == "epsilon_greedy_q":
+            self.label = "PQN_e0" if self.policy_loss_coef == 0.0 else "PQN_e"
+        else:
+            self.label = "PQN"
+
     @property
     def train_steps(self) -> int:
         return self._train_steps
 
     def progress_metrics(self) -> dict[str, float]:
         """Cheap per-episode diagnostics for the generic trainer logger
-        (`Docs/Trainer.md`) — mirrors `Dueling_DQN_Agent`'s, minus
-        `epsilon` (permanently inert for PQN, not worth charting)."""
+        (`Docs/Trainer.md`) — mirrors `Dueling_DQN_Agent`'s. `epsilon` is
+        reported in both action-selection modes (`Docs/PQN.md` §24.D) so
+        `PQN`/`PQN_e` W&B curves stay directly comparable, even though it's
+        only consulted by `act()` in `epsilon_greedy_q` mode."""
         return {
+            "epsilon": self.epsilon,
+            "pqn_policy_loss_coef": self.policy_loss_coef,
             "pqn_replay_buffer_size": float(len(self.replay_buffer)),
             "pqn_train_steps_since_target_sync": float(self._train_steps % self.target_update_every),
         }
@@ -128,8 +148,8 @@ class PQN_Agent(BaseAgent):
     def save_checkpoint(self, dir_path: str | Path) -> None:
         """Full training checkpoint: everything needed to resume exactly.
 
-        No `epsilon` in the payload (unlike `Dueling_DQN_Agent`'s) — it's
-        permanently `0.0` and inert for PQN, nothing to restore."""
+        Includes the action mode, epsilon, and policy-loss coefficient so a
+        resumed PQN_e/PQN_e0 run keeps the original experiment semantics."""
         dir_path = Path(dir_path)
         dir_path.mkdir(parents=True, exist_ok=True)
         torch.save(
@@ -138,21 +158,39 @@ class PQN_Agent(BaseAgent):
                 "target_net": self.target_net.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
                 "train_steps": self._train_steps,
+                "action_selection": self.action_selection,
+                "epsilon": self.epsilon,
+                "policy_loss_coef": self.policy_loss_coef,
             },
             dir_path / "model.pt",
         )
         self.replay_buffer.save(dir_path / "replay.pt")
 
     def load_checkpoint(self, dir_path: str | Path) -> None:
-        """Inverse of `save_checkpoint` — restores net/target/optimizer/
-        train_steps and replaces `self.replay_buffer` with the saved one."""
+        """Inverse of `save_checkpoint`, including behavior-policy state.
+
+        Checkpoints created before PQN action modes default to the original
+        `policy_sample` behavior when loaded.
+        """
         dir_path = Path(dir_path)
         payload = torch.load(dir_path / "model.pt", map_location=self.device, weights_only=False)
         self.net.load_state_dict(payload["net"])
         self.target_net.load_state_dict(payload["target_net"])
         self.optimizer.load_state_dict(payload["optimizer"])
         self._train_steps = int(payload["train_steps"])
+        action_selection = payload.get("action_selection", "policy_sample")
+        if action_selection not in {"policy_sample", "epsilon_greedy_q"}:
+            raise ValueError(f"Unknown checkpoint PQN action selection {action_selection!r}")
+        self.action_selection = action_selection
+        self.policy_loss_coef = float(payload.get("policy_loss_coef", PQN_POLICY_LOSS_COEF))
+        self._refresh_label()
+        self.epsilon = float(payload.get("epsilon", EPSILON_START))
         self.replay_buffer = ReplayBuffer(capacity=self.replay_buffer.capacity, path=dir_path / "replay.pt")
+
+    def on_episode_start(self, episode: int) -> None:
+        """Use Dueling DQN's exact epsilon schedule for comparable PQN_e runs."""
+        progress = min(max(episode - 1, 0) / EPSILON_DECAY_EPISODES, 1.0)
+        self.epsilon = EPSILON_START + (EPSILON_END - EPSILON_START) * progress
 
     def set_train_mode(self, train: bool) -> None:
         self.train_mode = bool(train)
@@ -167,11 +205,16 @@ class PQN_Agent(BaseAgent):
         if not legal_actions:
             return None
 
-        _, advantage = self.score_actions(state, legal_actions)
-        if self.train_mode:
+        if self.action_selection == "epsilon_greedy_q" and self.train_mode and self._rng.random() < self.epsilon:
+            return self._rng.choice(legal_actions)
+
+        value, advantage = self.score_actions(state, legal_actions)
+        if self.action_selection == "policy_sample" and self.train_mode:
             index = int(Categorical(logits=advantage).sample().item())
         else:
-            index = int(torch.argmax(advantage).item())
+            group_index = torch.zeros(len(legal_actions), dtype=torch.long, device=self.device)
+            q_values = self._combine_q(value, advantage, group_index)
+            index = int(torch.argmax(q_values).item())
         return legal_actions[index]
 
     def score_actions(self, state: State, legal_actions: Sequence[Action]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -254,12 +297,13 @@ class PQN_Agent(BaseAgent):
         )
 
     def _current_state_terms(self, states: Sequence[State], actions: Sequence[Action],
-                              stage: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                              stage: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """`Docs/PQN.md` §24.B's "current state" calculation, via the online
         net: for each sampled `(state, action)` pair, the taken action's
         combined `Q_online(s, a)` (Bellman prediction), the clean-row
         `V_online(s)` (TD-advantage baseline), and `log pi(a | s)` (policy
-        term, from a per-decision softmax over `A`). Builds every legal
+        term, and the policy entropy, both from a per-decision softmax over
+        `A`. Builds every legal
         action of every sampled state in one flattened batch, exactly like
         `Dueling_DQN_Agent._q_value` — the dueling mean needs the whole
         legal-action set, not just the taken action.
@@ -296,6 +340,7 @@ class PQN_Agent(BaseAgent):
 
         q_taken = torch.empty(len(states), dtype=torch.float32, device=self.device)
         log_pi_taken = torch.empty(len(states), dtype=torch.float32, device=self.device)
+        policy_entropy = torch.empty(len(states), dtype=torch.float32, device=self.device)
         offset = 0
         for i in range(len(states)):
             k = legal_counts[i]
@@ -306,7 +351,8 @@ class PQN_Agent(BaseAgent):
             log_pi_taken[i] = distribution.log_prob(
                 torch.tensor(taken_local_index[i], device=self.device)
             )
-        return q_taken, value, log_pi_taken
+            policy_entropy[i] = distribution.entropy()
+        return q_taken, value, log_pi_taken, policy_entropy
 
     def _next_state_terms(self, next_states: Sequence[State], done: torch.Tensor,
                            next_stage: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -400,7 +446,9 @@ class PQN_Agent(BaseAgent):
         reward = reward.to(self.device)
         done = done.to(self.device)
 
-        q_online_taken, v_online_s, log_pi_taken = self._current_state_terms(states, actions, stage)
+        q_online_taken, v_online_s, log_pi_taken, policy_entropy = self._current_state_terms(
+            states, actions, stage
+        )
         v_online_next, q_target_at_astar = self._next_state_terms(next_states, done, next_stage)
 
         y = reward + self.gamma * (~done).float() * q_target_at_astar
@@ -409,7 +457,7 @@ class PQN_Agent(BaseAgent):
         td_advantage = reward + self.gamma * (~done).float() * v_online_next - v_online_s
         policy_loss = self._policy_loss(td_advantage, log_pi_taken)
 
-        loss = q_loss + PQN_POLICY_LOSS_COEF * policy_loss
+        loss = q_loss + self.policy_loss_coef * policy_loss
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -424,6 +472,7 @@ class PQN_Agent(BaseAgent):
         self.last_update_metrics = {
             "pqn_q_loss": float(q_loss.detach()),
             "pqn_policy_loss": float(policy_loss.detach()),
+            "pqn_policy_entropy": float(policy_entropy.detach().mean()),
             "pqn_total_loss": float(loss.detach()),
             "pqn_td_error_mean": float(td_error.mean()),
             "pqn_td_error_abs_mean": float(td_error.abs().mean()),

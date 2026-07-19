@@ -484,8 +484,8 @@ a new `Temp/tests/test_ppo.py` per `Docs/Testing.md`'s convention:
 
 ## Non-goals for v1
 
-- Do not implement PQN yet — per the stated plan, PQN comes after PPO has
-  its own results to compare against.
+- Do not change PQN here. PQN and PQN_e are separate implemented replay-based
+  learners; their behavior-policy comparison belongs in `Docs/PQN.md`.
 - Do not revisit action representation here — `Docs/NetworkArchitectures.md`
   records the settled injection-only roadmap.
 - Keep the DQN agents' learning behavior unchanged: they accept and currently

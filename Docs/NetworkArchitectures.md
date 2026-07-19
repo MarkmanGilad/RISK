@@ -36,17 +36,20 @@ Everything below assumes that representation.
 | **DQN** | implemented | `Q(s, a)` | off-policy replay + Double-DQN target | `risk/learning/gnn_dqn.py`, `risk/learning/gnn_dqn_agent.py` |
 | **Dueling DQN** | implemented | `V(s)` + `A(s, a)` -> `Q(s, a)` | off-policy replay + Double-DQN target | `Docs/DuelingDQN.md` |
 | **PPO** | planned | policy logits + `V(s)` | on-policy rollout + clipped surrogate | `Docs/PPO.md` |
-| **PQN** | planned | dueling Q-values plus policy from advantages | replay-based value + policy improvement | `Docs/PQN.md` |
+| **PQN** | implemented | raw dueling `V(s)`/`A(s, a)`, Q-values plus policy logits | replay-based value + policy improvement | `Docs/PQN.md` |
+| **ADQN** | implemented | independent raw dueling `V(s)`/`A(s, a)` -> Q plus centered-advantage loss | off-policy replay + Double-DQN target + bounded auxiliary loss | `Docs/ADQN.md` |
 
 The order is deliberate. DQN is the working baseline. Dueling DQN isolates the
 effect of adding a value stream. PPO changes the optimization method while
 keeping the same injected-action encoder shape. PQN is the later unified idea:
 keep replay efficiency, use the dueling value/advantage structure, and add an
-explicit policy-improvement objective.
+explicit policy-improvement objective. ADQN keeps Dueling DQN's epsilon-greedy
+behavior and replaces PQN's log-policy auxiliary objective with a bounded
+centered-advantage objective.
 
 ## Shared foundation
 
-All four learners use the same graph/action foundation unless a design doc says
+All five learners use the same graph/action foundation unless a design doc says
 otherwise.
 
 ### Base state graph
@@ -236,7 +239,7 @@ The default run label should be `PPO`, so run/checkpoint names look like
 
 ## PQN
 
-**Planned.** PQN is the new unified value-policy learner. It starts from the
+**Implemented.** PQN is the unified value-policy learner. It starts from the
 Dueling architecture and interprets the advantage stream as both value-learning
 structure and policy logits:
 
@@ -254,8 +257,22 @@ That distinction matters: PQN keeps replay efficiency and does not store old
 policy probabilities in the replay buffer. See [`PQN.md`](PQN.md) for the full
 motivation and loss design.
 
-The default run label should be `PQN`, so run/checkpoint names look like
-`PQN_<id>` once implemented.
+The trainer exposes `PQN` for sampled-softmax actions, `PQN_e` for the
+Dueling-comparable epsilon-greedy-Q behavior, and `PQN_e0` for that same
+behavior with a zero policy-loss coefficient. Their run/checkpoint names
+follow those labels; all use the same PQN network, while `PQN_e0` is the
+Bellman-only control for comparison with Dueling DQN. See
+[`PQN.md`](PQN.md) §24.D.
+
+## ADQN
+
+**Implemented.** ADQN owns standalone `ADQN` and `ADQN_Agent` classes. Their
+raw dueling architecture and Dueling-style agent plumbing are intentionally
+copied for now: neither class imports, constructs, or inherits its PQN sibling.
+ADQN keeps epsilon-greedy Q action selection, replay, and the Double-DQN
+Bellman loss, then adds the bounded signed centered-advantage objective from
+[`ADQN.md`](ADQN.md). A common base for the sibling dueling learners may be
+introduced later after their algorithm boundaries are stable.
 
 ## Comparison plan
 
@@ -268,14 +285,17 @@ foundation.
 | Dueling DQN | clean state + injected actions -> V/A/Q | Does separating state value from action advantage improve ranking and stability? |
 | PPO | clean state + injected actions -> logits/V | Does on-policy policy optimization outperform replay-based value learning? |
 | PQN | clean state + injected actions -> V/A/Q/policy | Can one replay-based dueling scorer learn both values and a useful policy? |
+| ADQN | clean state + injected actions -> V/A/Q | Can direct bounded centered-advantage training improve Dueling DQN without a log-policy loss? |
 
 Recommended experiment order:
 
 1. Keep DQN as the baseline with known-good checkpoints and W&B history.
 2. Finish the Dueling DQN comparison run and evaluate against DQN.
-3. Build PPO only after Dueling has a meaningful comparison window.
-4. Build PQN after PPO has results, so PQN is compared against both pure value
-   learning and pure on-policy policy optimization.
+3. Compare the implemented PQN_e mode against Dueling DQN first, holding the
+   epsilon-greedy behavior policy constant so the policy loss is the main
+   algorithmic difference.
+4. Use the sampled-policy PQN mode as the next PQN experiment, then compare
+   both PQN modes with PPO's on-policy policy optimization.
 5. Compare agents by eval score, eval win rate, `win_rate_last_50`, wall-clock
    throughput, and system metrics. Do not judge speed from parallel runs on the
    same GPU; W&B system GPU memory/utilization is device-level and will combine

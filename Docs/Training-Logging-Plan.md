@@ -33,7 +33,7 @@ Out of scope (for this pass):
 - Local metric plotting/history files.
 - UI changes.
 - The existing `\r` console progress print in `Trainer.train(...)`
-  (`run ... | episode .../... | step ... | turn ... | territories agent vs others [pX:n,...] | continents K [...] | armies [p0:n,p1:n,...]`).
+  (`run ... | episode .../... | learner pX | step ... | turn ... | territories agent vs others [pX:n,...] | continents K [...] | armies [p0:n,p1:n,...]`).
   Stays independent
   of `TrainingLogger` — it's the simple "is the trainer alive and roughly
   where is it" signal, distinct from W&B's episode-level metrics. Not folded
@@ -169,6 +169,10 @@ methods:**
 - `target_model_str`: `str(agent.target_net)`
 - `param_count`: total trainable params
 - device (`cpu`/`cuda`)
+- optional agent behavior/loss selection when exposed by the agent. PQN
+  records `action_selection` and overrides `PQN_POLICY_LOSS_COEF` with the
+  agent's effective value, distinguishing `PQN`, `PQN_e`, and the Bellman-only
+  `PQN_e0` control without relying only on the run name.
 
 3. Run metadata
 - `run_id`
@@ -342,6 +346,12 @@ around them):
   `dqn_td_error_mean`/`_abs_mean`/`_std`/`_abs_max`, `dqn_q_value_mean`/`_std`,
   `dqn_target_q_mean`/`_std`, `dqn_grad_norm`/`_clipped` (`GNN_DQN_Agent`/
   `Dueling_DQN_Agent` only, `Docs/Trainer.md`)
+- `adqn_q_loss`, signed/absolute/weighted advantage loss, total loss,
+  effective coefficient mean/maximum, signed and activity loss ratios,
+  TD/value/centered-advantage diagnostics, advantage-weight sign/saturation
+  fractions and TD-error correlation, combined gradient clipping, and the
+  periodically emitted Bellman/advantage encoder-gradient norms and cosine
+  (`ADQN_Agent`; exact field names and cadence are in `Docs/ADQN.md` §D/F)
 - `checkpoint_saved`
 
 Interpretation rule:

@@ -124,7 +124,7 @@ class TrainingLogger:
         )
         return (
             f"run {self.run_id:03d} | episode {episode:>4d}/{n_episodes} | "
-            f"step {step_count:>4d} | turn {agent_turns:>3d} | "
+            f"learner p{seat} | step {step_count:>4d} | turn {agent_turns:>3d} | "
             f"territories {agent_territories:>2d} vs {other_territories:>2d} [{others_territories_detail}] | "
             f"continents {len(agent_continents)} [{continents_detail}] | "
             f"armies [{armies_detail}]"
@@ -207,6 +207,24 @@ class TrainingLogger:
                 "device": str(agent.device),
             }
         )
+        action_selection = getattr(agent, "action_selection", None)
+        if action_selection is not None:
+            config["action_selection"] = action_selection
+        policy_loss_coef = getattr(agent, "policy_loss_coef", None)
+        if policy_loss_coef is not None:
+            config["PQN_POLICY_LOSS_COEF"] = policy_loss_coef
+        adqn_attributes = {
+            "advantage_loss_coef": "ADQN_ADVANTAGE_LOSS_COEF",
+            "max_advantage_loss_fraction": "ADQN_MAX_ADVANTAGE_LOSS_FRACTION",
+            "advantage_weight_scale": "ADQN_ADVANTAGE_WEIGHT_SCALE",
+            "advantage_weight_saturation": "ADQN_ADVANTAGE_WEIGHT_SATURATION",
+            "grad_diagnostic_every": "ADQN_GRAD_DIAGNOSTIC_EVERY",
+            "loss_balance_epsilon": "ADQN_LOSS_BALANCE_EPSILON",
+        }
+        for attribute, config_name in adqn_attributes.items():
+            value = getattr(agent, attribute, None)
+            if value is not None:
+                config[config_name] = value
         return config
 
     @staticmethod

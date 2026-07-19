@@ -28,9 +28,13 @@ trainer.train(n_episodes=TRAIN_EPISODES)
 trainer.logger.finish()
 ```
 
-`build_learner_agent` currently accepts `"DQN"`, `"Dueling_DQN"`, and `"PPO"`; an
-unknown label raises `ValueError` immediately rather than failing later with
-an unbound local variable.
+`build_learner_agent` accepts `"DQN"`, `"Dueling_DQN"`, `"PPO"`, `"PQN"`,
+`"PQN_e"`, `"PQN_e0"`, and `"ADQN"`; an unknown label raises `ValueError` immediately rather than
+failing later with an unbound local variable. `PQN` preserves PQN's sampled
+softmax behavior, while `PQN_e` selects the same PQN network with its
+Dueling-comparable epsilon-greedy-Q behavior. `PQN_e0` is the matching
+Bellman-only control: the same epsilon-greedy behavior with a per-agent
+policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and future agents
@@ -47,7 +51,9 @@ training run.
   provided, for example `Checkpoints/DQN_030` or
   `Checkpoints/Dueling_DQN_030`. `label` is a plain class attribute each agent
   class declares itself (`GNN_DQN_Agent.label = "DQN"`,
-  `Dueling_DQN_Agent.label = "Dueling_DQN"`) — `Trainer` just reads
+  `Dueling_DQN_Agent.label = "Dueling_DQN"`). `PQN_Agent` sets its instance
+  label to `"PQN"`, `"PQN_e"`, or `"PQN_e0"` from the selected behavior and
+  policy-loss coefficient — `Trainer` just reads
   `agent.label`, it does not infer it from the class name or an isinstance
   check.
 - `logger` defaults to `TrainingLogger`, which owns W&B init/log/finish and
@@ -154,11 +160,26 @@ mean/std/max, Q-value and target-Q mean/std, and the pre-clip gradient norm
 discarded) plus whether it was clipped — all prefixed `dqn_` so DQN and
 Dueling DQN runs share one chart namespace for direct comparison.
 
+PQN supplies its own `pqn_*` update diagnostics plus `epsilon`, replay size,
+and target-sync progress. W&B run config also records PQN's
+`action_selection`, distinguishing sampled `PQN` behavior from `PQN_e`'s
+epsilon-greedy-Q behavior even when comparing charts outside their distinct
+run names.
+
+ADQN is selected with `build_learner_agent("ADQN", ctx)`. It uses the same
+epsilon-greedy Q action path, replay cadence, and DDQN target calculation as
+Dueling DQN/PQN_e, while reporting its additional loss and gradient
+diagnostics under `adqn_*`. Its run and checkpoint label is `ADQN_<run_id>`;
+the logged model class is `ADQN`. Both the network and agent are standalone
+sibling implementations and do not inherit from or construct PQN classes.
+
 If the episode hits the eval cadence, evaluation metrics are merged into the
 same row before logging.
 
 The live console status line is separate from W&B logging. It is a lightweight
 progress signal printed during long episodes and formatted by `TrainingLogger`.
+It includes `learner p<seat>` because the learner's physical player number is
+randomized independently for every episode.
 
 ## Evaluation and checkpoints
 

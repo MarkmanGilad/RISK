@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from risk.learning import train_constants
+from risk.learning.adqn_agent import ADQN_Agent
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.training_logger import TrainingLogger
 
@@ -33,6 +34,24 @@ def test_use_wandb_false_disables_wandb_and_is_a_noop(tmp_path: Path) -> None:
     logger.finish()
 
 
+def test_status_line_identifies_the_learner_seat(tmp_path: Path) -> None:
+    logger = TrainingLogger(run_id=50, checkpoint_dir=tmp_path, use_wandb=False)
+    env = make_env(seed=3, agent_kind="ai")
+
+    line = logger.format_status_line(
+        topology=env.topology,
+        episode=45,
+        n_episodes=10_000,
+        step_count=1819,
+        agent_turns=477,
+        seat=2,
+        current_state=env.current_state(),
+    )
+
+    assert "run 050" in line
+    assert "learner p2" in line
+
+
 def test_build_config_includes_constants_and_model_identity(tmp_path: Path) -> None:
     logger = TrainingLogger(run_id=7, checkpoint_dir=tmp_path, use_wandb=False, run_name="DQN_007")
     agent = _agent()
@@ -49,6 +68,53 @@ def test_build_config_includes_constants_and_model_identity(tmp_path: Path) -> N
     assert config["target_model_str"] == str(agent.target_net)
     assert config["param_count"] == sum(p.numel() for p in agent.net.parameters())
     assert config["device"] == str(agent.device)
+
+
+def test_build_config_records_optional_action_selection(tmp_path: Path) -> None:
+    logger = TrainingLogger(run_id=7, checkpoint_dir=tmp_path, use_wandb=False)
+    agent = _agent()
+    agent.action_selection = "epsilon_greedy_q"
+
+    assert logger._build_config(agent)["action_selection"] == "epsilon_greedy_q"
+
+
+def test_build_config_uses_agent_policy_loss_coefficient(tmp_path: Path) -> None:
+    logger = TrainingLogger(run_id=7, checkpoint_dir=tmp_path, use_wandb=False)
+    agent = _agent()
+    agent.policy_loss_coef = 0.0
+
+    assert logger._build_config(agent)["PQN_POLICY_LOSS_COEF"] == 0.0
+
+
+def test_build_config_uses_effective_adqn_settings(tmp_path: Path) -> None:
+    logger = TrainingLogger(run_id=7, checkpoint_dir=tmp_path, use_wandb=False)
+    env = make_env(seed=4, agent_kind="ai")
+    agent = ADQN_Agent(
+        player_id=0,
+        env=env,
+        advantage_loss_coef=0.2,
+        max_advantage_loss_fraction=0.3,
+        advantage_weight_scale=4.0,
+        advantage_weight_saturation=0.8,
+        grad_diagnostic_every=7,
+        loss_balance_epsilon=1e-6,
+    )
+
+    config = logger._build_config(agent)
+
+    assert config["agent_class"] == "ADQN_Agent"
+    assert config["model_class"] == "ADQN"
+    assert config["action_selection"] == "epsilon_greedy_q"
+    # The logger records all shared module constants for every run, including
+    # knobs belonging to other algorithms. ADQN's effective settings below
+    # must nevertheless reflect the agent instance, not only the defaults.
+    assert config["PQN_POLICY_LOSS_COEF"] == train_constants.PQN_POLICY_LOSS_COEF
+    assert config["ADQN_ADVANTAGE_LOSS_COEF"] == 0.2
+    assert config["ADQN_MAX_ADVANTAGE_LOSS_FRACTION"] == 0.3
+    assert config["ADQN_ADVANTAGE_WEIGHT_SCALE"] == 4.0
+    assert config["ADQN_ADVANTAGE_WEIGHT_SATURATION"] == 0.8
+    assert config["ADQN_GRAD_DIAGNOSTIC_EVERY"] == 7
+    assert config["ADQN_LOSS_BALANCE_EPSILON"] == 1e-6
 
 
 def test_save_checkpoint_and_try_resume_round_trip(tmp_path: Path) -> None:

@@ -14,7 +14,389 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-07-19
+
+- **Added the pre-implementation Policy Duel DQN (PDDQN) hybrid design.**
+  `Docs/Policy_Duel_DQN.md` specifies a compact raw-Dueling `(V, A)` network
+  that derives Q values, softmax policy logits, and `Vpi = sum(pi * Q)` with
+  no new learned heads. It separates fresh-rollout PPO policy/value updates
+  from replay-only Double-DQN Q updates, documents the sequential schedule,
+  PQN/Q-Prop differences, diagnostics, tests, controls, and stop conditions.
+  No code was changed. Files: `Docs/Policy_Duel_DQN.md`,
+  `Docs/ChangeLog.md`.
+
+- **Clarified VQN's neural computation cost relative to the existing Dueling
+  DQN implementation.** `Docs/VQN.md` now records that Dueling already
+  batches every legal action for both current and next replay states, so VQN
+  reuses those Q/advantage outputs and adds only grouped softmax and weighted
+  sum operations; its fresh rollout can add collection cost, not an extra GNN
+  action batch. Files: `Docs/VQN.md`, `Docs/ChangeLog.md`.
+
+- **Added the pre-implementation VQN design and experiment plan.**
+  `Docs/VQN.md` defines Value Q-Learning Network as an independent
+  Dueling-DQN-derived experiment: it removes PQN's replay `log pi` policy
+  loss and proposes a bounded auxiliary Bellman loss for a policy value
+  derived as `sum(pi * Q)`, rather than reusing Dueling's raw mean-Q value
+  head. The plan requires a fresh frozen softmax rollout for the first
+  on-policy value-loss experiment, preserves ordinary DQN replay for Q loss,
+  and specifies safeguards, tests, matched controls, and risks. No code was
+  changed. Files: `Docs/VQN.md`, `Docs/ChangeLog.md`.
+
+## 2026-07-18
+
+- **Increased ADQN's bounded TD-weight range and tuned its base coefficient.**
+  Added `ADQN_ADVANTAGE_WEIGHT_SCALE = 5.0` and changed the detached weight to
+  `scale * tanh(td_advantage / scale)`, preserving near-zero magnitude while
+  smoothly bounding each sample at `+-5`; changed the base auxiliary
+  coefficient from `0.1` to `0.25`. Updated saturation to mean 95% of the
+  configured bound, persisted/logged the scale, preserved scale `1.0` when
+  loading legacy checkpoints, expanded focused tests, and marked the old
+  settings in the `ADQN_050` analysis. Epsilon decay remains unchanged at
+  200 episodes to preserve the immediate comparison. Files:
+  `risk/learning/train_constants.py`, `risk/learning/adqn_agent.py`,
+  `risk/learning/training_logger.py`, `Temp/tests/test_adqn.py`,
+  `Temp/tests/test_training_logger.py`, `Docs/ADQN.md`,
+  `Docs/ADQN-vs-DuelingDQN.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`.
+
+- **Clarified why ADQN uses both `tanh` and the Bellman-relative loss cap.**
+  Documented that `tanh` bounds each replay sample's TD-based gradient weight,
+  while the detached effective coefficient limits aggregate minibatch scalar
+  activity and cannot prevent one unbounded raw TD advantage from dominating
+  within the batch. Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Restructured the ADQN-versus-Dueling analysis around answerable
+  questions.** Added an executive conclusion; separated comparability,
+  coefficient-zero equivalence, training/evaluation outcomes, scalar loss
+  activity, encoder-gradient magnitude/alignment, action-head measurement
+  limits, and stability signals; and split supported conclusions from claims
+  the first stochastic run pair cannot establish. Files:
+  `Docs/ADQN-vs-DuelingDQN.md`, `Docs/ChangeLog.md`.
+
+- **Corrected and expanded the `ADQN_050` versus `Dueling_DQN_040`
+  analysis.** Replaced the false claim that Dueling leads every matched
+  interval with the mixed result actually in the histories: Dueling leads
+  cumulative training wins through episode 500, while ADQN leads mean eval
+  score at the common checkpoints. Removed the incorrect inference that a
+  small `|A_centered|/|V|` ratio weakens greedy action selection (`V` cancels
+  from `argmax_a Q`). Added the controlled coefficient-zero equivalence result
+  (identical Q, DDQN target, loss, action, and post-update parameters), exact
+  scalar-loss/cap statistics, the more direct 1-2% auxiliary/Q encoder-
+  gradient ratio, action-head diagnostic limitation, saturation/clipping
+  results, and appropriately cautious single-run interpretation. Files:
+  `Docs/ADQN-vs-DuelingDQN.md`, `Docs/ChangeLog.md`.
+
+- **Identified the learner's randomized seat in live training output.** The
+  console status line now includes `learner p<seat>`, removing the need to
+  infer it from the omitted player in the opponent-territory breakdown. Added
+  focused formatter coverage and updated the trainer/logging documentation.
+  Files: `risk/learning/training_logger.py`,
+  `Temp/tests/test_training_logger.py`, `Docs/Trainer.md`,
+  `Docs/Training-Logging-Plan.md`, `Docs/ChangeLog.md`.
+
+## 2026-07-17
+
+- **Implemented ADQN as an independent sibling network and agent.** Added a
+  standalone `ADQN` raw `(V, A)` network and `ADQN_Agent(BaseAgent)` with
+  intentionally copied Dueling-style batching/replay/DDQN/epsilon plumbing;
+  neither class constructs or inherits a PQN class. The agent adds detached
+  tanh TD weights, the signed centered-advantage loss and adaptive Bellman-
+  relative cap, complete diagnostics, checkpoint/config persistence, and
+  trainer factory selection. Added focused
+  ADQN, trainer, and logger coverage and updated the implementation/testing/
+  logging docs. Files: `risk/learning/adqn.py`, `risk/learning/adqn_agent.py`,
+  `risk/learning/train_constants.py`, `risk/learning/trainer.py`,
+  `risk/learning/training_logger.py`, `Temp/tests/test_adqn.py`,
+  `Temp/tests/test_trainer.py`, `Temp/tests/test_training_logger.py`,
+  `Docs/ADQN.md`, `Docs/NetworkArchitectures.md`, `Docs/Testing.md`, `Docs/Trainer.md`,
+  `Docs/Training-Logging-Plan.md`, `Docs/ChangeLog.md`.
+
+- **Made ADQN's opening proposal self-contained and corrected its coefficient
+  rationale.** The motivation now defines raw and centered advantages, Q,
+  V-based TD advantage, detached tanh weight, per-sample/signed/absolute-mean
+  losses, adaptive coefficient, total loss, and positive/negative update
+  directions before the detailed specification. Also corrected `0.1` from a
+  claimed tuned/safe value to a guarded initial value whose scalar cap does
+  not guarantee a gradient-ratio bound. Files: `Docs/ADQN.md`,
+  `Docs/ChangeLog.md`.
+
+- **Corrected `Docs/ADQN.md` now that it's the normative implementation
+  spec, not a discussion record.** **Superseded by the independent-sibling
+  implementation decision above:** this entry records the earlier design
+  decision and is no longer the current implementation rule. Two fixes at
+  that time: (1) Section F item 1 told an
+  implementer to add a new `risk/learning/adqn.py` network file "starting
+  from Dueling DQN" — but Section A's raw `(V, A)` contract is not merely
+  similar to `PQN` (`risk/learning/pqn.py`), it's the exact same
+  architecture and `forward()` signature with zero differences, so a new
+  file would be a byte-for-byte duplicate. Changed the instruction to
+  import and construct `PQN` directly from `adqn_agent.py`; only the agent
+  file is new, matching the project's minimal-diff-per-sibling-agent
+  convention at the agent level (each of `Dueling_DQN_Agent`/`PQN_Agent`
+  already carries its own copied helpers) without applying it to a network
+  class that has no diff to make. (2) An earlier review round had
+  explicitly warned against reusing PQN's tuned `0.1` coefficient blindly,
+  since the two losses live on different scales — that warning quietly
+  disappeared when the doc's discussion history was condensed, and the
+  constants block just hardcodes `ADQN_ADVANTAGE_LOSS_COEF = 0.1` with no
+  stated justification. Added a note explaining why this is actually safe:
+  `ADQN_MAX_ADVANTAGE_LOSS_FRACTION` bounds the effective contribution
+  regardless of the base coefficient's exact value, so `0.1` being "wrong"
+  for ADQN's scale is a soft failure mode, not a silent one — and pointed
+  at `adqn_advantage_activity_to_q_loss_ratio` as the first-run signal for
+  whether `0.1` was actually the binding constraint. Files: `Docs/ADQN.md`.
+
+- **Made the ADQN document implementation-ready.** Removed the resolved
+  13-item review history, fixed concrete initial constants and diagnostic
+  cadence, and retained only five first-run monitored risks. Added exact
+  diagnostic formulas, cancellation-visible activity ratio, correlation and
+  zero-variance behavior, sparse gradient-diagnostic aggregation rules,
+  explicit metric names and implementation/test files, checkpointed settings,
+  and corresponding tests. Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Promoted all remaining ADQN pre-implementation diagnostics into the
+  normative plan.** Section F now requires V/centered-A decomposition metrics,
+  effective-coefficient mean/max, advantage-weight sign and saturation
+  fractions, and correlation with Bellman TD error; Section G now requires
+  finite/range, zero-variance, drift-visibility, and episode-aggregation tests.
+  Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Re-reviewed `Docs/ADQN.md` after its gradient-conflict-diagnostic
+  revision; added one review note, no code.** Confirmed item 10's
+  cancellation fix (§D/F/G) and the new encoder-gradient cosine-similarity
+  diagnostic are both correct — verified the diagnostic's design choice of
+  using the *scaled* `weighted_advantage_loss` (not raw `advantage_loss`) is
+  right, since `effective_advantage_coef` is detached and
+  `grad(weighted_advantage_loss) = effective_advantage_coef *
+  grad(advantage_loss)` exactly matches what the real optimizer step
+  applies. Flagged that item 7's own proposed diagnostic — logging `V`
+  mean/absolute mean and `A_centered_taken` mean/absolute mean/max, because
+  Q staying stable doesn't rule out V and A_centered drifting in opposite
+  directions underneath it — never made the same "prose to normative
+  section" trip that item 10's fix did: section F's logging list has no
+  V/A_centered-specific fields, and none of section G's 14 tests check for
+  this. Recommended adding `adqn_v_online_mean`/`_abs_mean` and
+  `adqn_a_centered_taken_mean`/`_abs_mean`/`_max` to section F item 8.
+  Smaller version of the same gap for items 8-9's logging asks; suggested
+  reusing `Docs/Trainer.md`'s existing `_max`-suffix aggregation convention
+  (already takes the max across an episode's updates) to get item 9's
+  "distribution, not a point value" ask for `adqn_effective_advantage_coef`
+  without new aggregation code. Files: `Docs/ADQN.md`.
+
+- **Added ADQN gradient-conflict diagnostics to the plan.** Specified separate
+  Bellman and weighted-advantage encoder-gradient norms plus their cosine
+  similarity, including interpretation, zero-norm handling, configurable
+  sampling frequency to control overhead, logging names, and tests ensuring
+  diagnostics do not alter the optimizer update. Files: `Docs/ADQN.md`,
+  `Docs/ChangeLog.md`.
+
+- **Moved ADQN's cancellation fix into the normative loss specification.**
+  Section D now defines per-sample signed losses, optimizes their signed mean,
+  and calculates `effective_advantage_coef` from detached
+  `mean(abs(per_sample_advantage_loss))`. Updated the worked example, logging
+  fields, tests, and review notes so equal-and-opposite samples cannot silently
+  bypass the proposed cap. Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Renamed ADQN's adaptive coefficient for clarity.** Replaced
+  `lambda_effective` with `effective_advantage_coef` throughout the design,
+  including the proposed W&B field
+  `adqn_effective_advantage_coef`; this is an ordinary scalar coefficient,
+  not a Python lambda function. Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Re-reviewed `Docs/ADQN.md` after its cancellation-bug fix (item 10); added
+  one review note, no code.** Numerically confirmed item 10's finding with a
+  sharper example: `per_sample_advantage_loss = [2000, -2000, 2000, -2000]`
+  gives a signed mean of exactly `0`, so the *old* formula's denominator
+  collapses to `eps` and `effective_advantage_coef` resolves to the full unmoderated
+  coefficient (`0.1`), while item 10's `mean(abs(...))` fix correctly
+  resolves it to `0.005` — a 20x difference in the actual gradient-scaling
+  factor applied, invisible in a loss-value log since `weighted_advantage_
+  loss` reports `0.0` either way. Flagged that this fix exists only as prose
+  in review section H — section D's formula block and worked example still
+  use the old, buggy `abs(advantage_loss)` denominator unchanged, so an
+  implementer following section D literally would reproduce the bug.
+  Recommended folding the fix into section D directly, adding
+  `adqn_advantage_loss_abs_mean` as its own logged field distinct from the
+  signed mean (section F item 8), and adding the canceling-minibatch case as
+  an explicit required test (section G) rather than leaving it as a prose
+  aside. Files: `Docs/ADQN.md`.
+
+- **Added two further ADQN review comments.** Flagged that using
+  `abs(mean(per_sample_advantage_loss))` in `effective_advantage_coef` allows large
+  positive/negative sample contributions to cancel and bypass the scalar
+  cap; recommended detached `mean(abs(per_sample_advantage_loss))` as the cap
+  reference while retaining the signed mean as the optimized objective. Also
+  documented why V remains necessary for the absolute Bellman-return level
+  and the TD-advantage baseline even though it cancels from greedy action
+  selection. Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Re-reviewed `Docs/ADQN.md` after its adaptive-loss-balancing revision;
+  added one review note, no code.** Numerically verified the doc's item 6
+  (centered-advantage gradient split sums to exactly zero; the uncentered
+  version doesn't, confirmed with a worked `w=0.7, N=5` check summing to
+  `-0.7`) and confirmed items 7-8's math is sound. Flagged a new concern
+  with the `effective_advantage_coef` adaptive cap added in section D: it scales
+  inversely with the *current batch's* `q_loss`, which (a) makes the cap
+  least restrictive early in training when `q_loss` is largest and value
+  estimates are least reliable — backwards from where caution is likely
+  wanted, (b) drives `effective_advantage_coef` to ~0 whenever a batch's `q_loss` is
+  already small, silently disabling the ranking-improvement signal exactly
+  when the value fit is good, and (c) makes `effective_advantage_coef` itself a
+  noisy, batch-fluctuating quantity — a new source of training variance.
+  Recommended logging `adqn_effective_advantage_coef`'s distribution (not just a
+  point value) and considering an EMA-smoothed `q_loss` reference if this
+  turns out to matter in practice. Files: `Docs/ADQN.md`.
+
+- **Added adaptive ADQN loss balancing to the plan.** The proposed
+  `effective_advantage_coef` now caps the signed weighted advantage-loss contribution
+  at a configurable fraction of detached Bellman loss, initially 25%, while
+  preserving a scaled nonzero gradient instead of directly clamping the loss.
+  Added the formula, worked example, logging fields, configuration settings,
+  limitations, and required tests. Files: `Docs/ADQN.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added a second mathematical review of the ADQN plan.** Confirmed that
+  the centered auxiliary loss produces the intended zero-sum ranking
+  gradient across legal actions. Flagged that `tanh` bounds only the detached
+  weight: the linear loss remains unbounded and may let `V` and centered `A`
+  drift in opposite directions while preserving Q. Added required stream
+  diagnostics and identified bounded Bellman error as a distinct future
+  comparison, not a silent replacement for the planned V-based TD advantage.
+  Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Reviewed `Docs/ADQN.md`; added review notes, no code.** Confirmed PQN's
+  `log pi(a|s)` weighting is a genuine gradient asymmetry (differentiating
+  gives `-td_advantage * (1 - pi(a))`, so confident-good actions get a
+  shrinking push while rare/surprising ones get near-full-strength pushback)
+  compounded by `td_advantage` itself being unbounded at this game's reward
+  scale — both fixed by ADQN's `tanh(td_advantage)` weight in one change.
+  Flagged for discussion: ADQN drops PQN's "one score is both Q and policy"
+  premise entirely (now Dueling DQN plus an auxiliary loss, not a policy
+  network); `tanh` will saturate to about +-1 for nearly every terminal-scale
+  transition given +-100 rewards, worth measuring once it runs; `A_centered`
+  has no natural ceiling the way a softmax probability does, so drift depends
+  entirely on `q_loss`'s indirect counter-pressure; no starting value is
+  proposed for `ADQN_ADVANTAGE_LOSS_COEF` and PQN's tuned `0.1` likely doesn't
+  transfer (different loss scale) — recommended measuring `adqn_advantage_loss`
+  vs. `adqn_q_loss` at coefficient 0 first. Noted that the planned coef-0
+  Dueling-equivalence test (§G.1) can reuse the same pattern already proven
+  for `PQN_e0`
+  (`test_pqn_e0_reproduces_dueling_dqn_given_identical_weights`). Files:
+  `Docs/ADQN.md`.
+
+- **Documented why ADQN replaces PQN's replay policy loss.** Added the
+  run-047 evidence and the positive/negative-advantage example showing how
+  `log pi` gives old low-probability negative-advantage actions unequal replay
+  impact. Clarified that ADQN removes this probability-based asymmetry with a
+  bounded signed `tanh(td_advantage)` weight, without claiming to remove all
+  off-policy replay bias. Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Simplified ADQN's bounded advantage weight.** Removed mean-absolute
+  division from the plan; ADQN now uses the direct detached expression
+  `tanh(td_advantage)`, preserving the sign while bounding the auxiliary
+  weight in `(-1, 1)` without batch-dependent scaling. Files: `Docs/ADQN.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added the ADQN design plan.** `ADQN` starts as a Dueling-DQN copy and
+  adds only a linear loss on the stored action's exact centered advantage,
+  weighted by a detached TD advantage. The plan uses direct `tanh` to retain
+  a bounded signed weight in `(-1, 1)`. It records the exact
+  `s`/`s'` calculations, loss, minimal implementation delta, diagnostics, and
+  required tests. Files: `Docs/ADQN.md`, `Docs/ChangeLog.md`.
+
+- **Verified `PQN_e0` is algorithmically equivalent to `Dueling_DQN_Agent`.**
+  Confirmed empirically rather than by inspection alone:
+  `Dueling_DQN`/`PQN`'s `state_dict()` keys and shapes match 1:1 (weights
+  copy straight across); with copied weights, `Q_dueling` vs. combined
+  `Q_pqn_e0` on a live state agree to `1.5e-7` and share the same `argmax`;
+  `act()` picked the identical action on 20/20 draws under a shared
+  epsilon-greedy RNG stream; one identical `train_step` (same transitions,
+  same sampled minibatch) produced the same loss (`0.0` relative diff) and
+  post-step weights within `1.3e-5` — the same order as the GNN forward-pass
+  float noise already documented in `Docs/Testing.md`, not an algorithmic
+  gap. `PQN_e0`'s always-computed `policy_loss` contributes exactly zero
+  since its coefficient is `0.0`. Added
+  `test_pqn_e0_reproduces_dueling_dqn_given_identical_weights` to
+  `Temp/tests/test_pqn.py` to pin this down permanently. Full suite green
+  (329 passed, 1 skipped). Files: `Temp/tests/test_pqn.py`.
+
+- **Added a first-class `PQN_e0` Bellman-only comparison variant.** The trainer
+  factory now builds epsilon-greedy PQN with a per-agent policy-loss
+  coefficient of zero; the agent uses that value in its total loss, label,
+  progress metrics, and checkpoint state, while W&B records the effective
+  value instead of the module default. Added factory/loss/checkpoint/logger
+  coverage and documented the comparison contract. Files:
+  `risk/learning/pqn_agent.py`, `risk/learning/trainer.py`,
+  `risk/learning/training_logger.py`, `Temp/tests/test_pqn.py`,
+  `Temp/tests/test_trainer.py`, `Temp/tests/test_training_logger.py`,
+  `Docs/PQN.md`, `Docs/Trainer.md`, `Docs/Training-Logging-Plan.md`,
+  `Docs/NetworkArchitectures.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`.
+
+- **Reviewed the implemented `PQN`/`PQN_e` action-selection modes; fixed one
+  stale docstring.** Checked `pqn_agent.py`'s `__init__`/`act`/
+  `on_episode_start`/`save_checkpoint`/`load_checkpoint` against `Docs/PQN.md`
+  §24.D's plan: constructor surface, greedy-branch logic (epsilon-random vs.
+  `argmax Q_online`, both training and eval), Dueling-identical decay,
+  checkpoint round-trip with legacy-checkpoint defaulting, and
+  `build_learner_agent("PQN"/"PQN_e", ctx)` wiring in `trainer.py` all match
+  the plan and behave correctly — full suite green (325 passed, 1 skipped)
+  plus a fresh `Trainer.train()` smoke run in `PQN_e` mode (epsilon decayed
+  0.9905 after 3 episodes, matching Dueling's formula; all `pqn_*` diagnostics
+  populated). Found one real defect: `progress_metrics()`'s docstring said
+  `epsilon` was omitted ("permanently inert, not worth charting") while the
+  method actually returns it — leftover from before the `PQN_e` mode existed.
+  Fixed the docstring in `pqn_agent.py` and the matching stale line in
+  `Docs/PQN.md` §24.E to state `progress_metrics()` reports `epsilon` in both
+  modes. No behavior change — `epsilon` was already being returned and
+  already covered by `test_pqn_agent_progress_metrics_reports_replay_state_
+  and_epsilon`. Files: `risk/learning/pqn_agent.py`, `Docs/PQN.md`.
+
+- **Removed an obsolete duplicate trainer source from `Docs/`.**
+  `Docs/trainer.py` was an unused, stale Dueling-DQN-040-era copy; the only
+  active trainer is `risk/learning/trainer.py`. Removing it prevents editing
+  or running the wrong file. Files: `Docs/trainer.py` (deleted),
+  `Docs/ChangeLog.md`.
+
+- **Implemented Dueling-comparable PQN_e behavior selection.** `PQN` retains
+  original sampled-softmax actions; `PQN_e` uses the same PQN network/losses
+  with Dueling DQN's exact epsilon decay, uniform-random exploration, and
+  greedy combined-Q action choice. The selected mode determines the instance
+  label/run/checkpoint path, persists in full checkpoints (with legacy PQN
+  checkpoints defaulting to the original mode), and is included in W&B config.
+  Added coverage for both modes, decay, checkpoint compatibility, trainer
+  factory selection, and logger config. Files: `risk/learning/pqn_agent.py`,
+  `risk/learning/trainer.py`, `risk/learning/training_logger.py`,
+  `Temp/tests/test_pqn.py`, `Temp/tests/test_trainer.py`,
+  `Temp/tests/test_training_logger.py`, `Docs/PQN.md`, `Docs/Trainer.md`,
+  `Docs/Training-Logging-Plan.md`, `Docs/NetworkArchitectures.md`,
+  `Docs/PPO.md`, `Docs/Testing.md`.
+
+- **Made the planned `epsilon_greedy_q` PQN mode concrete.** §24.D previously
+  said only that the mode/epsilon would be "added to `PQN_Agent`" without
+  specifying how; now specifies the actual proposed surface: a constructor
+  `action_selection: str = "policy_sample"` parameter, `epsilon` promoted from
+  a hardcoded inert `0.0` to a real constructor parameter consulted only in
+  `epsilon_greedy_q` mode, `on_episode_start` overridden unconditionally with
+  Dueling's exact decay formula (no mode branching in the decay itself),
+  checkpoint fields with backward-compatible defaults for older PQN
+  checkpoints, and `progress_metrics()` reporting `epsilon` unconditionally.
+  Cross-referenced from §24.E so the "no epsilon" implementation-status note
+  doesn't read as final. Still a plan — no code changed. Files: `Docs/PQN.md`.
+
+- **Planned an opt-in Dueling-comparable PQN behavior policy.** The next PQN
+  implementation step will preserve the sampled-softmax mode and add an
+  `epsilon_greedy_q` mode that uses Dueling DQN's exact epsilon schedule and
+  greedy `Q_online` action rule, isolating PQN's extra policy loss in a
+  comparison run. No code changed. Files: `Docs/PQN.md`.
+
 ## 2026-07-16
+
+- **Added a PQN policy-entropy diagnostic without changing its loss.** The
+  current-state `Categorical(logits=advantage)` now supplies both the existing
+  selected-action log-probability and a per-state entropy tensor. Its detached
+  replay-minibatch mean is logged as `pqn_policy_entropy`; the connected tensor
+  is retained for a future, separate entropy-regularization experiment. Files:
+  `risk/learning/pqn_agent.py`, `Temp/tests/test_pqn.py`, `Docs/PQN.md`,
+  `Docs/Testing.md`.
 
 - **Pinned PQN's detached TD-advantage contract.** `PQN_Agent` now centralizes
   the replay policy loss in `_policy_loss(...)`, and a focused test proves its

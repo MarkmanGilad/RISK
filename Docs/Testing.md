@@ -36,15 +36,16 @@ set it in the shell before running the suite).
 | `test_reward.py` | `RewardCalculator` — terminal semantics (win/loss/not-done) plus one case per phase shaping helper (`TRADE_IN`/`REINFORCE_PLACE`/`ATTACK`/`OCCUPY`/`FORTIFY`/`end_of_turn`) |
 | `test_evaluator.py` | `Evaluator` (`Docs/Eval.md`) — `evaluate(...)`'s returned metric keys/determinism and `epsilon`/`train_mode` restore, `maybe_save_best(...)`'s top-N retention and manifest sorting |
 | `test_training_logger.py` | `TrainingLogger` — config building, checkpoint path/cadence orchestration (`save_checkpoint`/`try_resume`), no-op behavior with W&B disabled. Agent-internals round-tripping stays in `test_agents.py` (below) |
-| `test_trainer.py` | `Trainer` (`Docs/Trainer.md`) — the `reached_max_steps` contract passed to `agent.learn(...)` (only the final learn call of a truncated episode gets `True`), short end-to-end smoke runs through `Trainer.train()` for `GNN_DQN_Agent`/`Dueling_DQN_Agent` with a monkeypatched small `MAX_STEPS_PER_EPISODE`, and the logged per-episode metric keys |
-| `test_pqn.py` | `PQN`/`PQN_Agent` (`Docs/PQN.md` §24) — `score_actions` returning raw `(V, A)`, `_combine_q`'s grouped-mean formula on one and two groups, policy-loss TD-weight detachment, `act()` sampling/argmaxing `softmax(A)`, `learn`/`can_train` threshold parity with Dueling, `reached_max_steps` inertness, `progress_metrics`/`last_update_metrics` (`pqn_*` keys, no `epsilon`), checkpoint round-trip |
+| `test_trainer.py` | `Trainer` (`Docs/Trainer.md`) — the `reached_max_steps` contract passed to `agent.learn(...)` (only the final learn call of a truncated episode gets `True`), `PQN`/`PQN_e`/`PQN_e0` factory selection, short end-to-end smoke runs through `Trainer.train()` for `GNN_DQN_Agent`/`Dueling_DQN_Agent` with a monkeypatched small `MAX_STEPS_PER_EPISODE`, and the logged per-episode metric keys |
+| `test_pqn.py` | `PQN`/`PQN_Agent` (`Docs/PQN.md` §24) — raw `(V, A)` scoring, grouped Q calculation, policy-loss TD-weight detachment and graph-connected entropy, sampled-policy and epsilon-greedy-Q action selection, the `PQN_e0` Bellman-only loss control, Dueling-identical epsilon decay, replay/learn threshold behavior, `pqn_*`/epsilon metrics, legacy and current checkpoint loading, and checkpoint round-trip |
+| `test_adqn.py` | standalone `ADQN`/`ADQN_Agent` (`Docs/ADQN.md`) — sibling separation from PQN, raw `(V, A)` scoring, centered advantages, scaled/bounded/detached TD weights, signed auxiliary-loss direction, adaptive loss cap and cancellation behavior, DDQN/Dueling parity, epsilon behavior, gradient diagnostics, metric cadence, and checkpoint round-trip |
 
 `risk/learning/` (the RL layer — `GraphAdapter`, `ActionGraphBuilder`,
 `Encoder`, `Heads`, `GNN_DQN`, `ReplayBuffer`, `ActionEncoder`) has limited
 checked-in tests so far, with `RewardCalculator` (`test_reward.py`),
 `TrainingLogger` (`test_training_logger.py`), `Evaluator`
-(`test_evaluator.py`), `Trainer` (`test_trainer.py`), and `PQN_Agent`
-(`test_pqn.py`) the exceptions — each fully covered per their respective
+(`test_evaluator.py`), `Trainer` (`test_trainer.py`), `PQN_Agent`
+(`test_pqn.py`), and `ADQN_Agent` (`test_adqn.py`) the exceptions — each fully covered per their respective
 design docs. `test_agents.py` also
 covers `GNN_DQN_Agent.save_checkpoint`/`load_checkpoint` (full training-state
 round trip) alongside its existing `save_params`/`load_params` (policy-only)

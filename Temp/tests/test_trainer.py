@@ -17,6 +17,7 @@ this file locks down:
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from risk.agents.base_agent import BaseAgent
 from risk.game.environment import Environment
@@ -81,6 +82,44 @@ def _trainer(agent: BaseAgent, tmp_path: Path, run_id: int = 1) -> Trainer:
     )
     t._rng = _FixedRNG()
     return t
+
+
+def test_build_learner_agent_selects_the_pqn_variants(monkeypatch) -> None:
+    built: list[dict] = []
+
+    class _PQN:
+        def __init__(self, **kwargs) -> None:
+            built.append(kwargs)
+
+    monkeypatch.setattr(trainer_module, "PQN_Agent", _PQN)
+    ctx = SimpleNamespace(env=object())
+
+    trainer_module.build_learner_agent("PQN", ctx)
+    trainer_module.build_learner_agent("PQN_e", ctx)
+    trainer_module.build_learner_agent("PQN_e0", ctx)
+
+    assert built[0]["train_mode"] is True
+    assert "action_selection" not in built[0]
+    assert built[1]["action_selection"] == "epsilon_greedy_q"
+    assert "policy_loss_coef" not in built[1]
+    assert built[2]["action_selection"] == "epsilon_greedy_q"
+    assert built[2]["policy_loss_coef"] == 0.0
+
+
+def test_build_learner_agent_selects_adqn(monkeypatch) -> None:
+    built: list[dict] = []
+
+    class _ADQN:
+        def __init__(self, **kwargs) -> None:
+            built.append(kwargs)
+
+    monkeypatch.setattr(trainer_module, "ADQN_Agent", _ADQN)
+    ctx = SimpleNamespace(env=object())
+
+    agent = trainer_module.build_learner_agent("ADQN", ctx)
+
+    assert isinstance(agent, _ADQN)
+    assert built == [{"player_id": 0, "env": ctx.env, "train_mode": True}]
 
 
 def test_trainer_marks_only_the_final_learn_call_as_reached_max_steps(tmp_path: Path, monkeypatch) -> None:
