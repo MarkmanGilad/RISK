@@ -14,6 +14,17 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-07-24
+
+- **Added per-episode training-roster and winner logging for W&B.** `Trainer`
+  now records a readable seat roster, winner kind/seat, player count, each
+  opponent-kind count, each kind's overall winner indicator, and its
+  conditional winner indicator when present. This makes it possible to see
+  which heuristic wins and whether learner performance changes with roster
+  strength. Added focused trainer assertions and documented the fields.
+  Files: `risk/learning/trainer.py`, `Temp/tests/test_trainer.py`,
+  `Docs/Trainer.md`, `Docs/Training-Logging-Plan.md`, `Docs/ChangeLog.md`.
+
 ## 2026-07-19
 
 - **Added the pre-implementation Policy Duel DQN (PDDQN) hybrid design.**

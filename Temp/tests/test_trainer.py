@@ -232,6 +232,13 @@ def test_trainer_logs_expected_metric_keys(tmp_path: Path) -> None:
     }
     assert expected_keys.issubset(logged[0].keys())
     assert logged[0]["cumulative_learner_turns"] == logged[0]["agent_turns_survived"]
+    assert logged[0]["player_count"] == trainer_module.MIN_PLAYERS
+    assert logged[0]["opponent_count_random"] == trainer_module.MIN_PLAYERS - 1
+    assert logged[0]["opponent_count_killbot"] == 0
+    assert logged[0]["roster"].startswith("p0=learner:Recording, p1=random")
+    assert logged[0]["winner_kind"] in {"learner", "random", "none"}
+    assert "opponent_random_won_when_present" in logged[0]
+    assert "opponent_killbot_won_when_present" not in logged[0]
 
 
 def test_update_metrics_aggregate_all_updates_and_keep_maxima() -> None:

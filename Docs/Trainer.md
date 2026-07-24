@@ -139,6 +139,14 @@ At the end of each episode, the trainer logs one metrics row through
   optimizer-step count
 - `reward_component_*` totals from `RewardCalculator.last_components` and
   `last_end_of_turn_components`
+- `player_count`, `roster`, `winner_seat`, and `winner_kind` — episode-level
+  roster/result diagnostics. `roster` is readable text such as
+  `p0=raider, p1=learner:DQN, p2=killbot`; the other fields can be filtered
+  or grouped in W&B.
+- `opponent_count_<kind>` and `winner_is_<kind>` for every configured
+  training-opponent kind. `opponent_<kind>_won_when_present` is emitted only
+  for episodes containing that kind, so its W&B mean is that heuristic's win
+  share conditional on appearing in the roster.
 
 An agent may optionally provide `last_update_metrics` after a non-empty
 `learn()` result and a `progress_metrics()` mapping. The trainer collects

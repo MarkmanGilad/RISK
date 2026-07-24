@@ -180,7 +180,7 @@ class Trainer:
             self.episode += 1
             self.agent.on_episode_start(self.episode)
 
-            ctx, seat, _ = self._build_episode_context()
+            ctx, seat, n_players, opponent_kinds = self._build_episode_context()
             env, agents = ctx.env, ctx.agents
             step_count = 0
             agent_turns = 0
@@ -279,6 +279,12 @@ class Trainer:
                 "samples_processed_in_episode": samples_processed - samples_processed_before,
                 "cumulative_optimizer_steps": optimizer_steps,
                 "cumulative_samples_processed": samples_processed,
+                **self._opponent_metrics(
+                    opponent_kinds=opponent_kinds,
+                    winner=winner,
+                    learner_seat=seat,
+                    n_players=n_players,
+                ),
                 **{
                     f"reward_component_{name}": total
                     for name, total in reward_components.items()
@@ -315,16 +321,19 @@ class Trainer:
         seat = self._rng.randrange(n_players)
         settings = SetupStage.default_settings(n=n_players, seed=None)
         ctx = GameFactory.build(settings)
-        self._assign_random_opponents(ctx, learner_seat=seat)
+        opponent_kinds = self._assign_random_opponents(ctx, learner_seat=seat)
         self.agent.attach(seat, ctx.env)
         ctx.agents[seat] = self.agent
-        return ctx, seat, n_players
+        return ctx, seat, n_players, opponent_kinds
 
-    def _assign_random_opponents(self, ctx, *, learner_seat: int) -> None:
+    def _assign_random_opponents(self, ctx, *, learner_seat: int) -> dict[int, str]:
+        """Assign opponents and return their stable per-seat kind labels."""
+        opponent_kinds: dict[int, str] = {}
         for player_id in range(len(ctx.agents)):
             if player_id == learner_seat:
                 continue
             kind = self._rng.choice(TRAIN_OPPONENT_AGENT_KINDS)
+            opponent_kinds[player_id] = kind
             seed = self._rng.randrange(2**32)
             if kind == "random":
                 ctx.agents[player_id] = RandomAgent(player_id=player_id, env=ctx.env, seed=seed)
@@ -338,6 +347,37 @@ class Trainer:
                 ctx.agents[player_id] = KillbotAgent(player_id=player_id, env=ctx.env, seed=seed)
             else:
                 raise ValueError(f"Unknown training opponent kind {kind!r}")
+        return opponent_kinds
+
+    def _opponent_metrics(
+        self,
+        *,
+        opponent_kinds: dict[int, str],
+        winner: int | None,
+        learner_seat: int,
+        n_players: int,
+    ) -> dict[str, int | str]:
+        """Build roster and winner fields for per-episode W&B diagnostics."""
+        winner_kind = "learner" if winner == learner_seat else opponent_kinds.get(winner, "none")
+        roster = {
+            player_id: (
+                f"learner:{self.agent.label}" if player_id == learner_seat else opponent_kinds[player_id]
+            )
+            for player_id in range(n_players)
+        }
+        metrics: dict[str, int | str] = {
+            "player_count": n_players,
+            "winner_kind": winner_kind,
+            "winner_seat": -1 if winner is None else winner,
+            "roster": ", ".join(f"p{player_id}={kind}" for player_id, kind in roster.items()),
+        }
+        for kind in TRAIN_OPPONENT_AGENT_KINDS:
+            count = sum(assigned_kind == kind for assigned_kind in opponent_kinds.values())
+            metrics[f"opponent_count_{kind}"] = count
+            metrics[f"winner_is_{kind}"] = int(winner_kind == kind)
+            if count:
+                metrics[f"opponent_{kind}_won_when_present"] = int(winner_kind == kind)
+        return metrics
 
     def _print_progress_line(self, *, n_episodes: int, step_count: int, agent_turns: int, seat: int, current_state, topology, ) -> None:
         status_line = self.logger.format_status_line(topology=topology, episode=self.episode, n_episodes=n_episodes,

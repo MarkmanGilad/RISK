@@ -233,6 +233,18 @@ metric below earns its place as a distinct, non-redundant signal:
   directly instead of only being inferred from `reward_per_agent_turn`/
   `territories_conquered` moving opposite to `win`.
 
+Roster/winner diagnostics are also logged once per episode:
+
+- `roster`, `winner_kind`, `winner_seat`, and `player_count` record who
+  appeared and who won. `roster` is readable text for inspecting a run;
+  `winner_kind` is categorical and `winner_seat` remains a compact numeric
+  diagnostic.
+- `opponent_count_<kind>`, `winner_is_<kind>`, and
+  `opponent_<kind>_won_when_present` cover every kind in
+  `TRAIN_OPPONENT_AGENT_KINDS`. The final field is omitted when that kind did
+  not appear, so its W&B mean is the heuristic's conditional win share when
+  present, rather than being diluted by unrelated episodes.
+
 Additional compute and agent diagnostics are logged alongside that primary
 set:
 
