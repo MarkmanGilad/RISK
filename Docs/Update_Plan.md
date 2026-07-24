@@ -6,11 +6,11 @@
 > `codex/history-aware-injection`. The fresh-run and comparison procedure
 > remains the next step; do not resume an old checkpoint.
 
-This is the single planning document for the next large DQN update. **Approved
-to implement** as one combined change set (2026-07-24) — nothing here is
-coded yet, but the design below is no longer provisional. `Docs/Reward.md`
-documents current reward behavior; `Docs/ActionGraphBuilder.md` documents
-current action injection.
+This is the single planning document for the next large DQN update. The code
+below is implemented on `codex/history-aware-injection` (see banner above);
+only the fresh run and comparison remain. `Docs/Reward.md` documents current
+reward behavior; `Docs/ActionGraphBuilder.md` documents current action
+injection.
 
 ## One combined experiment
 
@@ -184,21 +184,20 @@ more important, run `Dueling_DQN_100` directly and compare cautiously with
 both Dueling 040 and DQN 060; that measures whether the combined update is
 promising, not the isolated cause of any difference.
 
-1. Finish DQN 060. If a clean Dueling causal comparison is required, also run
-   a fresh Dueling control with the current epsilon schedule; otherwise use
-   Dueling 040 and DQN 060 as cautious, non-matched reference curves.
-2. Create branch `codex/history-aware-injection` from the current baseline before
-   any implementation work. Keep the current branch unchanged so the
-   control's code remains immediately available if this combined update
-   regresses.
-3. Implement all reward and injection changes above in one change set and
-   commit them on `codex/history-aware-injection` before starting training. A
-   branch does not protect uncommitted work.
-4. Change the training launch path to construct `Dueling_DQN_Agent` (or select
-   the equivalent Dueling learner-factory option). Confirm the logger/run name
-   is `Dueling_DQN_100`; do not accidentally launch the plain-DQN default in
-   `trainer.py`.
-5. Run the focused tests, then the full test suite.
+1. **Still pending.** Finish DQN 060, or run a fresh Dueling control with the
+   current epsilon schedule for a clean causal comparison. As of this check,
+   `Checkpoints/DQN_060` and `Checkpoints/Dueling_DQN_040` are both only at
+   episode 800 (of a much larger configured budget) and no
+   `Dueling_DQN_100`/fresh-control checkpoints exist yet — choose one of the
+   two comparison paths below before starting the run in step 6.
+2. **Done.** Branch `codex/history-aware-injection` exists off the baseline.
+3. **Done.** All reward and injection changes are implemented and committed
+   on `codex/history-aware-injection`.
+4. **Done.** `risk/learning/trainer.py`'s `main()` already builds
+   `Dueling_DQN_Agent` (`build_learner_agent("Dueling_DQN", ctx)`) with
+   `RUN_ID = 100`; `Trainer.run_name` (`f"{agent.label}_{run_id:03d}"`)
+   resolves to `Dueling_DQN_100` as required.
+5. **Done.** Focused tests and the full suite pass (350 passed, 1 skipped).
 6. Start a **fresh** combined run at `Dueling_DQN_100` with a new checkpoint
    directory, randomly initialized model, and empty replay buffer. Use
    `resume=False`. Do not load the control checkpoint or any other old
@@ -228,10 +227,13 @@ promising, not the isolated cause of any difference.
    for each heuristic opponent, so a harder random roster is not mistaken for
    model regression.
 
-11. After implementation, update `Reward.md`, `GraphAdapter.md`,
-    `ActionGraphBuilder.md`, `DuelingDQN.md`, `NetworkArchitectures.md`, and
-    `Trainer.md` to
-    describe the new current behavior, then add the usual `ChangeLog.md` entry.
+11. **Partially done.** `Reward.md`, `GraphAdapter.md`, `ActionGraphBuilder.md`,
+    `DuelingDQN.md`, and `Testing.md` (new `test_graph_representation.py` row)
+    are updated, with the `ChangeLog.md` entry added. Still outstanding:
+    `NetworkArchitectures.md`'s worked example (`Data(x=[42, 13], ...,
+    u=[1, 34])`) predates the two new node columns and one new global column
+    and is now wrong — update it to the new widths. Check `Trainer.md` too;
+    it wasn't touched by this change set.
 
 Success means losses retain much less positive reward than the current 44% of
 average winning return while win rate does not fall. If results regress, use

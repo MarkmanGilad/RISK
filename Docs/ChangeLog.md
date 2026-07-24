@@ -16,6 +16,17 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-07-24
 
+- **Reconciled `Update_Plan.md` with the actual `codex/history-aware-injection`
+  implementation.** Verified against the real diff and a full test run (350
+  passed, 1 skipped): steps 2-5 of "Combined implementation and run" are done
+  (branch, code, `Dueling_DQN_100` launcher wiring, tests), step 1 (a matched
+  control run) is still pending — `DQN_060`/`Dueling_DQN_040` are both only at
+  episode 800 — and step 11's doc checklist was wrong: `Testing.md` was
+  updated but unlisted, while `NetworkArchitectures.md` (stale
+  `Data(x=[42, 13], ..., u=[1, 34])` example) and `Trainer.md` were listed but
+  not actually touched. Removed the stale "nothing here is coded yet" intro
+  sentence. Files: `Docs/Update_Plan.md`.
+
 - **Implemented the history-aware reward and action-injection update on
   `codex/history-aware-injection`.** `State` now serializes/copies per-turn
   unfinished attack targets; `Environment` maintains and resets them;
