@@ -113,7 +113,7 @@ tests — building a real game rollout, exercising the module under test
 against it, and asserting specific claims (shapes, value cross-checks
 against the source `State`/`Action` objects, "this row's stage matches
 `done`," etc.). This is deliberate while these modules' shapes are still
-changing every session (per `Docs/RL-Prep-Changes.md`'s history) — a
+changing every session (per `Docs/ChangeLog.md`) — a
 checked-in test for an API that gets redesigned a few messages later is
 wasted upkeep. Once a module's shape stabilizes (the way `Environment`'s
 has), promote its verification scripts into real `Temp/tests/` files

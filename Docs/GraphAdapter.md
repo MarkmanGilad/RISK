@@ -62,7 +62,7 @@ n_players`, i.e. `(p - perspective) % n_players` for player `p`. Turn order
 is preserved, only the starting point shifts. Default `0` is a no-op
 (`p % n_players == p` for `p` in range), so every existing absolute-id call
 site is unaffected. This exists for the learning agent
-(`Docs/RL-Prep-Changes.md`'s trainer), which is assigned a different
+(the trainer), which is assigned a different
 physical seat every self-play episode but should always learn from one
 consistent "slot 0 is me" frame rather than the net having to re-derive
 "which absolute id am I this game" from `u`'s current-player one-hot.
@@ -149,7 +149,7 @@ wiped out this turn").
   and giving every base graph a zero-filled `edge_attr` up front means
   `ActionGraphBuilder` clones and overwrites instead of building one from
   scratch, and `Encoder`/`GNN_DQN` never need a "missing `edge_attr`"
-  fallback (`Docs/RL-Prep-Changes.md`).
+  fallback (`Docs/ChangeLog.md`).
 
 ---
 

@@ -5,7 +5,7 @@ all agree on the current step without a circular import. The integer
 values are stable so a `State` can be serialized to JSON and replayed —
 this set of values has changed twice now (first when `REINFORCE` split
 into `TRADE_IN` + `REINFORCE_PLACE`, now to fold in what used to be a
-separate `ActionStage` enum — see `Docs/RL-Prep-Changes.md`), both one-time
+separate `ActionStage` enum), both one-time
 breaks with no persisted save files affected.
 
 `Phase` doubles as the DQN action-representation "stage" now — `Action.phase`

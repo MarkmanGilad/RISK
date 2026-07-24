@@ -160,8 +160,8 @@ It merges the result generically, without checking an agent type. PPO uses
 this for KL, loss/return/value diagnostics, entropy/action-set statistics,
 gradient norms, rollout fill, and rollout-update count. `GNN_DQN_Agent`/
 `Dueling_DQN_Agent` supply the DQN-family equivalent: `progress_metrics()`
-reports `epsilon` (otherwise invisible in the logged metrics, `Docs/
-Training-Logging-Plan.md`), replay buffer size, and steps since the last
+reports `epsilon` (otherwise invisible in the logged metrics), replay buffer
+size, and steps since the last
 target-network sync; `train_step`'s `last_update_metrics` reports TD-error
 mean/std/max, Q-value and target-Q mean/std, and the pre-clip gradient norm
 (`torch.nn.utils.clip_grad_norm_`'s return value, previously computed and
@@ -272,9 +272,7 @@ evaluation rule.
 
 ## Related docs
 
-- `Docs/Training-Logging-Plan.md` covers `TrainingLogger`, W&B config, logged
-  metrics, and checkpoint cadence.
 - `Docs/Eval.md` covers evaluator behavior and best-policy checkpoints.
 - `Docs/Reward.md` covers reward calculation and reward-component logging.
 - `Docs/GraphAdapter.md` covers perspective-relative encoding.
-- `Docs/RL-Prep-Changes.md` is the historical implementation log.
+- `Docs/ChangeLog.md` is the historical implementation log.

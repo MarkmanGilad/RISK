@@ -643,3 +643,69 @@ risks, not unresolved design comments:
    TD advantage from Section B. A bounded Bellman-error weight would define a
    different algorithm and must be tested as a separate named variant rather
    than substituted silently.
+
+## Appendix: ADQN_050 vs. Dueling_DQN_040 early-run analysis
+
+> **Historical configuration.** This analysis is for `ADQN_050`, which used
+> `ADQN_ADVANTAGE_LOSS_COEF = 0.1` and unscaled `tanh(td_advantage)`
+> (weight scale `1.0`). It does not evaluate the current coefficient `0.25`
+> and weight scale `5.0`.
+
+This is an interpretation of one stochastic run pair, not a change to the
+algorithm above. At the snapshot, ADQN had 549 episodes and Dueling had 951;
+performance comparisons use Dueling's matching early-episode range. The runs
+had different initial weights, seats, rosters, game trajectories, replay
+samples, and code snapshots. Their six-game evaluations are too small for a
+causal performance conclusion.
+
+### Conclusions
+
+- With advantage coefficient zero, ADQN exactly matches Dueling DQN in a
+  controlled one-update comparison: Q values, greedy action, DDQN target,
+  Bellman loss, and final parameters all matched.
+- The coefficient-`0.1` auxiliary loss was active, not capped away: its mean
+  activity was 8.4% of Q-loss magnitude and the effective coefficient was
+  almost always `0.1`.
+- Its measured shared-encoder influence was small: auxiliary/Q gradient-norm
+  ratio was 2.15% mean, 1.40% median, and 1.31% over the latest 100 episodes.
+- Performance was inconclusive. Dueling led cumulative training wins; ADQN
+  had higher mean evaluation score, while Dueling had slightly higher mean
+  evaluation win rate.
+
+### Performance snapshot
+
+```text
+episodes       ADQN_050    Dueling_DQN_040
+  1-100          0.0%           1.0%
+101-200          2.0%           8.0%
+201-300         15.0%          27.0%
+301-400         30.0%          28.0%
+401-500         27.0%          40.0%
+
+episodes 1-500  14.8%          20.8%
+```
+
+At ten common evaluation checkpoints through episode 500, mean score was
+`149.83` for ADQN and `139.17` for Dueling; mean win rate was `15.0%` and
+`18.3%`, respectively. Episode-500 scores were essentially tied (`240.21`
+versus `243.05`), while win rate was two wins versus four.
+
+### Stability snapshot
+
+- Advantage-weight saturation: 49.8% overall, 56.3% over the latest 100.
+- Combined gradient clipping: 97.4% overall, 100% over the latest 100.
+- Encoder-gradient cosine: mean `+0.050`, with 39.9% of diagnostic rows
+  negative. The objectives were mostly close to orthogonal, not reliably
+  cooperative.
+- The encoder diagnostic does not measure the advantage heads, where the
+  direct auxiliary effect may be larger.
+
+The evidence supports continued monitoring of centered-advantage maxima,
+weight saturation, clipping, and separate encoder/head gradients. It does not
+support saying that ADQN is better or worse than Dueling from this run pair.
+
+### Run references
+
+- ADQN_050: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/intfs3ew`
+- Dueling_DQN_040: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/gxlxeems`
+- Local checkpoints: `Checkpoints/ADQN_050` and `Checkpoints/Dueling_DQN_040`

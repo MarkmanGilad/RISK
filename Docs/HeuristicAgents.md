@@ -499,6 +499,6 @@ Module-level functions used across the hierarchy:
 - `_normalize` — clamps/rescales a value into `[0, 1]` given `(lo, hi)`.
 
 ## Related docs
-See `Docs/RL-Prep-Changes.md` for the history of how dice-cap constants
+See `Docs/ChangeLog.md` for the history of how dice-cap constants
 and roll-outcome tables were centralized into `risk/constants.py` and
 imported by this module.

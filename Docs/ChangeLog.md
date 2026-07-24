@@ -16,6 +16,184 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-07-24
 
+- **Added the Dueling launch and documentation requirements to the update
+  plan.** `Docs/Update_Plan.md` now requires explicitly selecting
+  `Dueling_DQN_Agent` and verifying the `Dueling_DQN_100` run name, preventing
+  the plain-DQN `trainer.py` default from being launched by mistake. It also
+  adds `Docs/DuelingDQN.md` to the required current-document updates. Files:
+  `Docs/Update_Plan.md`, `Docs/ChangeLog.md`.
+
+- **Fixed singular "the chosen control" wording after step 1's fork.**
+  `Docs/Update_Plan.md` steps 7-8 now name both branches of step 1's choice
+  (a fresh matched Dueling control, or both `Dueling_040` and `DQN_060` as
+  cautious references) instead of assuming a single control. Files:
+  `Docs/Update_Plan.md`.
+
+- **Made Dueling DQN the recommended base for the combined update.**
+  `Docs/Update_Plan.md` now explains why preserving real armies and injecting
+  `proposed_army_delta` is particularly suited to Dueling's separate
+  `V(s)`/`A(s, a)` representation, recommends `Dueling_DQN_100`, and records
+  the unmatched-epsilon caveat when comparing against Dueling 040. Files:
+  `Docs/Update_Plan.md`, `Docs/ChangeLog.md`.
+
+- **Clarified the implementation details and comparison controls for the
+  combined update.** `Docs/Update_Plan.md` now specifies the final node/global
+  layout and named feature offsets, separate unfinished-target W&B component,
+  `codex/history-aware-injection` branch, DQN_060/DQN_100 as the recommended
+  matched pair, evaluation invariants, roster-difficulty diagnostics, and
+  current-document updates after implementation. Files:
+  `Docs/Update_Plan.md`, `Docs/ChangeLog.md`.
+
+- **Made the combined run's base agent (DQN vs. Dueling DQN) an open choice
+  with a matched control.** `Docs/Update_Plan.md` no longer hardcodes `DQN_060`
+  as the control: it now requires whichever base agent is chosen (plain DQN or
+  Dueling DQN) to use the matching control (`DQN_060` or `Dueling_DQN_040`)
+  throughout, and the fresh run ID prefix (`DQN_100`/`Dueling_DQN_100`) to
+  match. Avoids confounding the reward/injection experiment with an
+  unrelated architecture change. Files: `Docs/Update_Plan.md`.
+
+- **Named the combined-update branch and run ID.** `Docs/Update_Plan.md` now
+  specifies branch `history-aware-injection` and run `DQN_100` (combined-update
+  runs use IDs 100 and up), replacing the placeholder branch name and generic
+  "new run ID" wording. Files: `Docs/Update_Plan.md`.
+
+- **Added branch protection to the combined-update run plan.**
+  `Docs/Update_Plan.md` now requires creating `history-aware-injection` from
+  the baseline and committing the complete implementation there before
+  training, so the DQN 060 code stays easy to restore if the experiment
+  regresses. Files: `Docs/Update_Plan.md`, `Docs/ChangeLog.md`.
+
+- **Made the planned update intentionally breaking.**
+  `Docs/Update_Plan.md` now requires a fresh model, replay buffer, run ID, and
+  checkpoint directory with `resume=False`. It explicitly rules out loading
+  old checkpoints, adapting old replay/state data, or maintaining old graph
+  input compatibility. Files: `Docs/Update_Plan.md`, `Docs/ChangeLog.md`.
+
+- **Approved `Update_Plan.md` for implementation as one combined change
+  set.** No code changed yet, but the plan is no longer provisional: the
+  territory-reward, unfinished-target/state-tracking, and action-injection
+  pieces all proceed together as originally scoped, including the
+  action-injection piece despite no dedicated evidence of the disentanglement
+  failure mode it targets. Files: `Docs/Update_Plan.md`.
+
+- **Flagged that `Update_Plan.md`'s action-injection change reopens a prior
+  design decision without citing new evidence.** `Docs/ActionGraphBuilder.md`
+  already recorded choosing the direct army-column write over a parallel
+  `proposed_delta` column, deferring the latter until training shows the
+  network can't disentangle proposed from actual army counts. `Update_Plan.md`
+  now cross-links that note so the plan isn't read as a fresh idea. Files:
+  `Docs/Update_Plan.md`.
+
+- **Merged the ADQN first-run comparison into the ADQN reference.**
+  `Docs/ADQN.md` now ends with a clearly marked historical appendix for
+  ADQN_050 versus Dueling_DQN_040, preserving the old-settings warning,
+  conclusions, performance/stability evidence, and run links. Removed the
+  redundant standalone `Docs/ADQN-vs-DuelingDQN.md`. Files: `Docs/ADQN.md`,
+  `Docs/ADQN-vs-DuelingDQN.md`, `Docs/ChangeLog.md`.
+
+- **Removed three obsolete planning/history summaries.**
+  `Docs/Training-Logging-Plan.md` duplicated the implemented trainer/logging
+  reference, `Docs/RL-Prep-Changes.md` duplicated historical change records,
+  and `Docs/summarization.md` duplicated the graph/network reference docs.
+  Their current material is covered by `Docs/Trainer.md`, `Docs/Eval.md`,
+  `Docs/ChangeLog.md`, `Docs/GraphAdapter.md`, `Docs/ActionGraphBuilder.md`,
+  and `Docs/NetworkArchitectures.md`. Updated current documentation links.
+  Files: `Docs/Training-Logging-Plan.md`, `Docs/RL-Prep-Changes.md`,
+  `Docs/summarization.md`, `Docs/Trainer.md`, `Docs/Eval.md`,
+  `Docs/GraphAdapter.md`, `Docs/HeuristicAgents.md`, `Docs/Testing.md`,
+  `risk/game/phase.py`, `risk/learning/trainer.py`,
+  `risk/learning/training_logger.py`, `risk/learning/gnn_dqn_agent.py`,
+  `risk/learning/dueling_dqn_agent.py`, `risk/learning/graph_adapter.py`,
+  `risk/learning/replay_buffer.py`, `Temp/tests/test_self_play.py`,
+  `Docs/ChangeLog.md`.
+
+- **Created one general plan for the next combined update.** New
+  `Docs/Update_Plan.md` combines the planned reward update and action-injection
+  representation update under separate sections, with one code-change and
+  training run plan. It replaces `Docs/Reward_Update_Plan.md`; `Docs/Reward.md`
+  now points to the general plan. Files: `Docs/Update_Plan.md`,
+  `Docs/Reward_Update_Plan.md`, `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Changed the reward update plan to one combined experiment.**
+  `Docs/Reward_Update_Plan.md` now treats territory outcome balance and the
+  Markov-safe unfinished-target penalty as one coordinated code change and
+  one matched training run, explicitly recording that it sacrifices isolated
+  attribution to avoid multiple multi-day experiments. Files:
+  `Docs/Reward_Update_Plan.md`, `Docs/ChangeLog.md`.
+
+- **Consolidated every proposed reward change into one update plan.** New
+  `Docs/Reward_Update_Plan.md` is now the sole plan for both the reward-only
+  territory experiment and the Markov-safe unfinished-target/state-observation
+  experiment, including code work, tests, and run order. `Docs/Reward.md`
+  now only points to this plan; the superseded
+  `Docs/Attack_History_Observation.md` was removed. Files:
+  `Docs/Reward_Update_Plan.md`, `Docs/Reward.md`,
+  `Docs/Attack_History_Observation.md`, `Docs/ChangeLog.md`.
+
+- **Separated the attack-history model change from reward tuning.** New
+  `Docs/Attack_History_Observation.md` contains the Markov-safe
+  unfinished-target design: state history, graph features, network dimensions,
+  reward rule, tests, and its own matched experiment. `Docs/Reward.md` now
+  links to it and keeps the next territory experiment reward-only. Files:
+  `Docs/Attack_History_Observation.md`, `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Corrected the unfinished-target reward plan for the Markov requirement.**
+  `Docs/Reward.md` now requires a per-territory unfinished-target graph
+  feature and a global `conquered_this_turn` graph feature alongside the
+  history-based stop reward. It explains that the reward must not be added
+  without those observable inputs, and adds the corresponding adapter,
+  network-dimension, and test work. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Made the next reward experiment implementation-ready.** `Docs/Reward.md`
+  now states the three proposed reward changes up front, then gives an exact
+  file-by-file code plan for constants, per-turn state, environment updates,
+  stop-reward decision table, W&B component, tests, and the matched training
+  run. No source code or current training run changed. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Expanded the next reward experiment with the unfinished-target stop
+  penalty.** `Docs/Reward.md` now plans tracking targets that were attacked
+  but not conquered within a turn, preserving the existing one-time `-2`
+  no-conquest/no-card stop penalty, and using a proposed `-0.5` per-target
+  penalty only when a different conquest already earned a card. It records
+  the required state lifecycle, reward-component logging, and test coverage;
+  no source code or current training run changed. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Replaced the historical reward design document with a concise current
+  reference.** `Docs/Reward.md` now documents only the implemented reward
+  pipeline, formulas, current constants, W&B components, current diagnostic
+  interpretation, and test/source locations. Superseded plans and historical
+  findings remain traceable through Git and this change log. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Added an action-by-action reward table to the current reference.**
+  `Docs/Reward.md` now summarizes every action's active reward terms and the
+  conditional attack-event bonuses in one scan-friendly table. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Explained the implemented attack-reward composition.** `Docs/Reward.md`
+  now separates pre-roll decision quality, dice outcome, and strategic-result
+  bonuses, with formulas and a worked conquest example. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Consolidated the attack-reward reference.** `Docs/Reward.md` now keeps
+  the phase summary and detailed attack explanation in one `Attack` section.
+  Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Recorded the next isolated reward experiment.** `Docs/Reward.md` now
+  specifies the post-DQN-060 outcome-balance experiment: zero
+  `REWARD_TERRITORY_HOLD`, raise `REWARD_TERRITORY_DELTA` from 1 to the
+  candidate 20, preserve meaningful attack/card rewards, and compare
+  territory-trading behavior, wins, reward scale, and clipping without
+  stacking other changes. It records the observed positive loss-return versus
+  win-return ratio, the territory-cycle incentive, the retained negative
+  low-ratio attack signal, and future constant/test work without applying it.
+  Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
 - **Added per-episode training-roster and winner logging for W&B.** `Trainer`
   now records a readable seat roster, winner kind/seat, player count, each
   opponent-kind count, each kind's overall winner indicator, and its

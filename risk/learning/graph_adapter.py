@@ -74,8 +74,8 @@ class GraphAdapter:
         shifts. Default `0` is a no-op (`p % n_players == p`), so existing
         callers that never pass it keep seeing raw, absolute player ids.
         This is for the learning agent: across self-play episodes it gets
-        assigned a different physical seat (`Docs/RL-Prep-Changes.md`'s
-        trainer), but should always *learn* from one consistent "this is
+        assigned a different physical seat by the trainer, but should always
+        *learn* from one consistent "this is
         me, these are my opponents in turn order" frame rather than having
         to re-derive "which absolute id am I this game" from `u`'s
         current-player one-hot every time.

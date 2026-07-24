@@ -1,4 +1,4 @@
-"""Self-play trainer for `GNN_DQN_Agent` (Net A) — `Docs/RL-Prep-Changes.md`.
+"""Self-play trainer for DQN-family agents.
 
 Built on top of `SelfPlay`, with an explicit loop similar to the example
 PPO/DQN trainers. The trainer keeps orchestration obvious (build episode,
@@ -17,8 +17,8 @@ ingest and gradient-step scheduling logic. Every episode:
   every learner transition via `GNN_DQN_Agent.remember(...)`.
 - a gradient step is taken after every learner turn once the replay buffer
   holds at least `batch_size` transitions (`GNN_DQN_Agent.learn`).
-- checkpointing and W&B/local logging are owned by `TrainingLogger`
-  (`Docs/Training-Logging-Plan.md`), called from this trainer.
+- checkpointing and W&B/local logging are owned by `TrainingLogger`, called
+  from this trainer.
 
 Because the learner is reassigned a different seat (and `n_players`) every
 episode, `GraphAdapter`'s `perspective` parameter (`Docs/GraphAdapter.md`)

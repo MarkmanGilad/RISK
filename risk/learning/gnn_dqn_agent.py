@@ -113,7 +113,7 @@ class GNN_DQN_Agent(BaseAgent):
         the same way `__init__` builds them the first time. Lets a trainer
         reuse one `GNN_DQN_Agent` while reassigning it to a different
         physical seat (and a freshly built `env`/`GameContext`) every
-        episode — see `Docs/RL-Prep-Changes.md`'s trainer.
+        episode.
         """
         self.player_id = player_id
         self.env = env
@@ -298,8 +298,8 @@ class GNN_DQN_Agent(BaseAgent):
         rows/`card_indices` are built via `encode_batch` (one state per
         action) rather than `encode_many` (one shared state for every
         action). Each `state`'s own `.perspective` (set by
-        `ReplayBuffer.push`, `Docs/RL-Prep-Changes.md`'s trainer reassigns
-        this agent's seat every episode) is used to build its graph, not
+        `ReplayBuffer.push`; the trainer reassigns this agent's seat every
+        episode) is used to build its graph, not
         this agent's current seat.
         """
         rows = [self.builder(self.adapter(s, perspective=s.perspective), a, s)
@@ -316,8 +316,8 @@ class GNN_DQN_Agent(BaseAgent):
         reduced back to one max per transition with a per-row group index
         (`torch_geometric.utils.scatter(..., reduce="max")`) rather than
         looping a separate forward pass per transition. Every legal action
-        of one `next_state` shares that state's `phase` (`Phase`/decision-
-        stage are 1:1 — `Docs/RL-Prep-Changes.md`), so the per-row `phase`
+        of one `next_state` shares that state's `phase` (`Phase` and
+        decision-stage are 1:1), so the per-row `phase`
         the head-routing needs is just `next_stage` broadcast per group,
         not re-derived from each candidate's own `dqn_index()`. Likewise
         every candidate of one `next_state` is built from that state's own

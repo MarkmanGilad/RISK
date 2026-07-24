@@ -1,7 +1,6 @@
 """Logging/checkpointing orchestrator for RL training runs.
 
-See `Docs/Training-Logging-Plan.md` for the full design. `TrainingLogger`
-is the single entry point `Trainer` talks to for both local checkpointing
+`TrainingLogger` is the single entry point `Trainer` talks to for both local checkpointing
 and W&B metric logging — it owns *when*/*where* a checkpoint happens, not
 the actual save/restore logic, which stays on `GNN_DQN_Agent`
 (`save_checkpoint`/`load_checkpoint`) — the same split as `Environment`

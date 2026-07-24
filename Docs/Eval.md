@@ -436,7 +436,7 @@ Suggested tests:
 4. Add best-model manifest/save/delete logic.
 5. Integrate optional evaluator into `Trainer`.
 6. Add focused tests.
-7. Update `Docs/RL-Prep-Changes.md` after implementation.
+7. Update `Docs/ChangeLog.md` after implementation.
 
 ## Open tuning choices
 

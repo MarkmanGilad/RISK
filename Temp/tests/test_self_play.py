@@ -4,8 +4,7 @@ Unlike the single-seed smoke checks in `test_game_loop.py`/`test_agents.py`
 (capped well below a real game's length), these run a mixed
 heuristic/random roster all the way to an actual winner across several
 seeds — a fast (~1000-1500 steps/game) regression net for bugs that only
-surface deep into a real game (e.g. the `Phase` enum changes in `Docs/
-RL-Prep-Changes.md`).
+surface deep into a real game (for example, `Phase` enum changes).
 """
 from __future__ import annotations
 

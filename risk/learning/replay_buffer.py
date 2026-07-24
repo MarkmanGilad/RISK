@@ -14,8 +14,8 @@ it's given, no copying of its own. `GNN_DQN_Agent.remember()` is the one
 real caller, and it both snapshots and tags its own `.perspective`
 attribute onto each `State` *before* calling `push()` (`Docs/GraphAdapter.md`'s
 perspective-rotation player, needed because a self-play trainer reassigns
-the learner to a different seat every episode — `Docs/RL-Prep-Changes.md`'s
-trainer — so it can't be re-read off the live agent at sample time and has
+the learner to a different seat every episode, so it can't be re-read off the
+live agent at sample time and has
 to travel with the transition). That's deliberately invisible to this
 module: `perspective` is RL-training-only metadata about *who observed*
 a state, not a property of the transition event itself, so it doesn't
@@ -80,7 +80,7 @@ class ReplayBuffer:
     transitions span many different decision points, so `stages`/
     `next_stages` are naturally mixed (unlike one decision's candidate set,
     which is single-stage since `Phase` doubles as the DQN
-    action-representation stage directly — `Docs/RL-Prep-Changes.md`);
+    action-representation stage directly);
     they're what lets the training loop route each row to its head after
     one shared `Encoder` call, via a boolean mask per stage, without
     re-deriving it from the `Action` objects or

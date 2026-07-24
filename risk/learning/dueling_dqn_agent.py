@@ -116,7 +116,7 @@ class Dueling_DQN_Agent(BaseAgent):
         the same way `__init__` builds them the first time. Lets a trainer
         reuse one `Dueling_DQN_Agent` while reassigning it to a different
         physical seat (and a freshly built `env`/`GameContext`) every
-        episode — see `Docs/RL-Prep-Changes.md`'s trainer.
+        episode.
         """
         self.player_id = player_id
         self.env = env
@@ -371,8 +371,8 @@ class Dueling_DQN_Agent(BaseAgent):
         `group_index` is also what `Dueling_DQN`'s grouped value/advantage
         mean needs, so it's passed straight through to `_score` — no second
         grouping scheme. Every legal action of one `next_state` shares that
-        state's `phase` (`Phase`/decision-stage are 1:1 — `Docs/
-        RL-Prep-Changes.md`), so the per-row `phase` the head-routing needs
+        state's `phase` (`Phase` and decision-stage are 1:1), so the per-row
+        `phase` the head-routing needs
         is just `next_stage` broadcast per group, not re-derived from each
         candidate's own `dqn_index()`. Likewise every candidate of one
         `next_state` is built from that state's own `.perspective` (set by
