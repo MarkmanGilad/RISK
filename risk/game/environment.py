@@ -427,6 +427,7 @@ class Environment:
             # attacker has fewer), up to `armies_in_from - 1`.
             s.owners[ti] = pid
             info["conquered"] = True
+            s.unfinished_attack_targets_this_turn.discard(ti)
 
             # Card draw on first conquest of the turn.
             if not s.conquered_this_turn:
@@ -460,6 +461,8 @@ class Environment:
                 s.phase = Phase.TRADE_IN
             else:
                 s.phase = Phase.OCCUPY
+        else:
+            s.unfinished_attack_targets_this_turn.add(ti)
 
         # Winner detection.
         w = self.winner()
@@ -601,6 +604,7 @@ class Environment:
         s.phase = Phase.TRADE_IN
         s.reinforcement_budget = self._compute_reinforcement(s, pid)
         s.conquered_this_turn = False
+        s.unfinished_attack_targets_this_turn.clear()
         # If no valid set exists, there is no trade decision to make, so the
         # turn starts directly in REINFORCE_PLACE.
         if not any(self._legal_trade_ins(s)):

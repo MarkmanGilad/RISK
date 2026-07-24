@@ -396,6 +396,42 @@ def test_conquest_transfers_owner_and_armies() -> None:
     assert s.armies[ti] >= 1
 
 
+def test_unfinished_attack_target_tracks_failures_deduplicates_and_clears_on_conquest() -> None:
+    env = Environment()
+    env.reset(_settings(n=3, seed=0))
+    s = env.current_state()
+    pid = 0
+    attacker = next(
+        env.topology.territory_at(i)
+        for i, owner in enumerate(s.owners)
+        if owner == pid and any(
+            s.owners[env.topology.index_of(neighbor)] != pid
+            for neighbor in env.topology.neighbors(env.topology.territory_at(i))
+        )
+    )
+    target = next(
+        neighbor for neighbor in env.topology.neighbors(attacker)
+        if s.owners[env.topology.index_of(neighbor)] != pid
+    )
+    ai, ti = env.topology.index_of(attacker), env.topology.index_of(target)
+    s.phase = Phase.ATTACK
+    s.armies[ai] = 50
+    s.armies[ti] = 10  # impossible to conquer in one dice resolution
+
+    env.step(AttackAction(from_territory=attacker, to_territory=target, dice=3))
+    assert s.unfinished_attack_targets_this_turn == {ti}
+    env.step(AttackAction(from_territory=attacker, to_territory=target, dice=3))
+    assert s.unfinished_attack_targets_this_turn == {ti}
+
+    s.armies[ti] = 1
+    for _ in range(50):
+        env.step(AttackAction(from_territory=attacker, to_territory=target, dice=3))
+        if s.phase is Phase.OCCUPY:
+            break
+    assert s.owners[ti] == pid
+    assert s.unfinished_attack_targets_this_turn == set()
+
+
 def test_card_drawn_on_first_conquest_of_turn() -> None:
     env = Environment()
     env.reset(_settings(n=3, seed=0))

@@ -33,6 +33,7 @@ def test_initial_state_aligned_with_topology(topo: BoardTopology) -> None:
     assert s.eliminated == set()
     assert s.cards_traded_in_count == 0
     assert s.pending_attack is None
+    assert s.unfinished_attack_targets_this_turn == set()
     assert len(s.hands) == 4
     assert all(h == [] for h in s.hands)
 
@@ -66,6 +67,8 @@ def _populate(topo: BoardTopology) -> State:
         to_index=topo.index_of("NorthWestTerritory"),
         attacker_dice=3,
     )
+    s.conquered_this_turn = True
+    s.unfinished_attack_targets_this_turn = {2, 7}
     return s
 
 
@@ -85,6 +88,7 @@ def test_copy_is_independent(topo: BoardTopology) -> None:
     c.cards_traded_in_count = 99
     assert c.pending_attack is not None
     c.pending_attack.attacker_dice = 1
+    c.unfinished_attack_targets_this_turn.add(9)
 
     assert s.owners[0] != 99
     assert s.armies[0] != 999
@@ -95,6 +99,7 @@ def test_copy_is_independent(topo: BoardTopology) -> None:
     assert s.reinforcement_budget == 7
     assert s.cards_traded_in_count == 3
     assert s.pending_attack.attacker_dice == 3
+    assert s.unfinished_attack_targets_this_turn == {2, 7}
 
 
 def test_snapshot_is_alias_for_copy(topo: BoardTopology) -> None:

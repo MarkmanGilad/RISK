@@ -52,6 +52,10 @@ class State:
     # it from a `before`/`after` snapshot without `Environment` needing to
     # compute any reward itself.
     conquered_this_turn: bool = False
+    # Enemy territories the current player attacked this turn but has not yet
+    # conquered. The learning graph exposes this state so stop rewards remain
+    # Markov from the agent's perspective.
+    unfinished_attack_targets_this_turn: set[int] = field(default_factory=set)
 
     # --- constructors ------------------------------------------------------
 
@@ -70,6 +74,7 @@ class State:
             cards_traded_in_count=0,
             pending_attack=None,
             conquered_this_turn=False,
+            unfinished_attack_targets_this_turn=set(),
         )
 
     # --- copy --------------------------------------------------------------
@@ -87,6 +92,7 @@ class State:
             cards_traded_in_count=self.cards_traded_in_count,
             pending_attack=_copy.copy(self.pending_attack) if self.pending_attack else None,
             conquered_this_turn=self.conquered_this_turn,
+            unfinished_attack_targets_this_turn=set(self.unfinished_attack_targets_this_turn),
         )
 
     def snapshot(self) -> "State":
@@ -109,6 +115,7 @@ class State:
             "eliminated": sorted(self.eliminated),
             "cards_traded_in_count": self.cards_traded_in_count,
             "conquered_this_turn": self.conquered_this_turn,
+            "unfinished_attack_targets_this_turn": sorted(self.unfinished_attack_targets_this_turn),
             "pending_attack": (
                 {
                     "from_index": self.pending_attack.from_index,
@@ -136,6 +143,9 @@ class State:
             eliminated=set(data["eliminated"]),
             cards_traded_in_count=int(data["cards_traded_in_count"]),
             conquered_this_turn=bool(data.get("conquered_this_turn", False)),
+            unfinished_attack_targets_this_turn={
+                int(index) for index in data["unfinished_attack_targets_this_turn"]
+            },
             pending_attack=(
                 PendingAttack(
                     from_index=int(pa["from_index"]),

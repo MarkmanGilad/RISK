@@ -30,6 +30,7 @@ from risk.learning.train_constants import (
     REWARD_ATTACK_RATIO_SCALE,
     REWARD_ATTACK_RATIO_THRESHOLD,
     REWARD_ATTACK_STOP_WITHOUT_CARD,
+    REWARD_ATTACK_UNFINISHED_TARGET,
     REWARD_CONTINENT_DELTA_RELATIVE,
     REWARD_CONTINENT_LOST,
     REWARD_FORTIFY_CONTINENT_PUSH,
@@ -347,6 +348,40 @@ def test_attack_stop_without_card_penalty() -> None:
     assert reward == pytest.approx(REWARD_ATTACK_STOP_WITHOUT_CARD)
 
 
+def test_attack_stop_with_unfinished_targets_and_no_conquest_keeps_one_time_penalty() -> None:
+    calc, env = _calc_env()
+    state = env.current_state().snapshot()
+    state.current_player_index = 0
+    state.conquered_this_turn = False
+    state.unfinished_attack_targets_this_turn = {1, 2}
+
+    reward = calc.compute(
+        action=StopAttackAction(), info={}, before=state, after=state,
+        reward_player=0, done=False, winner=None,
+    )
+
+    assert reward == pytest.approx(REWARD_ATTACK_STOP_WITHOUT_CARD)
+    assert calc.last_components["unfinished_attack"] == pytest.approx(0.0)
+
+
+def test_attack_stop_penalizes_each_unfinished_target_after_a_conquest() -> None:
+    calc, env = _calc_env()
+    state = env.current_state().snapshot()
+    state.current_player_index = 0
+    state.conquered_this_turn = True
+    state.unfinished_attack_targets_this_turn = {1, 2}
+
+    reward = calc.compute(
+        action=StopAttackAction(), info={}, before=state, after=state,
+        reward_player=0, done=False, winner=None,
+    )
+
+    expected = 2 * REWARD_ATTACK_UNFINISHED_TARGET
+    assert reward == pytest.approx(expected)
+    assert calc.last_components["unfinished_attack"] == pytest.approx(expected)
+    assert calc.last_components["attack"] == pytest.approx(0.0)
+
+
 def test_attack_continent_advantage_rewards_real_edge() -> None:
     """Owning most of Australia with troop majority should add a positive,
     gated continent-advantage term on top of ratio/domination."""
@@ -514,7 +549,7 @@ def test_end_of_turn_combines_territory_army_and_continent_delta() -> None:
     assert reward == pytest.approx(territory_term + army_term + continent_term + hold_term)
 
 
-def test_end_of_turn_hold_bonus_fires_even_without_territory_change() -> None:
+def test_end_of_turn_hold_reward_is_zero_without_territory_change() -> None:
     calc, env = _calc_env()
     topo = env.topology
     n = len(topo)
@@ -527,7 +562,7 @@ def test_end_of_turn_hold_bonus_fires_even_without_territory_change() -> None:
 
     assert calc.last_end_of_turn_components["territory_delta"] == pytest.approx(0.0)
     assert calc.last_end_of_turn_components["territory_hold"] == pytest.approx(REWARD_TERRITORY_HOLD * 1.0)
-    assert reward > 0
+    assert reward == pytest.approx(0.0)
 
 
 def test_end_of_turn_continent_loss_applies_extra_penalty() -> None:

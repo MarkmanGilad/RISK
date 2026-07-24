@@ -16,6 +16,23 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-07-24
 
+- **Implemented the history-aware reward and action-injection update on
+  `codex/history-aware-injection`.** `State` now serializes/copies per-turn
+  unfinished attack targets; `Environment` maintains and resets them;
+  `RewardCalculator` applies and logs the non-stacking unfinished-target stop
+  penalty; graph inputs expose the history plus a signed proposed-army-delta
+  column; action injection preserves real army counts; and `trainer.py` now
+  selects fresh `Dueling_DQN_100`. Added state, environment, reward, and graph
+  regression coverage. Files: `risk/game/state.py`,
+  `risk/game/environment.py`, `risk/learning/reward.py`,
+  `risk/learning/train_constants.py`, `risk/learning/graph_adapter.py`,
+  `risk/learning/action_graph_builder.py`, `risk/learning/trainer.py`,
+  `Temp/tests/test_state.py`, `Temp/tests/test_environment.py`,
+  `Temp/tests/test_reward.py`, `Temp/tests/test_graph_representation.py`,
+  `Docs/Update_Plan.md`, `Docs/Reward.md`, `Docs/GraphAdapter.md`,
+  `Docs/ActionGraphBuilder.md`, `Docs/DuelingDQN.md`, `Docs/Testing.md`,
+  `Docs/ChangeLog.md`.
+
 - **Added the Dueling launch and documentation requirements to the update
   plan.** `Docs/Update_Plan.md` now requires explicitly selecting
   `Dueling_DQN_Agent` and verifying the `Dueling_DQN_100` run name, preventing

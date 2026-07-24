@@ -1,5 +1,13 @@
 # Action graph builder
 
+## Current injection rule
+
+Candidate reinforce, occupy, and fortify graphs preserve base `armies`
+exactly. They write signed proposed movement into `proposed_army_delta`:
+reinforce is `+n` at its target; occupy and fortify are `-n` at source and
+`+n` at destination. Attack remains an edge injection. This keeps Dueling's
+value stream state-only while exposing the proposal to its advantage stream.
+
 Reference for [`risk/learning/action_graph_builder.py`](../risk/learning/action_graph_builder.py),
 which implements the "Action injection" piece of
 [NetworkArchitectures.md](NetworkArchitectures.md) — used by Net A

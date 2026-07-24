@@ -1,5 +1,12 @@
 # Dueling_DQN build plan
 
+## Next launch
+
+`risk.learning.trainer.main()` is configured for fresh `Dueling_DQN_100`.
+Its graph input now contains history-aware state features and signed
+`proposed_army_delta`; it must start with `resume=False` and a new replay and
+checkpoint namespace, not an old DQN or Dueling checkpoint.
+
 Goal: add a second learner called **`Dueling_DQN`** while keeping the current
 `GNN_DQN_Agent` / `GNN_DQN` path intact and usable. This is a conservative
 side-by-side build: do not refactor the old agent, do not replace the old

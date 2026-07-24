@@ -34,6 +34,7 @@ set it in the shell before running the suite).
 | `test_ui.py` | Hit-testing (`TerritoryHitTester`) and the init/setup screen |
 | `test_self_play.py` | `SelfPlay.play_headless` — multi-seed fuzz test, full AI-only games played to an actual winner; rendered last-move attribution for turn-advance actions |
 | `test_reward.py` | `RewardCalculator` — terminal semantics (win/loss/not-done) plus one case per phase shaping helper (`TRADE_IN`/`REINFORCE_PLACE`/`ATTACK`/`OCCUPY`/`FORTIFY`/`end_of_turn`) |
+| `test_graph_representation.py` | `GraphAdapter`/`ActionGraphBuilder` — Markov turn-history features and signed proposed-army-delta injection while preserving real armies |
 | `test_evaluator.py` | `Evaluator` (`Docs/Eval.md`) — `evaluate(...)`'s returned metric keys/determinism and `epsilon`/`train_mode` restore, `maybe_save_best(...)`'s top-N retention and manifest sorting |
 | `test_training_logger.py` | `TrainingLogger` — config building, checkpoint path/cadence orchestration (`save_checkpoint`/`try_resume`), no-op behavior with W&B disabled. Agent-internals round-tripping stays in `test_agents.py` (below) |
 | `test_trainer.py` | `Trainer` (`Docs/Trainer.md`) — the `reached_max_steps` contract passed to `agent.learn(...)` (only the final learn call of a truncated episode gets `True`), `PQN`/`PQN_e`/`PQN_e0` factory selection, short end-to-end smoke runs through `Trainer.train()` for `GNN_DQN_Agent`/`Dueling_DQN_Agent` with a monkeypatched small `MAX_STEPS_PER_EPISODE`, and the logged per-episode metric keys |

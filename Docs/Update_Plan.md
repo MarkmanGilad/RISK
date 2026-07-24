@@ -1,5 +1,11 @@
 # General update plan
 
+> **Implemented on 2026-07-24.** The state tracking, reward constants,
+> Markov observations, signed army-delta injection, focused tests, and the
+> `Dueling_DQN_100` launcher selection below are now implemented on
+> `codex/history-aware-injection`. The fresh-run and comparison procedure
+> remains the next step; do not resume an old checkpoint.
+
 This is the single planning document for the next large DQN update. **Approved
 to implement** as one combined change set (2026-07-24) — nothing here is
 coded yet, but the design below is no longer provisional. `Docs/Reward.md`

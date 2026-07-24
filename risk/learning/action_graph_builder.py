@@ -35,7 +35,7 @@ from risk.game.actions import Action
 from risk.game.board_topology import BoardTopology
 from risk.game.phase import Phase
 from risk.game.state import State
-from risk.learning.graph_adapter import EDGE_ATTR_DIM, armies_column_index
+from risk.learning.graph_adapter import EDGE_ATTR_DIM, proposed_army_delta_column_index
 
 
 class ActionGraphBuilder:
@@ -51,7 +51,7 @@ class ActionGraphBuilder:
 
     def __init__(self, topology: BoardTopology) -> None:
         self.topology = topology
-        self._armies_col = armies_column_index(topology)
+        self._proposed_army_delta_col = proposed_army_delta_column_index(topology)
         src, dst = topology.edge_index()
         self._edge_row = {pair: i for i, pair in enumerate(zip(src, dst))}
 
@@ -66,13 +66,13 @@ class ActionGraphBuilder:
         if stage == Phase.ATTACK and t1 != Action.NONE_INDEX:
             edge_attr[self._edge_row[(t1, t2)]] = torch.tensor([1.0, n / MAX_ATTACK_DICE])
         elif stage == Phase.REINFORCE_PLACE:
-            x[t1, self._armies_col] += n
+            x[t1, self._proposed_army_delta_col] += n
         elif stage == Phase.OCCUPY:
-            x[t1, self._armies_col] -= n
-            x[t2, self._armies_col] += n
+            x[t1, self._proposed_army_delta_col] -= n
+            x[t2, self._proposed_army_delta_col] += n
         elif stage == Phase.FORTIFY and t1 != Action.NONE_INDEX:
-            x[t1, self._armies_col] -= n
-            x[t2, self._armies_col] += n
+            x[t1, self._proposed_army_delta_col] -= n
+            x[t2, self._proposed_army_delta_col] += n
 
         return Data(x=x, edge_index=base.edge_index, edge_attr=edge_attr, u=base.u)
 

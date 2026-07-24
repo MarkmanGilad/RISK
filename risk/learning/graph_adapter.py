@@ -31,6 +31,16 @@ def armies_column_index(topology: BoardTopology) -> int:
     return len(topology.continents) + MAX_PLAYERS
 
 
+def unfinished_attack_target_column_index(topology: BoardTopology) -> int:
+    """Column of the observable per-turn unfinished-attack flag."""
+    return armies_column_index(topology) + 1
+
+
+def proposed_army_delta_column_index(topology: BoardTopology) -> int:
+    """Column of the action-injected signed proposed army change."""
+    return unfinished_attack_target_column_index(topology) + 1
+
+
 class GraphAdapter:
     """Builds one `Data` graph snapshot of a `State` for a GNN.
 
@@ -93,8 +103,10 @@ class GraphAdapter:
         continents = topology.continents
         continent_col = {c: i for i, c in enumerate(continents)}
         armies_col = armies_column_index(topology)
+        unfinished_col = unfinished_attack_target_column_index(topology)
+        proposed_delta_col = proposed_army_delta_column_index(topology)
 
-        x = torch.zeros((n, armies_col + 1), dtype=torch.float32)
+        x = torch.zeros((n, proposed_delta_col + 1), dtype=torch.float32)
         for i in range(n):
             territory = topology.territory_at(i)
             x[i, continent_col[topology.continent_of(territory)]] = 1.0
@@ -102,6 +114,7 @@ class GraphAdapter:
             if owner is not None:
                 x[i, len(continents) + (owner - perspective) % n_players] = 1.0
             x[i, armies_col] = float(state.armies[i])
+            x[i, unfinished_col] = float(i in state.unfinished_attack_targets_this_turn)
         return x
 
     def _edge_index(self) -> torch.Tensor:
@@ -136,8 +149,15 @@ class GraphAdapter:
             + [float(b) for b in continent_worth]
             + [float(state.reinforcement_budget)]
             + eliminated
+            + [float(state.conquered_this_turn)]
         )
         return torch.tensor([values], dtype=torch.float32)
 
 
-__all__ = ["GraphAdapter", "armies_column_index", "EDGE_ATTR_DIM"]
+__all__ = [
+    "GraphAdapter",
+    "armies_column_index",
+    "unfinished_attack_target_column_index",
+    "proposed_army_delta_column_index",
+    "EDGE_ATTR_DIM",
+]

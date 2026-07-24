@@ -1,5 +1,14 @@
 # Graph adapter
 
+## Current graph layout
+
+Nodes are `continent one-hot | owner one-hot | armies |
+unfinished_attack_target | proposed_army_delta`. The base graph sets the last
+column to zero. Globals append `conquered_this_turn`. Use the named offset
+helpers instead of hard-coded columns: `armies_column_index(...)`,
+`unfinished_attack_target_column_index(...)`, and
+`proposed_army_delta_column_index(...)`.
+
 Reference for [`risk/learning/graph_adapter.py`](../risk/learning/graph_adapter.py),
 which converts a game snapshot into a `torch_geometric.data.Data` object for
 the GNN+DQN trainer.

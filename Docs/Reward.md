@@ -225,6 +225,20 @@ territory_delta, territory_hold, army_delta,
 continent_delta, continent_lost
 ```
 
+## Current combined-update changes
+
+The current configuration uses `REWARD_TERRITORY_DELTA = 20.0` and
+`REWARD_TERRITORY_HOLD = 0.0`: opponent-round territory gains and losses now
+matter, while merely continuing to own territory does not pay repeatedly.
+
+`State.unfinished_attack_targets_this_turn` records distinct enemy targets
+attacked without conquest during the current turn and resets when the next
+turn begins. On `StopAttackAction`, the old `-2.0` applies once when no
+territory was conquered; after a conquest, each tracked unfinished target is
+instead `-0.5`. The two penalties never stack. The graph exposes this
+per-territory history and `conquered_this_turn`; W&B logs the latter penalty as
+`reward_component_unfinished_attack`.
+
 `reward_per_agent_turn` is useful for observing scale, but it is not the
 objective. The primary success metric is win rate, with deterministic
 evaluation used to remove epsilon-greedy action noise.

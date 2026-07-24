@@ -48,6 +48,7 @@ from risk.learning.train_constants import (
     REWARD_ATTACK_RATIO_SCALE,
     REWARD_ATTACK_RATIO_THRESHOLD,
     REWARD_ATTACK_STOP_WITHOUT_CARD,
+    REWARD_ATTACK_UNFINISHED_TARGET,
     REWARD_CONTINENT_DELTA_RELATIVE,
     REWARD_CONTINENT_LOST,
     REWARD_FORTIFY_BALANCE_SCALE,
@@ -103,7 +104,9 @@ class RewardCalculator:
 
         trade_in = self._trade_in(action, before, reward_player)
         reinforce = self._reinforce(action, before, after, reward_player)
-        attack, eliminate = self._attack(action, info, before, after, reward_player)
+        attack, eliminate, unfinished_attack = self._attack(
+            action, info, before, after, reward_player
+        )
         occupy = self._occupy(action, before, reward_player)
         fortify = self._fortify(action, before, after, reward_player)
         shaping_raw = trade_in + reinforce + attack + occupy + fortify
@@ -112,8 +115,9 @@ class RewardCalculator:
         self.last_components = {
             "trade_in": trade_in,
             "reinforce": reinforce,
-            "attack": attack - eliminate,
+            "attack": attack - eliminate - unfinished_attack,
             "eliminate": eliminate,
+            "unfinished_attack": unfinished_attack,
             "occupy": occupy,
             "fortify": fortify,
             "shaping_raw": shaping_raw,
@@ -333,25 +337,29 @@ class RewardCalculator:
 
     def _attack(
         self, action: Action, info: dict, before: State, after: State, reward_player: int
-    ) -> tuple[float, float]:
-        """Returns `(total_reward, eliminate_component)` — the eliminate
-        portion is broken out so `compute()` can log it separately from the
-        rest of `attack` (`Docs/Reward.md`, Finding 11's open item)."""
+    ) -> tuple[float, float, float]:
+        """Return total attack reward plus separately logged outcome terms."""
         pid = before.current_player_index
         if pid != reward_player:
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
 
         if isinstance(action, StopAttackAction):
+            unfinished_count = len(before.unfinished_attack_targets_this_turn)
+            if unfinished_count:
+                if not before.conquered_this_turn:
+                    return REWARD_ATTACK_STOP_WITHOUT_CARD, 0.0, 0.0
+                unfinished_attack = REWARD_ATTACK_UNFINISHED_TARGET * unfinished_count
+                return unfinished_attack, 0.0, unfinished_attack
             has_real_attack = any(
                 before.owners[i] == pid and before.armies[i] >= 2 and self._is_frontier(before, i)
                 for i in range(len(before.owners))
             )
             if has_real_attack and not before.conquered_this_turn:
-                return REWARD_ATTACK_STOP_WITHOUT_CARD, 0.0
-            return 0.0, 0.0
+                return REWARD_ATTACK_STOP_WITHOUT_CARD, 0.0, 0.0
+            return 0.0, 0.0, 0.0
 
         if not isinstance(action, AttackAction):
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
 
         fi = self.topology.index_of(action.from_territory)
         ti = self.topology.index_of(action.to_territory)
@@ -402,7 +410,7 @@ class RewardCalculator:
                 if not drawn_card.is_wild and after.owners[self.topology.index_of(drawn_card.territory_id)] == pid:
                     reward += REWARD_ATTACK_CARD_TERRITORY_MATCH
 
-        return reward, eliminate
+        return reward, eliminate, 0.0
 
     # --- OCCUPY -------------------------------------------------------------
 
