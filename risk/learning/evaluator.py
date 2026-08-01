@@ -28,12 +28,11 @@ from risk.ui.input.init_screen import InitScreenState
 # seeds every time so scores are comparable across evaluation calls.
 # `killbot` is in both suites deliberately, so it's always part of eval
 # rather than something that shows up only if randomly sampled.
-_EVAL_SUITES: tuple[tuple[str, ...], ...] = (
-    ("raider", "sentinel", "killbot"),
-    ("random", "raider", "sentinel", "empire", "killbot"),
+_EVAL_SUITES: tuple[tuple[tuple[str, ...], tuple[int, ...]], ...] = (
+    (("raider", "sentinel", "killbot"), (0, 1, 2)),
+    (("random", "raider", "sentinel", "empire", "killbot"), (0, 2, 4)),
 )
 _EVAL_SEEDS: tuple[int, ...] = (0, 1, 2)
-_LEARNER_SEAT = 0
 
 
 class Evaluator:
@@ -54,9 +53,9 @@ class Evaluator:
         agent.set_train_mode(False)
         try:
             game_metrics = [
-                self._play_one(agent, opponent_kinds, seed)
-                for opponent_kinds in _EVAL_SUITES
-                for seed in _EVAL_SEEDS
+                self._play_one(agent, opponent_kinds, seed, learner_seat)
+                for opponent_kinds, learner_seats in _EVAL_SUITES
+                for seed, learner_seat in zip(_EVAL_SEEDS, learner_seats)
             ]
         finally:
             agent.epsilon = old_epsilon
@@ -91,10 +90,16 @@ class Evaluator:
 
     # --- one eval game ----------------------------------------------------
 
-    def _play_one(self, agent: GNN_DQN_Agent, opponent_kinds: tuple[str, ...], seed: int) -> dict:
-        ctx = self._build_eval_context(opponent_kinds, seed)
+    def _play_one(
+        self,
+        agent: GNN_DQN_Agent,
+        opponent_kinds: tuple[str, ...],
+        seed: int,
+        learner_seat: int,
+    ) -> dict:
+        ctx = self._build_eval_context(opponent_kinds, seed, learner_seat)
         env, agents = ctx.env, ctx.agents
-        seat = _LEARNER_SEAT
+        seat = learner_seat
         agent.attach(seat, env)
         agents[seat] = agent
 
@@ -162,12 +167,18 @@ class Evaluator:
             "reward_per_agent_turn": episode_reward / max(agent_turns, 1),
         }
 
-    def _build_eval_context(self, opponent_kinds: tuple[str, ...], seed: int):
+    def _build_eval_context(
+        self,
+        opponent_kinds: tuple[str, ...],
+        seed: int,
+        learner_seat: int,
+    ):
         state = InitScreenState()
         state.set_player_count(1 + len(opponent_kinds))
-        state.set_agent_kind(_LEARNER_SEAT, "ai")  # placeholder; overridden by attach() above
-        for i, kind in enumerate(opponent_kinds, start=1):
-            state.set_agent_kind(i, kind)
+        state.set_agent_kind(learner_seat, "ai")  # placeholder; overridden by attach() above
+        opponent_seats = (seat for seat in range(1 + len(opponent_kinds)) if seat != learner_seat)
+        for seat, kind in zip(opponent_seats, opponent_kinds):
+            state.set_agent_kind(seat, kind)
         settings = state.build_settings(seed=seed)
         return GameFactory.build(settings)
 

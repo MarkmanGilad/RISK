@@ -137,10 +137,12 @@ Start with 3 fixed seeds per suite, so each evaluation is 6 games total. If
 runtime is too high, reduce to 2 seeds per suite. If best-model selection is
 too noisy, increase to 5 seeds per suite.
 
-Keep learner seat fixed at seat `0` for v1. `GraphAdapter` perspective should
-handle changing seats, but fixed seat makes eval easier to reason about. A
-later version can rotate learner seat across seeds if seat bias becomes a
-concern.
+Rotate the learner through fixed seats so evaluation does not reward always
+acting from one position while remaining reproducible. For the three tactical
+seeds, use learner seats `0`, `1`, and `2`; for the three full-game seeds, use
+`0`, `2`, and `4`. The roster fills the other seats in its listed order.
+`GraphAdapter`'s perspective-relative encoding ensures the learner keeps the
+same input frame despite moving physical seats.
 
 **Build each suite's roster via `GameFactory.build(settings)`, not by
 hand-instantiating heuristic agents.** A fixed `GameSettings.seed` makes
@@ -158,8 +160,8 @@ already derives a deterministic per-seat seed (`seed = (settings.seed or 0)
 so build the roster the same way `self_play.py`'s `main()` was updated to
 (`InitScreenState` → `set_agent_kind(...)` per seat → `state.build_settings
 (seed=...)` → `GameFactory.build(...)`), and determinism comes for free.
-The learner still needs a manual override afterward (`ctx.agents[0] =
-agent`), same as every other manual-agent-injection call site, since there's
+The learner still needs a manual override afterward (`ctx.agents[learner_seat]
+= agent`), same as every other manual-agent-injection call site, since there's
 no `agent_kind` for `GNN_DQN_Agent`.
 
 ## Carr's methodology (arXiv:2009.06355) and our opponent split

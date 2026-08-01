@@ -139,6 +139,8 @@ class Trainer:
         logger: Optional[TrainingLogger] = None,
         checkpoint_dir: Optional[str | Path] = None,
         use_wandb: bool = True,
+        wandb_run_id: Optional[str] = None,
+        wandb_step_from_episode: bool = False,
         resume: bool = True,
         notes: Optional[str] = None,
     ) -> None:
@@ -160,6 +162,8 @@ class Trainer:
             self.checkpoint_dir,
             use_wandb=use_wandb,
             run_name=self.run_name,
+            wandb_run_id=wandb_run_id,
+            wandb_step_from_episode=wandb_step_from_episode,
             resume=resume,
             notes=notes,
         )
@@ -418,11 +422,15 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 100
+    RUN_ID = 102
 
     ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-    agent = build_learner_agent("Dueling_DQN", ctx)
-    trainer = Trainer(RUN_ID, agent=agent, resume=False)
+    agent = build_learner_agent("DQN", ctx)
+    trainer = Trainer(
+        RUN_ID,
+        agent=agent,
+        resume=False,
+    )
     trainer.train(n_episodes=TRAIN_EPISODES)
     trainer.logger.finish()
 

@@ -46,6 +46,28 @@ def test_evaluate_restores_epsilon_and_train_mode(tmp_path: Path) -> None:
     assert agent.train_mode is True
 
 
+def test_evaluate_uses_fixed_rotating_learner_seats(tmp_path: Path, monkeypatch) -> None:
+    evaluator = Evaluator(max_steps=20, keep_best=3, best_dir=tmp_path / "best")
+    calls: list[tuple[tuple[str, ...], int, int]] = []
+    monkeypatch.setattr(
+        evaluator,
+        "_play_one",
+        lambda _agent, opponents, seed, learner_seat: calls.append(
+            (opponents, seed, learner_seat)
+        )
+        or {
+            "win": 0,
+            "territories_conquered": 0,
+            "reward_per_agent_turn": 0.0,
+            "agent_turns_survived": 0,
+        },
+    )
+
+    evaluator.evaluate(_agent(), episode=1)
+
+    assert [seat for _, _, seat in calls] == [0, 1, 2, 0, 2, 4]
+
+
 def test_evaluate_is_deterministic_across_calls(tmp_path: Path) -> None:
     evaluator = Evaluator(max_steps=20, keep_best=3, best_dir=tmp_path / "best")
     agent = _agent()

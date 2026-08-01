@@ -10,8 +10,9 @@ value stream state-only while exposing the proposal to its advantage stream.
 
 Reference for [`risk/learning/action_graph_builder.py`](../risk/learning/action_graph_builder.py),
 which implements the "Action injection" piece of
-[NetworkArchitectures.md](NetworkArchitectures.md) — used by Net A
-(DQN+inject) and Net C (PPO+inject) only; Nets B/D (lookup) don't need it.
+[NetworkArchitectures.md](NetworkArchitectures.md). Every implemented learner
+uses this shared injected-action representation; the network-specific heads
+decide how each candidate graph is scored.
 
 Given the base `Data` graph for a state ([GraphAdapter](GraphAdapter.md))
 and one legal `Action` ([Action.md](Action.md)), `ActionGraphBuilder`
@@ -43,9 +44,9 @@ legal action to this builder and let it decide whether injection is needed.
 |---|---|
 | `ATTACK` (`AttackAction`) | `edge_attr[row_of(from -> to)] = [1, dice / MAX_ATTACK_DICE]`. Every other edge, including the reverse direction, stays `[0, 0]`. `x` untouched. |
 | `ATTACK` (`StopAttackAction`) | No perturbation at all — the result *is* the base graph (plus the same zero `edge_attr` every other action gets, so it still batches with them). |
-| `REINFORCE_PLACE` | `x[t1, armies_col] += n` — written directly into the existing army-count column. |
-| `OCCUPY` | `x[from, armies_col] -= n`, `x[to, armies_col] += n` (`from`/`to` from `state.pending_attack`). |
-| `FORTIFY` (real move) | `x[from, armies_col] -= n`, `x[to, armies_col] += n`. |
+| `REINFORCE_PLACE` | `x[t1, proposed_army_delta_col] += n`; the real army-count column is unchanged. |
+| `OCCUPY` | `x[from, proposed_army_delta_col] -= n`, `x[to, proposed_army_delta_col] += n` (`from`/`to` from `state.pending_attack`); real army counts are unchanged. |
+| `FORTIFY` (real move) | `x[from, proposed_army_delta_col] -= n`, `x[to, proposed_army_delta_col] += n`; real army counts are unchanged. |
 | `FORTIFY` (skip, `count == 0`) | No perturbation — same as `StopAttackAction`. |
 | `TRADE_IN` | Returns an unmodified copy of the base graph. Its head reads card-hand embeddings, never the graph (`Action.md`), so there is nothing to inject. |
 
@@ -87,15 +88,15 @@ is the same "zero `edge_attr` degrades gracefully" reasoning
 time, so the mapping is stable for the whole game) — not searched per
 action.
 
-## Design decision: army column, not a parallel `proposed_delta` column
+## Design decision: separate `proposed_army_delta` column
 
-`NetworkArchitectures.md` left this open: write the perturbation into the
-existing army-count column directly, or add a parallel `proposed_delta`
-column so the signal stays legible to attention instead of pre-merged into
-the real count. Implemented the simpler option (direct write) first — no
-change to `x`'s width, nothing for `GraphAdapter`/`Encoder` to know about.
-Revisit with a parallel column if training shows the network can't
-disentangle "proposed" from "actual" army counts.
+The injection proposal must not overwrite the state. `GraphAdapter` supplies
+a zero-filled `proposed_army_delta` column alongside the real army count, and
+this builder changes only that column for reinforce, occupy, and fortify.
+The separation leaves clean base graphs genuinely state-only for a value
+stream while making a candidate's proposed movement explicit to an advantage
+or action-scoring stream. The named column helper lives in `GraphAdapter`, so
+the two components share one feature layout rather than duplicating offsets.
 
 ## Verified
 
@@ -109,10 +110,12 @@ Exercised against real `Environment` rollouts (`SelfPlay`-style loop,
   the base graph's `x`, with all-zero `edge_attr`.
 - `AttackAction`s mark exactly the attacked edge's row with
   `[1, dice/MAX_ATTACK_DICE]`, leave `x` untouched.
-- `OccupyAction`/`ReinforcementAction`/`FortifyAction` shift exactly the
-  affected territory row(s)' army column by the expected amount.
-- `TradeInAction` raises `ValueError` rather than returning a misleading
-  unperturbed graph.
+- `OccupyAction`/`ReinforcementAction`/`FortifyAction` preserve every real
+  army-count value and write the expected signed amounts only to
+  `proposed_army_delta` at the affected territory row(s).
+- `TradeInAction` returns an unmodified copy, as does `SkipTradeAction`;
+  trade-in selection is represented by the card-hand context rather than a
+  graph perturbation.
 - A full `ATTACK`-phase legal-action set (68 actions) built and
   `Batch.from_data_list`-ed together without shape errors:
   `DataBatch(x=[2856, 13], edge_index=[2, 11288], edge_attr=[11288, 2], u=[68, 34], ...)`.

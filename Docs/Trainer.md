@@ -36,6 +36,12 @@ Dueling-comparable epsilon-greedy-Q behavior. `PQN_e0` is the matching
 Bellman-only control: the same epsilon-greedy behavior with a per-agent
 policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
+The current `main()` launcher is the fresh classic-DQN experiment
+`DQN_102`: it uses the globally configured reward shaping scale `0.1`, an
+epsilon schedule from `1.0` to `0.1` over 100 episodes, and `resume=False`.
+Its checkpoint and W&B namespaces are therefore new (`Checkpoints/DQN_102`
+and `DQN_102`), with an empty replay buffer.
+
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and future agents
 such as PPO or PDQN without silently changing behavior.
@@ -43,7 +49,8 @@ such as PPO or PDQN without silently changing behavior.
 ## Constructor responsibilities
 
 `Trainer.__init__(run_id, *, agent, evaluator=None, logger=None,
-checkpoint_dir=None, use_wandb=True, resume=True, notes=None)` sets up one
+checkpoint_dir=None, use_wandb=True, wandb_run_id=None,
+wandb_step_from_episode=False, resume=True, notes=None)` sets up one
 training run.
 
 - `agent` is required and must already be constructed by the caller.
@@ -62,6 +69,12 @@ training run.
   policy and saves best-policy checkpoints under `<checkpoint_dir>/best`.
 - `resume=True` lets `TrainingLogger.try_resume(...)` restore the agent and
   trainer episode counter from the run checkpoint if one exists.
+- `wandb_run_id` is optional. When provided, W&B resumes that exact cloud run
+  with `resume="must"`; it fails instead of silently creating a second run if
+  the id is unavailable. Use it only after the original process has stopped.
+- `wandb_step_from_episode=True` uses the trainer's `episode` as W&B's actual
+  step axis. This is useful when a new W&B run resumes a local checkpoint, so
+  its charts start at the restored episode instead of zero.
 
 The trainer keeps one persistent agent object for the whole run. Each episode
 creates a new environment and seat assignment, then calls `agent.attach(seat,
@@ -213,6 +226,46 @@ self.logger.checkpoint(episode=self.episode, agent=self.agent)
 local checkpoint folders use the same agent-labeled run name. W&B config records
 `run_name`, `agent_class`, and `model_class`, so runs can distinguish
 `GNN_DQN_Agent` from `Dueling_DQN_Agent` even when they share the same trainer.
+The current full-checkpoint cadence starts at episode 200 and saves again every
+50 episodes, limiting recoverable work after an interruption without saving
+early training state.
+
+## Resuming an interrupted run
+
+To continue both local training and its existing W&B history, keep the same
+numeric run id and give `Trainer` the saved W&B run id. The launcher for
+`Dueling_DQN_101` can use its last full local checkpoint and cloud run
+`rc1itpev`:
+
+```python
+trainer = Trainer(
+    101,
+    agent=agent,
+    resume=True,
+    wandb_run_id="rc1itpev",
+)
+```
+
+`resume=True` restores the highest `epNNNNNN` checkpoint. `wandb_run_id`
+continues the same W&B run rather than merely reusing its visible name. Do not
+start a second process with that W&B id at the same time.
+
+When the previous cloud history cannot be rewound, start a **new** W&B run
+while preserving the local checkpoint and make its x-axis begin at that
+checkpoint's episode:
+
+```python
+trainer = Trainer(
+    101,
+    agent=agent,
+    resume=True,
+    wandb_step_from_episode=True,
+)
+```
+
+No `wandb_run_id` is supplied in this form, so W&B creates a distinct cloud
+run. The first post-checkpoint episode is logged at step 601 after restoring
+`ep000600`.
 
 ## How to change agent
 

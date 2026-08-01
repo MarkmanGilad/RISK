@@ -60,6 +60,7 @@ from risk.learning.train_constants import (
     REWARD_REINFORCE_CONTINENT_PUSH,
     REWARD_REINFORCE_NO_ENEMY_NEIGHBOR,
     REWARD_REINFORCE_RATIO_CAP,
+    REWARD_SHAPING_SCALE,
     REWARD_SHAPING_STEP_CAP,
     REWARD_TERMINAL_LOSS,
     REWARD_TERMINAL_WIN,
@@ -124,7 +125,7 @@ class RewardCalculator:
             "shaping_clipped": shaping,
             "terminal": terminal,
         }
-        return terminal + shaping
+        return terminal + REWARD_SHAPING_SCALE * shaping
 
     def end_of_turn(self, before_turn: State, after_turn: State, reward_player: int) -> float:
         """Opponent-impact terms — see `Docs/Reward.md`'s "End-of-turn" section.
@@ -189,7 +190,7 @@ class RewardCalculator:
             "territory_hold": territory_hold,
             "continent_lost": continent_lost,
         }
-        return (
+        return REWARD_SHAPING_SCALE * (
             territory_delta + army_delta + continent_delta + territory_hold + continent_lost
         )
 

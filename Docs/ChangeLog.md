@@ -14,7 +14,148 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-01
+
+- **Completed the planned reinforcement-policy contract for implementation.**
+  `Docs/Reward.md` now requires continent reward to be both contested and
+  frontier-only, states that a fully owned continent receives none, records
+  the agreed initial constants, and makes the replacement (not additive)
+  scope explicit. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Planned a Markov penalty for deferred reinforcement.** `Docs/Reward.md`
+  now specifies a small negative term per army left in the visible
+  reinforcement budget after a placement, discouraging redundant split moves
+  while leaving a full-budget placement unpenalized. Files: `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Specified the planned proportional frontier reinforcement terms.**
+  `Docs/Reward.md` replaces the earlier one-time readiness-crossing draft
+  with a signed 1.5:1 weakest-neighbour term and an additional positive 2:1
+  total-adjacent-enemy term; no-neighbour reinforcement remains negative.
+  Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Specified the planned continent reinforcement formula.** `Docs/Reward.md`
+  now uses a named `REWARD_REINFORCE_CONTINENT_PRIORITY_SCALE` multiplier
+  (initially `10.0`) over territory share plus army share, divided by continent
+  territory count and multiplied by a bounded fraction of armies placed; the
+  split-placement test remains required. Files: `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Planned a proportional penalty for ending attacks while leaving a 2:1
+  opportunity.** `Docs/Reward.md` now specifies an unimplemented,
+  proportional per-target `StopAttackAction` penalty: each distinct enemy
+  target uses its strongest available attacker; the existing shared shaping
+  cap, rather than a separate ratio cap, bounds the total. Files: `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Replaced the detailed reinforcement proposal with a minimal policy
+  draft.** `Docs/Reward.md` now reduces the unimplemented plan to a one-time
+  readiness crossing, a plain average of contested-continent territory and
+  army shares, and the existing interior penalty. Files: `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added a compact reinforcement-policy summary.** `Docs/Reward.md` now
+  tabulates the proposed readiness, contested-continent, interior-placement,
+  and intentionally unshaped cases so the boundaries of the DQN's learned
+  policy are explicit. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Simplified the planned reinforcement policy to three DQN-friendly
+  preferences.** `Docs/Reward.md` rejects the launch-value/battle-probability
+  proposal in favor of a one-time direct-neighbour readiness crossing,
+  contested-continent territory/army-share progress, and the existing
+  interior-placement penalty. Route and target selection remain learned.
+  Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Replaced the planned capped-ratio reinforcement reward with a launch-value
+  policy.** `Docs/Reward.md` now specifies a Markov potential difference that
+  combines exact full-force battle probability with security against the sum
+  of all directly adjacent enemy armies. This prevents a single weak neighbour
+  from making a source territory appear campaign-ready; future route decisions
+  remain the DQN's responsibility. The plan remains unimplemented. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Split the continent-push "already fully owned" fix so it only applies to
+  reinforcement, not fortify.** `Docs/Reward.md`'s planned
+  reinforcement-shaping revision previously had the fix to `_continent_push`
+  (stop rewarding placement into a continent with nothing left to conquer)
+  apply to both call sites via the shared helper. Fortify wants the opposite:
+  concentrating strength into an already-completed continent should keep
+  being rewarded, since holding it against recapture is a real goal.
+  `_continent_push` now needs a parameter (e.g. `allow_completed_continent`)
+  so the two phases can diverge. Still entirely unimplemented. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Reinstated continent-push and softened the readiness exponent in the
+  planned reinforcement-shaping revision.** `Docs/Reward.md` no longer drops
+  the continent-push term for reinforcement; it keeps it but fixes
+  `_continent_push` (shared with `FortifyAction`) to stop rewarding
+  placements into a continent the learner already fully owns. The readiness
+  progress exponent is now a tunable `REWARD_REINFORCE_READINESS_EXPONENT`
+  (suggested starting value `1.5`, not the earlier hardcoded `2`): squaring
+  is kept in spirit — concentrating force into one strong stack should still
+  beat spreading armies thin — but the effect was judged too extreme at `2`.
+  Still entirely unimplemented. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Revised the planned reinforcement shaping to stay Markov.**
+  `Docs/Reward.md` now replaces the hidden turn-start-budget proposal with a
+  squared, 1.5:1--5:1 capped army-ratio progress difference. It removes the
+  concentration/continent terms, keeps the interior-placement penalty, and
+  explains that the remaining-budget denominator rewarded action splitting.
+  The replacement remains split-action invariant without adding state history.
+  The plan is explicitly unimplemented and names the required focused tests
+  and fresh-run constraint. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Configured a fresh classic-DQN reward/exploration experiment.** The active
+  `trainer.py` launcher now starts `DQN_102` with `resume=False`, so it cannot
+  mix the new scaled reward regime with an older replay buffer. Set the shared
+  epsilon floor to `0.1` (from `0.05`) while preserving the 100-episode decay.
+  Documented the effective launcher configuration. Files:
+  `risk/learning/train_constants.py`, `risk/learning/trainer.py`,
+  `Docs/Trainer.md`, `Docs/ChangeLog.md`.
+
+## 2026-07-30
+
+- **Reduced full checkpoint cadence to every 50 episodes after episode 200.**
+  The first regular checkpoint remains episode 200; later checkpoints are at
+  250, 300, and so on, limiting lost training without saving early state.
+  Added the constant-value regression test and documented the cadence. Files:
+  `risk/learning/train_constants.py`,
+  `Temp/tests/test_training_logger.py`, `Docs/Trainer.md`,
+  `Docs/ChangeLog.md`.
+
+- **Scaled dense reward shaping to make ending the game matter more.** Added
+  `REWARD_SHAPING_SCALE = 0.1`, applied after per-action shaping is clipped
+  and to the combined end-of-turn shaping; terminal win/loss remains
+  `+100/-100`. Updated reward expectations and the reward reference. Files:
+  `risk/learning/train_constants.py`, `risk/learning/reward.py`,
+  `Temp/tests/test_reward.py`, `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Removed fixed-seat bias from periodic evaluation.** Each seeded tactical
+  evaluation now places the learner at seats 0/1/2, and each full-game
+  evaluation uses seats 0/2/4; opponent rosters fill the remaining seats in a
+  deterministic order. Added schedule coverage. Files:
+  `risk/learning/evaluator.py`, `Temp/tests/test_evaluator.py`,
+  `Docs/Eval.md`, `Docs/ChangeLog.md`.
+
+- **Made interrupted Run 101 resumable without splitting its W&B charts.**
+  `TrainingLogger` can now require resumption of an explicit W&B run id;
+  it can also use the restored trainer episode as W&B's true step axis for a
+  new cloud run. `trainer.py` now resumes `Dueling_DQN_101` from its latest
+  full checkpoint into a new W&B run beginning at episode 601. Added focused
+  logger coverage and documented both procedures. Files:
+  `risk/learning/training_logger.py`, `risk/learning/trainer.py`,
+  `Temp/tests/test_training_logger.py`, `Docs/Trainer.md`,
+  `Docs/ChangeLog.md`.
+
 ## 2026-07-24
+
+- **Corrected the action-injection documentation to match the signed-delta
+  implementation.** `Action.md` now describes injected candidate graphs and
+  correctly scopes `dqn_index()` to an internal locator; `ActionGraphBuilder.md`
+  now consistently documents preserved real army counts, signed
+  `proposed_army_delta` changes, unmodified trade-in copies, and the shared
+  representation used by every implemented learner. Files:
+  `Docs/Action.md`, `Docs/ActionGraphBuilder.md`, `Docs/ChangeLog.md`.
 
 - **Reconciled `Update_Plan.md` with the actual `codex/history-aware-injection`
   implementation.** Verified against the real diff and a full test run (350

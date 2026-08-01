@@ -9,8 +9,10 @@ orchestration, and no-op behavior when W&B is disabled.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from risk.learning import train_constants
+from risk.learning import training_logger
 from risk.learning.adqn_agent import ADQN_Agent
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.training_logger import TrainingLogger
@@ -23,6 +25,11 @@ def _agent(seed: int = 1) -> GNN_DQN_Agent:
     return GNN_DQN_Agent(player_id=0, env=env, train_mode=True)
 
 
+def test_checkpoint_cadence_starts_at_two_hundred_then_runs_every_fifty_episodes() -> None:
+    assert train_constants.CHECKPOINT_AFTER == 200
+    assert train_constants.CHECKPOINT_EVERY == 50
+
+
 def test_use_wandb_false_disables_wandb_and_is_a_noop(tmp_path: Path) -> None:
     logger = TrainingLogger(run_id=1, checkpoint_dir=tmp_path, use_wandb=False)
     agent = _agent()
@@ -32,6 +39,44 @@ def test_use_wandb_false_disables_wandb_and_is_a_noop(tmp_path: Path) -> None:
     logger.start_run(agent=agent, trainer=None)
     logger.log_episode(episode=1, metrics={"episode_reward": 1.0})
     logger.finish()
+
+
+def test_start_run_resumes_the_explicit_wandb_run_id(tmp_path: Path, monkeypatch) -> None:
+    init_calls: list[dict] = []
+    monkeypatch.setattr(
+        training_logger,
+        "wandb",
+        SimpleNamespace(init=lambda **kwargs: init_calls.append(kwargs)),
+    )
+    logger = TrainingLogger(
+        run_id=101,
+        checkpoint_dir=tmp_path,
+        run_name="Dueling_DQN_101",
+        wandb_run_id="rc1itpev",
+    )
+
+    logger.start_run(agent=_agent(), trainer=None)
+
+    assert init_calls[0]["id"] == "rc1itpev"
+    assert init_calls[0]["resume"] == "must"
+
+
+def test_log_episode_can_use_episode_as_the_wandb_step(tmp_path: Path, monkeypatch) -> None:
+    log_calls: list[tuple[dict, int]] = []
+    monkeypatch.setattr(
+        training_logger,
+        "wandb",
+        SimpleNamespace(log=lambda payload, *, step: log_calls.append((payload, step))),
+    )
+    logger = TrainingLogger(
+        run_id=101,
+        checkpoint_dir=tmp_path,
+        wandb_step_from_episode=True,
+    )
+
+    logger.log_episode(episode=601, metrics={"win": 1})
+
+    assert log_calls == [({"win": 1, "episode": 601}, 601)]
 
 
 def test_status_line_identifies_the_learner_seat(tmp_path: Path) -> None:

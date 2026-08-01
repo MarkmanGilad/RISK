@@ -226,18 +226,44 @@ training.
 
 ---
 
-## Representing actions for DQN — `Q(s, a)`
+## Representing actions for learning — `Q(s, a)`
 
 **The problem.** Risk's legal action set is a different shape and size
 every step (varies by phase, by how many territories you own, by hand
 size, ...), so there's no fixed-size action vector to argmax over directly.
 The fix: don't enumerate every theoretically possible action — score only
 the legal actions `Environment.legal_actions()` already gives you for the
-current state, and pick the highest-scoring one. That's the action-space
-strategy. This section is the **numeric structure for one legal action**,
-fed into the network alongside the (graph) state to get its `Q(s, a)`.
+current state, and pick the highest-scoring one.
 
-**Implemented.** Every `Action` subclass encodes itself via
+### Current representation: inject each candidate into the state graph
+
+The implemented learning agents represent a territory-changing candidate by
+building a separate graph from the same base state. `ActionGraphBuilder`
+([ActionGraphBuilder.md](ActionGraphBuilder.md)) preserves the real `armies`
+feature and writes the candidate's signed proposed movement into the base
+graph's zero-filled `proposed_army_delta` feature: reinforcement writes `+n`
+at its target, while occupy and fortify write `-n` at the source and `+n` at
+the destination. An attack instead marks its directed edge with its selected
+flag and normalized dice count. Stop/skip actions and trade-in actions return
+an unmodified graph copy.
+
+Thus the network scores one injected graph for each legal action; the action
+object itself is still passed to `env.step(...)` after selection. Keeping the
+base army count unchanged is important for the clean state/value graph, while
+the signed-delta column exposes the action proposal to an action-scoring
+stream. See [ActionGraphBuilder.md](ActionGraphBuilder.md) for the complete
+stage-by-stage mapping and [GraphAdapter.md](GraphAdapter.md) for the node
+feature layout.
+
+### Internal action coordinates
+
+`Action.dqn_index(...)` remains the common, torch-free mapping used by
+`ActionGraphBuilder` to locate the affected node(s) or edge. It is also
+available to `ActionEncoder` for code that needs a compact action tuple, but
+the injected-graph learners do not feed that tuple into a separate action
+head.
+
+Every `Action` subclass encodes itself via
 `Action.dqn_index(topology, state=None) -> tuple[int, int, int, int]`
 ([`risk/game/actions.py`](../risk/game/actions.py)) — plain Python, no
 torch import in the game core. `risk.learning.action_encoder.ActionEncoder`
@@ -249,7 +275,7 @@ from risk.learning.action_encoder import ActionEncoder
 
 encoder = ActionEncoder(env)
 legal_actions, tensor = encoder()                  # tensor: [len(legal_actions), 4] long
-# ... score `tensor` against the graph state, argmax/sample a row index i ...
+# ... use `tensor` where a compact action representation is needed ...
 env.step(legal_actions[i])                          # the winning action is already a real Action
 ```
 
@@ -292,7 +318,8 @@ This is a direct, mechanical mapping from each legal `Action` object
 (already produced by `legal_actions()`) to one `(phase, t1, t2, n)` tuple —
 no information is invented, nothing needs decoding back, because the
 action object itself is still what gets passed to `env.step(...)` once
-chosen. The tuple is purely the network's input encoding for scoring it.
+chosen. For injected-graph learning, the tuple is an internal locator for
+the perturbation, not a separate network input.
 
 **Reinforcement note:** reinforcement is multi-step (see the
 `ReinforcementAction` section above) and `legal_actions()` offers a
@@ -303,30 +330,6 @@ real, meaningful choice every step, not a constant: the agent picks both
 *where* and *how much*, and can return to `REINFORCE_PLACE` again next
 step with whatever budget remains.
 
-### Network wiring: one small head per stage
-
-Five small heads (e.g. one 2-layer MLP each), each specialized to its
-stage's actual semantics — `Q(s, a) = head[stage](state_embedding, t1, t2, n)`:
-
-- `t1`/`t2` for territory-valued stages (`REINFORCE_PLACE`, `ATTACK`,
-  `OCCUPY`, `FORTIFY`) should be looked up against the **GNN's own per-node
-  embeddings** for this state (the same ones produced from `x` in
-  [`GraphAdapter.md`](GraphAdapter.md)), not fed as raw integers or through
-  a separate embedding table — the whole point of using a graph net is that
-  a territory's embedding already encodes its armies, owner, continent,
-  and neighborhood, so the head gets a contextualized vector for free
-  instead of having to relearn "territory 17 is on the front line" from
-  scratch. A `-1` sentinel maps to a fixed learned "none" vector instead of
-  a lookup.
-- `t1`/`t2` for `TRADE_IN` are card-hand slots, not territories — a small
-  separate embedding (e.g. `nn.Embedding(MAX_CARDS_IN_HAND, d)`) or just
-  the one-hot index, since the hand is at most 5 cards.
-- `n` (dice/count) is a small scalar or short one-hot (3 values for dice,
-  a handful for count) concatenated in directly.
-- `state_embedding` is the same global/pooled vector every head shares
-  (e.g. `u` plus a graph readout) — only the stage-specific `t1`/`t2`/`n`
-  encoding differs per head.
-
-Masking is still automatic: only legal actions `legal_actions()` actually
-returned get a tuple built and a head invoked, so illegal moves are simply
-never scored — there's no separate mask tensor to maintain.
+Only actions returned by `legal_actions()` are injected and scored, so illegal
+moves are never represented as candidate graph rows and require no separate
+mask tensor.

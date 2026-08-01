@@ -67,7 +67,7 @@ ADQN_GRAD_DIAGNOSTIC_EVERY: Final[int] = 100
 # region Exploration
 
 EPSILON_START: Final[float] = 1.0
-EPSILON_END: Final[float] = 0.05
+EPSILON_END: Final[float] = 0.1
 EPSILON_DECAY_EPISODES: Final[int] = 100  # episode at which epsilon reaches EPSILON_END
 # endregion
 
@@ -86,8 +86,8 @@ ROLLING_WIN_RATE_WINDOW: Final[int] = 50
 # region Checkpointing
 
 CHECKPOINT_DIR: Final[str] = "Checkpoints"
-CHECKPOINT_AFTER: Final[int] = 200   # don't checkpoint before this episode
-CHECKPOINT_EVERY: Final[int] = 200   # save every N episodes after that
+CHECKPOINT_AFTER: Final[int] = 200   # first checkpoint episode
+CHECKPOINT_EVERY: Final[int] = 50    # save every N episodes after that
 # endregion
 
 # region Evaluation
@@ -100,6 +100,9 @@ EVAL_MAX_STEPS: Final[int] = MAX_STEPS_PER_EPISODE
 # region Reward
 
 REWARD_SHAPING_STEP_CAP: Final[float] = 10.0
+# Keeps dense local rewards below the terminal win/loss signal without
+# changing the relative preference between shaping terms.
+REWARD_SHAPING_SCALE: Final[float] = 0.1
 
 REWARD_TERMINAL_WIN: Final[float] = 100.0
 REWARD_TERMINAL_LOSS: Final[float] = -100.0
@@ -187,6 +190,7 @@ __all__ = [
     "EVAL_KEEP_BEST",
     "EVAL_MAX_STEPS",
     "REWARD_SHAPING_STEP_CAP",
+    "REWARD_SHAPING_SCALE",
     "REWARD_TERMINAL_WIN",
     "REWARD_TERMINAL_LOSS",
     "REWARD_TRADE_IN_EARLY",

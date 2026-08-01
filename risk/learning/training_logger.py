@@ -42,6 +42,8 @@ class TrainingLogger:
         use_wandb: bool = True,
         project_name: str = "Risk-GNN-DQN",
         run_name: Optional[str] = None,
+        wandb_run_id: Optional[str] = None,
+        wandb_step_from_episode: bool = False,
         resume: bool = True,
         notes: Optional[str] = None,
     ) -> None:
@@ -49,6 +51,8 @@ class TrainingLogger:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.project_name = project_name
         self.run_name = run_name or f"run_{run_id:03d}"
+        self.wandb_run_id = wandb_run_id
+        self.wandb_step_from_episode = wandb_step_from_episode
         self.resume = resume
         self.notes = notes
         self._wandb_enabled = bool(use_wandb and wandb is not None)
@@ -63,19 +67,25 @@ class TrainingLogger:
         config = self._build_config(agent)
         if extra_config:
             config.update(extra_config)
-        wandb.init(
-            project=self.project_name,
-            name=self.run_name,
-            config=config,
-            notes=self.notes,
-        )
+        init_kwargs = {
+            "project": self.project_name,
+            "name": self.run_name,
+            "config": config,
+            "notes": self.notes,
+        }
+        if self.wandb_run_id is not None:
+            init_kwargs.update(id=self.wandb_run_id, resume="must")
+        wandb.init(**init_kwargs)
 
     def log_episode(self, *, episode: int, metrics: dict) -> None:
         if not self._wandb_enabled:
             return
         payload = dict(metrics)
         payload.setdefault("episode", episode)
-        wandb.log(payload)
+        if self.wandb_step_from_episode:
+            wandb.log(payload, step=episode)
+        else:
+            wandb.log(payload)
 
     def format_status_line(
         self,

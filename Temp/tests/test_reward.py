@@ -38,6 +38,7 @@ from risk.learning.train_constants import (
     REWARD_OCCUPY_FORWARD_MOMENTUM,
     REWARD_REINFORCE_CONTINENT_PUSH,
     REWARD_REINFORCE_NO_ENEMY_NEIGHBOR,
+    REWARD_SHAPING_SCALE,
     REWARD_TERMINAL_LOSS,
     REWARD_TERMINAL_WIN,
     REWARD_TERRITORY_DELTA,
@@ -128,6 +129,10 @@ def _calc_env():
     return RewardCalculator(env.topology), env
 
 
+def _shaping(value: float) -> float:
+    return REWARD_SHAPING_SCALE * value
+
+
 # --- TRADE_IN -------------------------------------------------------------
 
 
@@ -148,7 +153,7 @@ def test_trade_in_skip_rewards_patience_at_hand_three() -> None:
         reward_player=0, done=False, winner=None,
     )
 
-    assert reward == pytest.approx(REWARD_TRADE_IN_EARLY / card_set_value(0))
+    assert reward == pytest.approx(_shaping(REWARD_TRADE_IN_EARLY / card_set_value(0)))
 
 
 def test_trade_in_trade_penalizes_when_optional_and_no_match() -> None:
@@ -171,7 +176,7 @@ def test_trade_in_trade_penalizes_when_optional_and_no_match() -> None:
         reward_player=0, done=False, winner=None,
     )
 
-    assert reward == pytest.approx(-(REWARD_TRADE_IN_EARLY / card_set_value(0)))
+    assert reward == pytest.approx(_shaping(-(REWARD_TRADE_IN_EARLY / card_set_value(0))))
 
 
 def test_trade_in_territory_match_bonus() -> None:
@@ -196,7 +201,7 @@ def test_trade_in_territory_match_bonus() -> None:
     )
 
     expected = -(REWARD_TRADE_IN_EARLY / card_set_value(0)) + REWARD_TRADE_IN_TERRITORY_MATCH
-    assert reward == pytest.approx(expected)
+    assert reward == pytest.approx(_shaping(expected))
 
 
 # --- REINFORCE_PLACE --------------------------------------------------------
@@ -223,7 +228,7 @@ def test_reinforce_no_enemy_neighbor_penalty() -> None:
     continent = topo.continent_of(terr)
     owned, total = topo.continent_owner_counts(after.owners, continent, 0)
     expected = REWARD_REINFORCE_NO_ENEMY_NEIGHBOR + REWARD_REINFORCE_CONTINENT_PUSH * (owned / total) / total
-    assert reward == pytest.approx(expected)
+    assert reward == pytest.approx(_shaping(expected))
 
 
 # --- ATTACK ------------------------------------------------------------------
@@ -252,7 +257,7 @@ def test_attack_fewer_dice_penalty_isolated() -> None:
         reward_player=0, done=False, winner=None,
     )
 
-    assert reward == pytest.approx(REWARD_ATTACK_FEWER_DICE)
+    assert reward == pytest.approx(_shaping(REWARD_ATTACK_FEWER_DICE))
 
 
 def test_attack_conquer_and_card_draw() -> None:
@@ -285,7 +290,7 @@ def test_attack_conquer_and_card_draw() -> None:
     )
 
     expected = REWARD_ATTACK_ARMY_TRADE * 1 + REWARD_ATTACK_CONQUER_TERRITORY + REWARD_ATTACK_CONQUER_WITH_CARD
-    assert reward == pytest.approx(expected)
+    assert reward == pytest.approx(_shaping(expected))
 
 
 def test_attack_eliminate_opponent_scales_with_cards_taken() -> None:
@@ -320,7 +325,7 @@ def test_attack_eliminate_opponent_scales_with_cards_taken() -> None:
 
     expected_eliminate = REWARD_ATTACK_ELIMINATE_OPPONENT_BASE + REWARD_ATTACK_ELIMINATE_OPPONENT_PER_CARD * 2
     expected = REWARD_ATTACK_CONQUER_TERRITORY + expected_eliminate
-    assert reward == pytest.approx(expected)
+    assert reward == pytest.approx(_shaping(expected))
 
     # The eliminate bonus is logged in its own bucket, split out of `attack`
     # (Docs/Reward.md, Finding 11's open item), so W&B can see elimination
@@ -345,7 +350,7 @@ def test_attack_stop_without_card_penalty() -> None:
         reward_player=0, done=False, winner=None,
     )
 
-    assert reward == pytest.approx(REWARD_ATTACK_STOP_WITHOUT_CARD)
+    assert reward == pytest.approx(_shaping(REWARD_ATTACK_STOP_WITHOUT_CARD))
 
 
 def test_attack_stop_with_unfinished_targets_and_no_conquest_keeps_one_time_penalty() -> None:
@@ -360,7 +365,7 @@ def test_attack_stop_with_unfinished_targets_and_no_conquest_keeps_one_time_pena
         reward_player=0, done=False, winner=None,
     )
 
-    assert reward == pytest.approx(REWARD_ATTACK_STOP_WITHOUT_CARD)
+    assert reward == pytest.approx(_shaping(REWARD_ATTACK_STOP_WITHOUT_CARD))
     assert calc.last_components["unfinished_attack"] == pytest.approx(0.0)
 
 
@@ -377,7 +382,7 @@ def test_attack_stop_penalizes_each_unfinished_target_after_a_conquest() -> None
     )
 
     expected = 2 * REWARD_ATTACK_UNFINISHED_TARGET
-    assert reward == pytest.approx(expected)
+    assert reward == pytest.approx(_shaping(expected))
     assert calc.last_components["unfinished_attack"] == pytest.approx(expected)
     assert calc.last_components["attack"] == pytest.approx(0.0)
 
@@ -430,7 +435,7 @@ def test_attack_continent_advantage_rewards_real_edge() -> None:
     expected_advantage = REWARD_ATTACK_CONTINENT_ADVANTAGE * advantage / (margin_left + 1)
 
     assert advantage > 0  # sanity: the scenario really does cross both gates
-    assert reward == pytest.approx(expected_ratio + expected_domination + expected_advantage)
+    assert reward == pytest.approx(_shaping(expected_ratio + expected_domination + expected_advantage))
 
 
 def test_attack_continent_advantage_zero_below_territory_baseline() -> None:
@@ -460,7 +465,7 @@ def test_attack_continent_advantage_zero_below_territory_baseline() -> None:
 
     ratio = state.armies[fi] / state.armies[ti]
     expected_ratio = REWARD_ATTACK_RATIO_SCALE * (min(ratio, REWARD_ATTACK_RATIO_CAP) - REWARD_ATTACK_RATIO_THRESHOLD)
-    assert reward == pytest.approx(expected_ratio)  # no domination, no advantage term
+    assert reward == pytest.approx(_shaping(expected_ratio))  # no domination, no advantage term
 
 
 # --- OCCUPY ------------------------------------------------------------------
@@ -481,7 +486,7 @@ def test_occupy_forward_momentum_scales_with_fraction() -> None:
         reward_player=0, done=False, winner=None,
     )
 
-    assert reward == pytest.approx(REWARD_OCCUPY_FORWARD_MOMENTUM * (2 / 4))
+    assert reward == pytest.approx(_shaping(REWARD_OCCUPY_FORWARD_MOMENTUM * (2 / 4)))
 
 
 # --- FORTIFY -----------------------------------------------------------------
@@ -516,7 +521,7 @@ def test_fortify_toward_frontier_positive() -> None:
     continent = topo.continent_of(dst)
     owned, total = topo.continent_owner_counts(after.owners, continent, 0)
     expected = REWARD_FORTIFY_TOWARD_FRONTIER + REWARD_FORTIFY_CONTINENT_PUSH * (owned / total) / total
-    assert reward == pytest.approx(expected)
+    assert reward == pytest.approx(_shaping(expected))
 
 
 # --- end-of-turn opponent-impact terms --------------------------------------
@@ -546,7 +551,7 @@ def test_end_of_turn_combines_territory_army_and_continent_delta() -> None:
     continent_term = REWARD_CONTINENT_DELTA_RELATIVE * (my_bonus_after / total_bonus - 0.0)
     hold_term = REWARD_TERRITORY_HOLD * (1 / n)
 
-    assert reward == pytest.approx(territory_term + army_term + continent_term + hold_term)
+    assert reward == pytest.approx(_shaping(territory_term + army_term + continent_term + hold_term))
 
 
 def test_end_of_turn_hold_reward_is_zero_without_territory_change() -> None:
