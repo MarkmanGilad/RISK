@@ -37,10 +37,10 @@ Bellman-only control: the same epsilon-greedy behavior with a per-agent
 policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
 The current `main()` launcher is the fresh classic-DQN experiment
-`DQN_102`: it uses the globally configured reward shaping scale `0.1`, an
-epsilon schedule from `1.0` to `0.1` over 100 episodes, and `resume=False`.
-Its checkpoint and W&B namespaces are therefore new (`Checkpoints/DQN_102`
-and `DQN_102`), with an empty replay buffer.
+`DQN_103`: it uses the globally configured reward shaping scale `0.1`, an
+epsilon schedule from `1.0` to `0.01` over 100 episodes, and `resume=False`.
+Its checkpoint and W&B namespaces are therefore new (`Checkpoints/DQN_103`
+and `DQN_103`), with an empty replay buffer.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and future agents

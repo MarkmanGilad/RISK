@@ -67,7 +67,7 @@ ADQN_GRAD_DIAGNOSTIC_EVERY: Final[int] = 100
 # region Exploration
 
 EPSILON_START: Final[float] = 1.0
-EPSILON_END: Final[float] = 0.1
+EPSILON_END: Final[float] = 0.01
 EPSILON_DECAY_EPISODES: Final[int] = 100  # episode at which epsilon reaches EPSILON_END
 # endregion
 

@@ -16,6 +16,12 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-01
 
+- **Prepared a fresh low-exploration DQN rerun.** Set the DQN-family epsilon
+  floor to `0.01` (from `0.10`) and advanced the fresh launcher to `DQN_103`,
+  preserving `DQN_102`'s checkpoints and W&B namespace for comparison. Files:
+  `risk/learning/train_constants.py`, `risk/learning/trainer.py`,
+  `Docs/Trainer.md`, `Docs/ChangeLog.md`.
+
 - **Completed the planned reinforcement-policy contract for implementation.**
   `Docs/Reward.md` now requires continent reward to be both contested and
   frontier-only, states that a fully owned continent receives none, records
