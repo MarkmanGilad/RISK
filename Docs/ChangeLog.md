@@ -16,6 +16,22 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-07
 
+- **Closed reinforcement reward test gaps and removed dead helper.** Added
+  the four cases the reinforcement-revision test checklist called for but the
+  initial implementation pass missed: continent term is zero on a fully owned
+  continent, zero when the readiness gate hasn't been met, strictly larger
+  for a smaller contested continent than a larger one under matching
+  per-territory setup (South America vs. Asia), and the case where the
+  learner owns only one territory in a contested continent. Factored the
+  continent-component formula recomputation shared by these tests into
+  `_expected_continent_component` and generalized `_frontier_reinforcement`
+  to accept a custom target/enemy territory instead of hardcoding
+  Afghanistan/China/India. Also deleted `RewardCalculator
+  ._weakest_adjacent_enemy_armies`, left unused after `_reinforce` was
+  rewritten to compute weakest/sum enemy armies inline in one pass. Files:
+  `risk/learning/reward.py`, `Temp/tests/test_reward.py`. Validation:
+  `370 passed, 1 skipped` in the full suite.
+
 - **Implemented the reinforcement-only reward revision.** Reinforcement now
   uses weak-neighbour readiness, whole-frontier strength, gated contested-
   continent priority, interior placement, and one fixed partial-action split

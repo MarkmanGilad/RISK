@@ -241,15 +241,22 @@ def test_reinforce_interior_and_split_penalties_are_separate_components() -> Non
     )
 
 
-def _frontier_reinforcement(*, target_armies: int, enemy_armies: list[int], placed: int = 1):
+def _frontier_reinforcement(
+    *,
+    target: str = "Afghanistan",
+    enemies: list[str] | None = None,
+    target_armies: int,
+    enemy_armies: list[int],
+    placed: int = 1,
+):
     calc, env = _calc_env()
     topo = env.topology
     state = env.current_state().snapshot()
     state.current_player_index = 0
     state.owners = [0] * len(state.owners)
-    target = "Afghanistan"
     target_idx = topo.index_of(target)
-    enemies = ["China", "India"][: len(enemy_armies)]
+    if enemies is None:
+        enemies = ["China", "India"][: len(enemy_armies)]
     for enemy, armies in zip(enemies, enemy_armies):
         enemy_idx = topo.index_of(enemy)
         state.owners[enemy_idx] = 1
@@ -269,6 +276,22 @@ def _frontier_reinforcement(*, target_armies: int, enemy_armies: list[int], plac
         winner=None,
     )
     return calc, env, state, action, reward
+
+
+def _expected_continent_component(env, state, target: str, action: ReinforcementAction) -> float:
+    topo = env.topology
+    continent = topo.continent_of(target)
+    members = topo.continent_member_indices(continent)
+    owned = sum(state.owners[i] == 0 for i in members)
+    continent_armies = sum(state.armies[i] for i in members)
+    learner_armies = sum(state.armies[i] for i in members if state.owners[i] == 0)
+    return (
+        action.total
+        / (continent_armies + action.total)
+        * REWARD_REINFORCE_CONTINENT_SCALE
+        * (owned / len(members) + learner_armies / continent_armies)
+        / len(members)
+    )
 
 
 @pytest.mark.parametrize(
@@ -319,20 +342,69 @@ def test_reinforce_continent_reward_uses_before_state_shares() -> None:
     calc, env, state, action, _ = _frontier_reinforcement(
         target_armies=8, enemy_armies=[4], placed=3
     )
-    topo = env.topology
-    continent = topo.continent_of("Afghanistan")
-    members = topo.continent_member_indices(continent)
-    owned = sum(state.owners[i] == 0 for i in members)
-    continent_armies = sum(state.armies[i] for i in members)
-    learner_armies = sum(state.armies[i] for i in members if state.owners[i] == 0)
-    expected = (
-        action.total
-        / (continent_armies + action.total)
-        * REWARD_REINFORCE_CONTINENT_SCALE
-        * (owned / len(members) + learner_armies / continent_armies)
-        / len(members)
+    expected = _expected_continent_component(env, state, "Afghanistan", action)
+
+    assert calc.last_components["reinforce_continent"] == pytest.approx(expected)
+
+
+def test_reinforce_continent_reward_zero_when_continent_fully_owned() -> None:
+    # CentralAmerica borders Venezuela but sits outside South America, so the
+    # continent stays fully owned even though the destination still has an
+    # enemy neighbor for the readiness gate to pass.
+    calc, _, _, _, _ = _frontier_reinforcement(
+        target="Venezuela", enemies=["CentralAmerica"],
+        target_armies=8, enemy_armies=[4], placed=3,
     )
 
+    assert calc.last_components["reinforce_continent"] == pytest.approx(0.0)
+
+
+def test_reinforce_continent_reward_zero_when_not_ready() -> None:
+    calc, _, _, _, _ = _frontier_reinforcement(target_armies=4, enemy_armies=[4])
+
+    assert calc.last_components["reinforce_continent"] == pytest.approx(0.0)
+
+
+def test_reinforce_continent_reward_larger_for_smaller_contested_continent() -> None:
+    small_calc, small_env, small_state, small_action, _ = _frontier_reinforcement(
+        target="Venezuela", enemies=["Brazil"], target_armies=8, enemy_armies=[4], placed=3,
+    )
+    large_calc, large_env, large_state, large_action, _ = _frontier_reinforcement(
+        target="Afghanistan", enemies=["China"], target_armies=8, enemy_armies=[4], placed=3,
+    )
+    small_expected = _expected_continent_component(small_env, small_state, "Venezuela", small_action)
+    large_expected = _expected_continent_component(large_env, large_state, "Afghanistan", large_action)
+
+    assert small_calc.last_components["reinforce_continent"] == pytest.approx(small_expected)
+    assert large_calc.last_components["reinforce_continent"] == pytest.approx(large_expected)
+    assert small_expected > large_expected
+
+
+def test_reinforce_continent_reward_when_learner_owns_a_single_continent_territory() -> None:
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.current_player_index = 0
+    state.owners = [0] * len(state.owners)
+    continent = topo.continent_of("Afghanistan")
+    for terr in topo.territories_in(continent):
+        if terr != "Afghanistan":
+            state.owners[topo.index_of(terr)] = 1
+    state.armies[topo.index_of("China")] = 4
+    target_idx = topo.index_of("Afghanistan")
+    state.armies[target_idx] = 8 - 3
+    state.reinforcement_budget = 3
+    after = state.snapshot()
+    after.armies[target_idx] = 8
+    action = ReinforcementAction(placements={"Afghanistan": 3})
+
+    calc.compute(
+        action=action, info={}, before=state, after=after,
+        reward_player=0, done=False, winner=None,
+    )
+
+    expected = _expected_continent_component(env, state, "Afghanistan", action)
+    assert expected > 0.0
     assert calc.last_components["reinforce_continent"] == pytest.approx(expected)
 
 

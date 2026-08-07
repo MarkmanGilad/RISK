@@ -226,16 +226,6 @@ class RewardCalculator:
             if state.owners[self.topology.index_of(nb)] != pid
         )
 
-    def _weakest_adjacent_enemy_armies(self, state: State, idx: int) -> Optional[int]:
-        pid = state.owners[idx]
-        t = self.topology.territory_at(idx)
-        enemy_armies = [
-            state.armies[self.topology.index_of(nb)]
-            for nb in self.topology.neighbors(t)
-            if state.owners[self.topology.index_of(nb)] != pid
-        ]
-        return min(enemy_armies) if enemy_armies else None
-
     def _continent_push(self, state: State, territory: str, pid: int, scale: float) -> float:
         continent = self.topology.continent_of(territory)
         owned, total = self.topology.continent_owner_counts(state.owners, continent, pid)
