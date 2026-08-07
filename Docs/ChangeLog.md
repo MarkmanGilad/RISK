@@ -14,6 +14,52 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-07
+
+- **Planned a controlled PPO restart under the current DQN_103 task.** Added
+  the unimplemented `PPO_104` plan: current 15-column action representation,
+  shaping scale `0.1` with terminal `+100/-100`, rollout 1024, minibatch 256,
+  and value-loss coefficient `0.1`. The plan records PPO_041--045 evidence,
+  targets their measured critic-over-actor gradient dominance, defines
+  learner-turn review gates and diagnostic reactions, requires fresh
+  namespaces and robust evaluation, and separates a possible DQN-assisted PPO
+  fallback from the from-scratch comparison. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+## 2026-08-02
+
+- **Review-fixed the "simple draft" reinforcement plan and trimmed superseded
+  drafts.** `Docs/Reward.md`: fixed an arithmetic error in the worked-example
+  table ("dominates the whole local frontier" row: weak term was `+1.250`,
+  should be `+1.750`, so the raw/replay total is `+2.375 -> +0.238`, not
+  `+1.875 -> +0.188`); renamed the plan's `REWARD_REINFORCE_RATIO_CAP` to
+  `REWARD_REINFORCE_FRONTIER_RATIO_CAP` since it reused the name of an
+  existing, differently-scaled implemented constant; removed a duplicate
+  plain-English table that repeated the formula table right above it; added
+  an explicit note that `FortifyAction`'s continent-push is untouched by this
+  plan; clarified that the planned favorable-attack stop penalty replaces the
+  already-*implemented* unfinished-target mechanism, not a past plan; and
+  collapsed the two fully-superseded reinforcement drafts (detailed-draft and
+  launch-value) into short pointers, per this file's own stated policy of not
+  keeping full superseded formulas here. Still entirely unimplemented. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Set the planned reinforcement ratio ceiling to 7:1.** `Docs/Reward.md`
+  now caps both readiness ratios at 7:1, leaving room to prepare for a
+  stronger next target after attacking a weak neighbour while still ending
+  reinforcement reward growth for overwhelming stacks. Worked examples and
+  formulas now use the 7:1 ceiling; the continent term remains gated on 1.5:1
+  direct-neighbour readiness. Files: `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Condensed the planned reinforcement reward into an implementation policy.**
+  `Docs/Reward.md` now gives one table that ties each planned term to the
+  intended behavior: frontier readiness, local-frontier strength,
+  contested-continent focus, interior penalty, and per-decision split penalty.
+  It explicitly records that the split penalty is zero only when the entire
+  remaining budget is placed at once. Files: `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
 ## 2026-08-01
 
 - **Prepared a fresh low-exploration DQN rerun.** Set the DQN-family epsilon

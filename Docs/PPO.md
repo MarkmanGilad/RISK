@@ -496,3 +496,186 @@ a new `Temp/tests/test_ppo.py` per `Docs/Testing.md`'s convention:
   scheduler, or value-clipping in v1 — the reference example has all
   three; start without them and add only if training shows a specific need.
 - Do not change the reward function or action encoding.
+
+---
+
+## Planned PPO restart: PPO_104
+
+**Status: plan only; none of the changes in this section are implemented.**
+
+The historical PPO runs are not a clean test of PPO under the current task.
+They used the old 13-column graph/action representation, the old territory
+reward, and dense shaping at its unscaled effective strength.  The next PPO
+experiment must start fresh with the same current 15-column representation and
+implemented reward used by DQN_103.  It must not load an old PPO checkpoint or
+rollout.
+
+### Evidence from PPO_041--PPO_045
+
+The previous runs establish an optimization problem, not that PPO is incapable
+of learning the game:
+
+| Run | Main configuration/change | Observed result |
+|---|---|---|
+| `PPO_041` | rollout 1024, minibatch 128, LR `3e-4`, no KL stop | 0 wins through episode 599 |
+| `PPO_042` | rollout 256, minibatch 64, LR `3e-4` | began learning, but only 16% wins in episodes 1001--2000 |
+| `PPO_043` | added target-KL stop `0.02` | early-stopped about 94% of updates and regressed after its early peak |
+| `PPO_044` | reduced LR to `1e-4` | critic gradients remained extremely large; almost no wins |
+| `PPO_045` | replaced critic MSE optimization with Huber | improved steadily to about 24% late training wins, still far below DQN at a matched learner-turn budget |
+
+The decisive PPO_045 diagnostic is shared-encoder gradient imbalance.  Late in
+the run, its mean actor encoder gradient norm was about `4.8`, versus about
+`169` for the already-weighted critic encoder gradient: roughly 35:1 in favor
+of the critic.  The combined gradient was clipped on almost every optimizer
+step.  PPO_045's normalized entropy also fell to about `0.25` while the policy
+was still weak.  The restart therefore targets critic dominance, correlated
+small rollouts, and premature policy narrowing.
+
+Historical W&B runs:
+
+- `PPO_041`: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/1dvbyora`
+- `PPO_042`: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/y8xgfnqx`
+- `PPO_043`: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/1rku19b6`
+- `PPO_044`: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/xnfzycub`
+- `PPO_045`: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/dvskjyqh`
+
+### PPO_104 hypothesis
+
+Use the current `REWARD_SHAPING_SCALE = 0.1` with terminal rewards `+100/-100`.
+Unlike a global rescaling, this makes winning and losing ten times more
+important relative to dense shaping than in PPO_041--PPO_045.  It may slow
+initial discovery, but it should reduce accumulated dense-return scale, reduce
+critic pressure on the shared encoder, and prevent a high-shaping losing
+policy from looking successful.
+
+Do **not** use the proposed DQN experiment's `0.5` shaping with `+500/-500` for
+this PPO restart.  PPO normalizes advantages, so multiplying every reward by
+five is mostly removed from the actor update while making the critic's raw
+value target five times larger.  That works against the critic-stability goal.
+
+PPO is on-policy and cannot replay rare wins.  Increase rollout diversity so
+each update includes several games and terminal outcomes, and lower the
+critic's shared-encoder influence.  The initial restart configuration is:
+
+| Constant | PPO_104 value | Reason |
+|---|---:|---|
+| `REWARD_SHAPING_SCALE` | `0.1` | Current DQN_103 reward balance; terminal outcome remains important. |
+| terminal win/loss | `+100/-100` | Keep the current task and avoid global value-scale inflation. |
+| `PPO_ROLLOUT_LENGTH` | `1024` | More games, outcomes, seats, player counts, and rosters per on-policy update. |
+| `PPO_MINIBATCH_SIZE` | `256` | Lower-variance gradients; four minibatches per epoch. |
+| `PPO_EPOCHS` | `4` | At most four presentations of each on-policy sample. |
+| `PPO_LR` | `1e-4` | PPO_044/045's safer policy step; let KL diagnostics decide whether it is still too large. |
+| `PPO_CLIP_EPS` | `0.2` | Retain the established surrogate bound. |
+| `PPO_TARGET_KL` | `0.02` | Retain the corrected k3 early-stop safety check. |
+| `PPO_GAE_LAMBDA` | `0.95` | Retain the existing bias/variance tradeoff. |
+| `PPO_VALUE_LOSS_COEF` | **`0.1`** | Fivefold reduction from PPO_045 to address measured critic dominance. |
+| `PPO_VALUE_HUBER_BETA` | `1.0` | Retain bounded critic outlier gradients. |
+| `PPO_ENTROPY_COEF` | `0.01` | Keep one initial entropy setting; react only to measured collapse. |
+| `GRAD_CLIP_MAX_NORM` | `10.0` | Keep the existing safety bound and avoid a second confounding change. |
+
+The implemented reinforcement-reward revision later in `Docs/Reward.md` is
+still pending.  PPO_104 must use the reward that is actually implemented when
+the run is prepared, and its exact reward constants must be captured in W&B.
+Do not implement a reward redesign as part of PPO tuning: that would prevent a
+clean comparison with DQN_103 and make a PPO regression ambiguous.
+
+### Implementation steps
+
+1. Change only the PPO constants listed above in
+   `risk/learning/train_constants.py`; leave DQN-family behavior unchanged.
+2. Select `build_learner_agent("PPO", ctx)` in `trainer.py`, set
+   `RUN_ID = 104`, and use `resume=False`.
+3. Confirm the run resolves to new namespaces `Checkpoints/PPO_104` and
+   `PPO_104`, with a randomly initialized policy/value network and empty
+   rollout.
+4. Confirm the current graph/action widths are derived from the current
+   environment rather than hardcoded or adapted from a legacy PPO checkpoint.
+5. Add/update focused tests in the existing `Temp/tests/test_ppo.py` and
+   relevant constants/logger tests; do not add a new test file for this
+   subsystem.  Read `Docs/Testing.md` before changing or running tests.
+6. Update this document, `Docs/Trainer.md`, and `Docs/ChangeLog.md` with the
+   implemented launcher/configuration before starting the real run.
+7. Run the focused PPO/trainer/logger tests, then the full suite using the
+   project environment documented in `Docs/Testing.md`.
+8. Perform a short `use_wandb=False` smoke run that fills at least one complete
+   1024-turn rollout, executes an update, clears the rollout, and emits finite
+   diagnostics.
+9. Start the fresh W&B run only after the smoke run and configuration review
+   pass.
+
+### Required monitoring
+
+Compare by `cumulative_learner_turns` first, not only by episode.  PPO and DQN
+present samples to their optimizers at very different rates.  Review PPO_104 at
+approximately 250K, 500K, 1M, and 1.5M learner turns.
+
+Track at minimum:
+
+- training and deterministic evaluation win rate, including player-count and
+  opponent-roster breakdowns;
+- `ppo_policy_encoder_grad_norm` and `ppo_value_encoder_grad_norm`, including
+  their ratio;
+- total/head gradient norms and `ppo_gradient_clip_fraction`;
+- approximate KL, surrogate clip fraction, completed epochs, and KL early-stop
+  fraction;
+- normalized entropy, legal-action count, and forced-action fraction;
+- value Huber loss, raw value RMSE/MSE, return/value scale, and explained
+  variance;
+- cumulative learner turns, optimizer steps, processed samples, and wall time.
+
+The old 35:1 critic/actor encoder-gradient ratio is the primary failure signal.
+For PPO_104, a sustained ratio below 5:1 is the target; below 10:1 is acceptable
+early; a sustained ratio above 20:1 means the critic still controls the shared
+representation.  Do not react to one minibatch or episode--use rollout-update
+windows.
+
+Normalized entropy should not fall below about `0.4` while evaluation remains
+weak.  If it does, first confirm that the decline occurs across phases/action
+set sizes.  The next isolated experiment may then increase entropy pressure or
+normalize the entropy bonus by each decision's maximum categorical entropy;
+do not change entropy mid-run and call it the same experiment.
+
+If KL early stopping fires on most updates and completed epochs remain near or
+below one, the next isolated experiment should reduce PPO LR to `5e-5`.  Do not
+raise the KL target merely to force all epochs through.  If the critic remains
+dominant despite coefficient `0.1`, the next isolated value coefficient is
+`0.05`; separate actor/critic encoders or optimizers are later structural
+experiments, not part of PPO_104.
+
+### Continue/stop criteria
+
+- At 250K turns, require finite metrics, no sustained value/return explosion,
+  and evidence that the actor receives a meaningful shared-encoder gradient.
+- At 500K turns, require improving evaluation score or win rate and no
+  premature entropy collapse.  A low absolute win rate alone is not a stop
+  condition because the `0.1` regime can learn slowly.
+- At 1M turns, PPO_104 must clearly exceed PPO_045's roughly 24% late-training
+  win level or show a strong, consistent evaluation trend that justifies more
+  time.  Compare against DQN_103 at the same learner-turn budget as the main
+  target, not as an early mandatory pass threshold.
+- Continue to 1.5M turns when the robust evaluation trend is still positive.
+  Stop or fork an isolated hyperparameter correction when performance is flat
+  and a diagnostic identifies critic dominance, KL saturation, or entropy
+  collapse.
+
+Evaluation points contain only six games today and are too coarse for a final
+claim.  Promotion of a best PPO checkpoint or a claim of DQN parity requires a
+larger fixed suite (at least 100 games, balanced across seats, player counts,
+and representative rosters) plus held-out randomized games.
+
+### Success definition and fallback
+
+The restart succeeds operationally when it removes the old optimization
+pathology: the actor materially influences the encoder, entropy remains useful
+until the policy becomes competent, KL permits useful sample reuse, and
+evaluation improves at matched learner-turn budgets.  The long-run goal is to
+match or exceed DQN/Dueling evaluation performance, but PPO_104 is the first
+controlled test under the current task, not proof that one hyperparameter set
+must achieve parity.
+
+If a stable from-scratch PPO remains far behind after the planned budget, keep
+that result as the fair algorithm comparison.  The practical follow-up is a
+separate transfer experiment: behavior-clone PPO's policy from DQN_103 on a
+held-out state/action dataset, initialize the critic from observed returns,
+then fine-tune on-policy.  Label that run as DQN-assisted PPO; do not present it
+as a from-scratch PPO comparison.
