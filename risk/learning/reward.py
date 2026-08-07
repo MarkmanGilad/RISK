@@ -55,11 +55,14 @@ from risk.learning.train_constants import (
     REWARD_FORTIFY_CONTINENT_PUSH,
     REWARD_FORTIFY_TOWARD_FRONTIER,
     REWARD_OCCUPY_FORWARD_MOMENTUM,
-    REWARD_REINFORCE_ATTACK_READINESS_SCALE,
-    REWARD_REINFORCE_CONCENTRATION,
-    REWARD_REINFORCE_CONTINENT_PUSH,
-    REWARD_REINFORCE_NO_ENEMY_NEIGHBOR,
-    REWARD_REINFORCE_RATIO_CAP,
+    REWARD_REINFORCE_CONTINENT_SCALE,
+    REWARD_REINFORCE_INTERIOR,
+    REWARD_REINFORCE_READY_CAP,
+    REWARD_REINFORCE_READY_RATIO,
+    REWARD_REINFORCE_READY_SCALE,
+    REWARD_REINFORCE_SPLIT,
+    REWARD_REINFORCE_TOTAL_RATIO,
+    REWARD_REINFORCE_TOTAL_SCALE,
     REWARD_SHAPING_SCALE,
     REWARD_SHAPING_STEP_CAP,
     REWARD_TERMINAL_LOSS,
@@ -104,7 +107,8 @@ class RewardCalculator:
         terminal = self._terminal(reward_player, done, winner)
 
         trade_in = self._trade_in(action, before, reward_player)
-        reinforce = self._reinforce(action, before, after, reward_player)
+        reinforce_components = self._reinforce(action, before, after, reward_player)
+        reinforce = sum(reinforce_components.values())
         attack, eliminate, unfinished_attack = self._attack(
             action, info, before, after, reward_player
         )
@@ -116,6 +120,7 @@ class RewardCalculator:
         self.last_components = {
             "trade_in": trade_in,
             "reinforce": reinforce,
+            **{f"reinforce_{name}": value for name, value in reinforce_components.items()},
             "attack": attack - eliminate - unfinished_attack,
             "eliminate": eliminate,
             "unfinished_attack": unfinished_attack,
@@ -308,31 +313,67 @@ class RewardCalculator:
 
     # --- REINFORCE_PLACE ---------------------------------------------------
 
-    def _reinforce(self, action: Action, before: State, after: State, reward_player: int) -> float:
+    def _reinforce(
+        self, action: Action, before: State, after: State, reward_player: int
+    ) -> dict[str, float]:
+        components = {
+            "ready": 0.0,
+            "total": 0.0,
+            "continent": 0.0,
+            "interior": 0.0,
+            "split": 0.0,
+        }
         pid = before.current_player_index
         if pid != reward_player or not isinstance(action, ReinforcementAction):
-            return 0.0
+            return components
 
-        remaining_before = before.reinforcement_budget
-        reward = 0.0
         for terr, count in action.placements.items():
             idx = self.topology.index_of(terr)
+            enemy_armies = [
+                before.armies[self.topology.index_of(neighbor)]
+                for neighbor in self.topology.neighbors(terr)
+                if before.owners[self.topology.index_of(neighbor)] != pid
+            ]
+            if not enemy_armies:
+                components["interior"] += REWARD_REINFORCE_INTERIOR
+                continue
 
-            if self._is_frontier(before, idx) and remaining_before > 0:
-                reward += REWARD_REINFORCE_CONCENTRATION * (count / remaining_before)
+            armies_after = after.armies[idx]
+            weak_ratio = armies_after / min(enemy_armies)
+            total_ratio = armies_after / sum(enemy_armies)
+            components["ready"] += REWARD_REINFORCE_READY_SCALE * (
+                min(weak_ratio, REWARD_REINFORCE_READY_CAP)
+                - REWARD_REINFORCE_READY_RATIO
+            )
+            components["total"] += REWARD_REINFORCE_TOTAL_SCALE * max(
+                0.0,
+                min(total_ratio, REWARD_REINFORCE_READY_CAP)
+                - REWARD_REINFORCE_TOTAL_RATIO,
+            )
 
-            weakest = self._weakest_adjacent_enemy_armies(before, idx)
-            if weakest is not None:
-                ratio = after.armies[idx] / weakest
-                reward += REWARD_REINFORCE_ATTACK_READINESS_SCALE * (
-                    min(ratio, REWARD_REINFORCE_RATIO_CAP) - 1.0
+            continent = self.topology.continent_of(terr)
+            owned, continent_size = self.topology.continent_owner_counts(
+                before.owners, continent, pid
+            )
+            if weak_ratio >= REWARD_REINFORCE_READY_RATIO and 0 < owned < continent_size:
+                member_indices = self.topology.continent_member_indices(continent)
+                continent_armies = sum(before.armies[i] for i in member_indices)
+                learner_armies = sum(
+                    before.armies[i] for i in member_indices if before.owners[i] == pid
                 )
-            else:
-                reward += REWARD_REINFORCE_NO_ENEMY_NEIGHBOR
+                territory_share = owned / continent_size
+                army_share = learner_armies / continent_armies if continent_armies else 0.0
+                placement_fraction = count / (continent_armies + count)
+                components["continent"] += (
+                    placement_fraction
+                    * REWARD_REINFORCE_CONTINENT_SCALE
+                    * (territory_share + army_share)
+                    / continent_size
+                )
 
-            reward += self._continent_push(after, terr, pid, REWARD_REINFORCE_CONTINENT_PUSH)
-
-        return reward
+        if action.total < before.reinforcement_budget:
+            components["split"] = -REWARD_REINFORCE_SPLIT
+        return components
 
     # --- ATTACK -------------------------------------------------------------
 

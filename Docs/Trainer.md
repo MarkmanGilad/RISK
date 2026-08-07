@@ -151,6 +151,9 @@ At the end of each episode, the trainer logs one metrics row through
   PPO supplies exact counters while fixed-batch DQN derives samples from its
   optimizer-step count
 - `reward_component_*` totals from `RewardCalculator.last_components` and
+  reinforcement subcomponents `reinforce_ready`, `reinforce_total`,
+  `reinforce_continent`, `reinforce_interior`, and `reinforce_split`; these five
+  raw values sum to the combined `reinforce` component,
   `last_end_of_turn_components`
 - `player_count`, `roster`, `winner_seat`, and `winner_kind` — episode-level
   roster/result diagnostics. `roster` is readable text such as

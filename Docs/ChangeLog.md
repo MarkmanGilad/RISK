@@ -16,6 +16,63 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-07
 
+- **Implemented the reinforcement-only reward revision.** Reinforcement now
+  uses weak-neighbour readiness, whole-frontier strength, gated contested-
+  continent priority, interior placement, and one fixed partial-action split
+  penalty. Added separate raw diagnostic components and focused formula,
+  boundary, cap, split, and aggregation tests. No other action reward was
+  changed. Files: `risk/learning/train_constants.py`,
+  `risk/learning/reward.py`, `Temp/tests/test_reward.py`, `Docs/Reward.md`,
+  `Docs/Trainer.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`. Validation:
+  `366 passed, 1 skipped` in the full test suite.
+
+- **Halved the planned reinforcement continent scale for the 1K pilot.**
+  `Docs/Reward.md` now starts `REWARD_REINFORCE_CONTINENT_SCALE` at `5.00`
+  instead of `10.00`. Documented its board-specific upper bound below `2.19`,
+  the combined reinforcement bound below about `7.44`, and the requirement to
+  inspect the logged component distribution before considering an increase.
+  This remains unimplemented. Files: `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Clarified the reinforcement plan's split semantics and diagnostics.**
+  `Docs/Reward.md` now states that the fixed `-0.20` partial-action cost does
+  not guarantee split-invariant cumulative shaping, scopes split tests to the
+  exact per-action formula, and requires separate ready/total/continent/
+  interior/split W&B components whose raw sum equals the combined
+  reinforcement reward. Reward logic and constants remain unchanged; no code
+  is implemented. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Shortened the planned reinforcement constant names.** `Docs/Reward.md`
+  now uses compact `READY`, `TOTAL`, `CONTINENT`, `INTERIOR`, and `SPLIT`
+  names while retaining the common `REWARD_REINFORCE_` namespace. The new
+  `READY_CAP` name remains distinct from the existing, differently defined
+  `REWARD_REINFORCE_RATIO_CAP`. Formulas, values, and reward behavior are
+  unchanged. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Named and explained every reinforcement-plan tuning value.**
+  `Docs/Reward.md` now defines the `1.50` weak-neighbour readiness threshold
+  and `2.00` whole-frontier threshold as named constants, moves all planned
+  reinforcement constants ahead of the formula table, explains the policy
+  meaning of each value, and removes numeric literals from the reward and
+  shaping-cap formulas. Reward logic and initial values are unchanged. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Rewrote the planned reinforcement revision as one implementation
+  reference without changing its reward logic.** `Docs/Reward.md` now defines
+  every input once, gives each reward's complete condition and formula in one
+  table, states the exact aggregation/scaling order, and consolidates the
+  implementation and test checklist. Removed the worked calibration examples
+  and updated the fresh-run instruction to the post-DQN_103 1K pilot. Files:
+  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
+- **Simplified the planned reinforcement split penalty to one constant.**
+  `Docs/Reward.md` now applies a single raw `-0.20` penalty once to any
+  `ReinforcementAction` that places less than the visible remaining budget,
+  replacing the proposed `-0.05 x unused_armies` formula. Updated the named
+  constant, multi-destination scope, required boundary tests, and worked
+  examples; all other reinforcement-plan terms remain unchanged. This remains
+  unimplemented. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+
 - **Planned a controlled PPO restart under the current DQN_103 task.** Added
   the unimplemented `PPO_104` plan: current 15-column action representation,
   shaping scale `0.1` with terminal `+100/-100`, rollout 1024, minibatch 256,

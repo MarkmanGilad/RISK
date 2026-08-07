@@ -36,8 +36,14 @@ from risk.learning.train_constants import (
     REWARD_FORTIFY_CONTINENT_PUSH,
     REWARD_FORTIFY_TOWARD_FRONTIER,
     REWARD_OCCUPY_FORWARD_MOMENTUM,
-    REWARD_REINFORCE_CONTINENT_PUSH,
-    REWARD_REINFORCE_NO_ENEMY_NEIGHBOR,
+    REWARD_REINFORCE_CONTINENT_SCALE,
+    REWARD_REINFORCE_INTERIOR,
+    REWARD_REINFORCE_READY_CAP,
+    REWARD_REINFORCE_READY_RATIO,
+    REWARD_REINFORCE_READY_SCALE,
+    REWARD_REINFORCE_SPLIT,
+    REWARD_REINFORCE_TOTAL_RATIO,
+    REWARD_REINFORCE_TOTAL_SCALE,
     REWARD_SHAPING_SCALE,
     REWARD_TERMINAL_LOSS,
     REWARD_TERMINAL_WIN,
@@ -207,7 +213,7 @@ def test_trade_in_territory_match_bonus() -> None:
 # --- REINFORCE_PLACE --------------------------------------------------------
 
 
-def test_reinforce_no_enemy_neighbor_penalty() -> None:
+def test_reinforce_interior_and_split_penalties_are_separate_components() -> None:
     calc, env = _calc_env()
     topo = env.topology
     state = env.current_state().snapshot()
@@ -225,10 +231,187 @@ def test_reinforce_no_enemy_neighbor_penalty() -> None:
         reward_player=0, done=False, winner=None,
     )
 
-    continent = topo.continent_of(terr)
-    owned, total = topo.continent_owner_counts(after.owners, continent, 0)
-    expected = REWARD_REINFORCE_NO_ENEMY_NEIGHBOR + REWARD_REINFORCE_CONTINENT_PUSH * (owned / total) / total
+    expected = REWARD_REINFORCE_INTERIOR - REWARD_REINFORCE_SPLIT
     assert reward == pytest.approx(_shaping(expected))
+    assert calc.last_components["reinforce_interior"] == pytest.approx(
+        REWARD_REINFORCE_INTERIOR
+    )
+    assert calc.last_components["reinforce_split"] == pytest.approx(
+        -REWARD_REINFORCE_SPLIT
+    )
+
+
+def _frontier_reinforcement(*, target_armies: int, enemy_armies: list[int], placed: int = 1):
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.current_player_index = 0
+    state.owners = [0] * len(state.owners)
+    target = "Afghanistan"
+    target_idx = topo.index_of(target)
+    enemies = ["China", "India"][: len(enemy_armies)]
+    for enemy, armies in zip(enemies, enemy_armies):
+        enemy_idx = topo.index_of(enemy)
+        state.owners[enemy_idx] = 1
+        state.armies[enemy_idx] = armies
+    state.armies[target_idx] = target_armies - placed
+    state.reinforcement_budget = placed
+    after = state.snapshot()
+    after.armies[target_idx] = target_armies
+    action = ReinforcementAction(placements={target: placed})
+    reward = calc.compute(
+        action=action,
+        info={},
+        before=state,
+        after=after,
+        reward_player=0,
+        done=False,
+        winner=None,
+    )
+    return calc, env, state, action, reward
+
+
+@pytest.mark.parametrize(
+    ("target_armies", "expected"),
+    [
+        (4, REWARD_REINFORCE_READY_SCALE * (1.0 - REWARD_REINFORCE_READY_RATIO)),
+        (6, 0.0),
+        (8, REWARD_REINFORCE_READY_SCALE * (2.0 - REWARD_REINFORCE_READY_RATIO)),
+    ],
+)
+def test_reinforce_ready_reward_uses_weakest_enemy_threshold(
+    target_armies: int, expected: float
+) -> None:
+    calc, _, _, _, _ = _frontier_reinforcement(
+        target_armies=target_armies, enemy_armies=[4]
+    )
+    assert calc.last_components["reinforce_ready"] == pytest.approx(expected)
+
+
+def test_reinforce_total_reward_starts_above_combined_enemy_threshold() -> None:
+    at_threshold, _, _, _, _ = _frontier_reinforcement(
+        target_armies=16, enemy_armies=[4, 4]
+    )
+    above_threshold, _, _, _, _ = _frontier_reinforcement(
+        target_armies=24, enemy_armies=[4, 4]
+    )
+
+    assert at_threshold.last_components["reinforce_total"] == pytest.approx(0.0)
+    assert above_threshold.last_components["reinforce_total"] == pytest.approx(
+        REWARD_REINFORCE_TOTAL_SCALE * (3.0 - REWARD_REINFORCE_TOTAL_RATIO)
+    )
+
+
+def test_reinforce_ready_rewards_stop_growing_at_cap() -> None:
+    calc, _, _, _, _ = _frontier_reinforcement(target_armies=20, enemy_armies=[1])
+
+    assert calc.last_components["reinforce_ready"] == pytest.approx(
+        REWARD_REINFORCE_READY_SCALE
+        * (REWARD_REINFORCE_READY_CAP - REWARD_REINFORCE_READY_RATIO)
+    )
+    assert calc.last_components["reinforce_total"] == pytest.approx(
+        REWARD_REINFORCE_TOTAL_SCALE
+        * (REWARD_REINFORCE_READY_CAP - REWARD_REINFORCE_TOTAL_RATIO)
+    )
+
+
+def test_reinforce_continent_reward_uses_before_state_shares() -> None:
+    calc, env, state, action, _ = _frontier_reinforcement(
+        target_armies=8, enemy_armies=[4], placed=3
+    )
+    topo = env.topology
+    continent = topo.continent_of("Afghanistan")
+    members = topo.continent_member_indices(continent)
+    owned = sum(state.owners[i] == 0 for i in members)
+    continent_armies = sum(state.armies[i] for i in members)
+    learner_armies = sum(state.armies[i] for i in members if state.owners[i] == 0)
+    expected = (
+        action.total
+        / (continent_armies + action.total)
+        * REWARD_REINFORCE_CONTINENT_SCALE
+        * (owned / len(members) + learner_armies / continent_armies)
+        / len(members)
+    )
+
+    assert calc.last_components["reinforce_continent"] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("placed", [1, 5, 9])
+def test_reinforce_partial_action_always_gets_one_fixed_split_penalty(placed: int) -> None:
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.current_player_index = 0
+    state.owners = [0] * len(state.owners)
+    state.reinforcement_budget = 10
+    target = topo.territories[0]
+    target_idx = topo.index_of(target)
+    after = state.snapshot()
+    after.armies[target_idx] += placed
+
+    calc.compute(
+        action=ReinforcementAction(placements={target: placed}),
+        info={},
+        before=state,
+        after=after,
+        reward_player=0,
+        done=False,
+        winner=None,
+    )
+
+    assert calc.last_components["reinforce_split"] == pytest.approx(
+        -REWARD_REINFORCE_SPLIT
+    )
+
+
+def test_reinforce_full_budget_has_no_split_penalty() -> None:
+    calc, _, _, _, _ = _frontier_reinforcement(
+        target_armies=12, enemy_armies=[4], placed=10
+    )
+    assert calc.last_components["reinforce_split"] == pytest.approx(0.0)
+
+
+def test_reinforce_multi_destination_action_applies_split_penalty_once() -> None:
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.current_player_index = 0
+    state.owners = [0] * len(state.owners)
+    state.reinforcement_budget = 10
+    first, second = topo.territories[:2]
+    after = state.snapshot()
+    after.armies[topo.index_of(first)] += 1
+    after.armies[topo.index_of(second)] += 1
+
+    calc.compute(
+        action=ReinforcementAction(placements={first: 1, second: 1}),
+        info={},
+        before=state,
+        after=after,
+        reward_player=0,
+        done=False,
+        winner=None,
+    )
+
+    assert calc.last_components["reinforce_interior"] == pytest.approx(
+        2 * REWARD_REINFORCE_INTERIOR
+    )
+    assert calc.last_components["reinforce_split"] == pytest.approx(
+        -REWARD_REINFORCE_SPLIT
+    )
+
+
+def test_reinforce_logged_subcomponents_sum_to_combined_reward() -> None:
+    calc, _, _, _, reward = _frontier_reinforcement(
+        target_armies=24, enemy_armies=[4, 4], placed=3
+    )
+    component_sum = sum(
+        calc.last_components[f"reinforce_{name}"]
+        for name in ("ready", "total", "continent", "interior", "split")
+    )
+
+    assert calc.last_components["reinforce"] == pytest.approx(component_sum)
+    assert reward == pytest.approx(_shaping(component_sum))
 
 
 # --- ATTACK ------------------------------------------------------------------
