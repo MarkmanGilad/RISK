@@ -8,6 +8,7 @@ import torch
 
 from risk.learning.ppo_agent import PPO_Agent
 from risk.learning.rollout_buffer import RolloutBuffer
+from risk.learning.train_constants import PPO_VALUE_LOSS_COEF
 
 from .conftest import make_env
 
@@ -125,7 +126,7 @@ def test_kl_limit_stops_remaining_ppo_epochs() -> None:
     )
     assert agent.last_update_metrics["ppo_value_huber_loss"] <= agent.last_update_metrics["ppo_value_mse"]
     assert agent.last_update_metrics["ppo_weighted_value_loss"] == pytest.approx(
-        0.5 * agent.last_update_metrics["ppo_value_huber_loss"]
+        PPO_VALUE_LOSS_COEF * agent.last_update_metrics["ppo_value_huber_loss"]
     )
     assert agent.last_update_metrics["ppo_value_rmse"] ** 2 == pytest.approx(
         agent.last_update_metrics["ppo_value_mse"]
@@ -133,6 +134,19 @@ def test_kl_limit_stops_remaining_ppo_epochs() -> None:
     assert agent.last_update_metrics["ppo_grad_norm"] >= 0.0
     assert agent.last_update_metrics["ppo_policy_encoder_grad_norm"] >= 0.0
     assert agent.last_update_metrics["ppo_value_encoder_grad_norm"] >= 0.0
+    assert agent.last_update_metrics["ppo_value_to_policy_encoder_grad_ratio"] >= 0.0
+    assert torch.isfinite(torch.tensor(
+        agent.last_update_metrics["ppo_value_to_policy_encoder_grad_ratio"]
+    ))
+
+
+def test_value_to_policy_encoder_gradient_ratio_has_a_finite_floor() -> None:
+    agent = _agent(seed=52)
+
+    ratio = agent._value_to_policy_encoder_grad_ratio(3.0, 0.0)
+
+    assert ratio == pytest.approx(3e12)
+    assert torch.isfinite(torch.tensor(ratio))
 
 
 def test_cached_entry_rejects_changed_legal_action_index() -> None:

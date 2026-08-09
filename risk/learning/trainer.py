@@ -450,15 +450,17 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 105
+    # DQN_105 resume reference: RUN_ID = 105, resume=True,
+    # wandb_run_id="5b66yunb".
+    RUN_ID = 200
 
     ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-    agent = build_learner_agent("DQN", ctx)
+    agent = build_learner_agent("PPO", ctx)
     trainer = Trainer(
         RUN_ID,
         agent=agent,
-        resume=True,
-        wandb_run_id="5b66yunb",
+        use_wandb=False,
+        resume=False,
     )
     trainer.train(n_episodes=TRAIN_EPISODES)
     trainer.logger.finish()

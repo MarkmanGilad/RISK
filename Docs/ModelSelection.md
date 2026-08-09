@@ -6,22 +6,24 @@ and adjust before any code is written.
 ## Background: what motivated this
 
 `Checkpoints/DQN_103/evaluations/checkpoint_eval_ep006200_to_006700.json`
-(54 games/checkpoint against fixed heuristic rosters, see `Docs/ChooseAgent.md`)
-shows two separate findings once analyzed directly:
+(54 games/policy against fixed heuristic rosters, see `Docs/ChooseAgent.md`)
+contains 55 regular checkpoints plus five `best/` policy files. It shows two
+separate findings once analyzed directly:
 
 - Win rate drops monotonically with player count for essentially every
   checkpoint (3p ~85-100% down to 6p ~55-78% for the current top 5). That
   pattern is consistent and expected — more simultaneous opponents is a
   harder game — and is not the problem this plan addresses.
-- Within the 6-player suite, the top 3 non-leading checkpoints
+- Within the 6-player suite, the top 3 non-leading regular checkpoints
   (`ep006000`, `ep005650`, `ep004700`) are **tied at exactly 55.6% (10/18)**.
-  A chi-square test on win rate by seat across all 1,080 six-player games in
-  the run gives p=0.53 (seat position is noise), while a chi-square test on
-  *which heuristic wins* gives p<0.0001 (sentinel/empire are genuinely
-  tougher than raider/killbot, random never wins). In other words: the
-  suite has enough games to say something reliable about *opponent*
-  identity, but not enough to break ties between close checkpoints — 18
-  games per checkpoint per player count is too small a sample for that.
+  Across all 60 completed policies, that is 1,080 six-player games. A
+  chi-square test on learner win/loss by seat gives p=0.126 (no reliable seat
+  effect). Among the 505 games the learner lost, sentinel won 31.5% and empire
+  28.7%, versus 20.0% killbot, 19.8% raider, and 0% random; a goodness-of-fit
+  test against equal heuristic win shares gives p<0.0001. In other words: the
+  suite has enough games to say something reliable about *opponent* identity,
+  but not enough to break ties between close checkpoints — 18 games per
+  checkpoint per player count is too small a sample for that.
 
 This matches `Docs/PPO.md`'s own caveat: promoting a "best" checkpoint
 "requires a larger fixed suite (at least 100 games, balanced across seats,
@@ -81,12 +83,21 @@ seed list for "best candidate from each run" — no need to re-run
 
 ### Phase 1 — break the current DQN_103 tie (cheap, do first)
 
-Re-run `CheckpointEvaluator` for the tied checkpoints
+Run fresh, separate `CheckpointEvaluator` results for the tied checkpoints
 (`ep006000`, `ep005650`, `ep004700`, plus the two leaders `ep006700`,
-`ep005400` as a sanity check) with more seeds — e.g. 3 → 15-20 — so the
-6-player suite goes from 18 to 90-120 games per checkpoint. Pure reuse of
-existing code (`_DEFAULT_SEEDS` override), no new logic. This alone may
-resolve the tie without needing any cross-model matches at all.
+`ep005400` as a sanity check) with more seeds — e.g. 15-20 — so the
+6-player suite goes from 18 to 90-120 games per checkpoint. The existing
+JSON cannot be extended with new seeds: its metadata intentionally fixes
+`seeds=[0, 1, 2]`, and a differing seed list is rejected as incomparable.
+
+The existing public evaluator can select exactly one regular `epNNNNNN`
+directory with matching `min_episode` and `max_episode`, writing a separate
+JSON for that policy. It evaluates all four player-count suites, not just the
+6-player suite; with 20 seeds that is 360 games per candidate. Do not use the
+existing 54-game JSON as the output path for these runs. Compare the new
+per-policy files afterward, keeping the original result as the first-pass
+filter. This is still pure reuse of existing code, but it is not a cheap
+append to the current result file.
 
 ### Phase 2 — self-tournament among DQN_103's top candidates
 
@@ -104,10 +115,10 @@ Treat Phase 2 as a signal, not a verdict — cross-check against Phase 3.
 ### Phase 3 — anchored tournament (recommended primary signal)
 
 Same top 3-5 DQN_103 checkpoints, but replace 1-2 seats with fixed
-heuristic anchors — `sentinel` and `empire`, since the existing data already
-shows they're the two toughest opponents in the 6-player suite (30% and 27%
-of all losses across 58 checkpoints, vs. 19% each for raider/killbot, 0%
-for random). This keeps a fixed, already-characterized difficulty floor in
+heuristic anchors — `sentinel` and `empire`, since the current data shows they
+account for 31.5% and 28.7% of learner losses, versus about 20% each for
+raider/killbot and 0% for random. This keeps a fixed,
+already-characterized difficulty floor in
 every match so the ranking isn't purely self-referential, while still
 letting the candidate checkpoints compete directly. `AgentMatchEvaluator`
 already supports mixing `"checkpoint"` and `"heuristic"` participants in one
@@ -123,10 +134,12 @@ a single `AgentMatchEvaluator.evaluate()` call caps at 6 participants, and
 this phase alone has 5+ candidates before even adding DQN_103's own
 finalists, this needs **grouped matches, not one giant match**:
 
-- Run 2-3 matches of ≤6 participants each (mixing candidates so every pair
-  of architectures shares at least one match), then
-- combine per-participant win totals across matches into one leaderboard
-  (see "New tooling" below — this aggregation doesn't exist yet).
+- Run 2-3 matches of ≤6 participants each, using the same one or two
+  heuristic anchors in every match and mixing candidates so every architecture
+  shares at least one match with an anchor, then
+- compare each participant only across equivalent anchored schedules. Do not
+  sum raw wins from arbitrary different groups into one leaderboard: a policy
+  facing stronger or weaker co-participants has a different denominator.
 
 This phase is explicitly lower-confidence: different runs may have used
 different reward shaping, training length, or environment settings
@@ -144,8 +157,8 @@ are sampled per seed). Using the same `_DEFAULT_SEEDS = (0, 1, 2)` as
 match — nowhere near enough given Phase 1's finding that 18 games/checkpoint
 wasn't enough to separate close candidates. Recommend **20-30 seeds** per
 tournament match (matching the order of magnitude that gave the opponent-
-identity chi-square test real power in the existing 58-checkpoint dataset:
-1,080 six-player games total, ~180-216 games per opponent kind). That's
+identity test real power in the current 60-policy dataset: 1,080 six-player
+games total, 216 appearances for each heuristic kind). That's
 100-180 games per match for 5-6 participants — a multi-hour run per match at
 current step counts, so budget accordingly and consider trimming
 `max_steps`/game count only after checking Phase 1's result first.
@@ -154,16 +167,18 @@ current step counts, so budget accordingly and consider trimming
 
 1. **Match report/plot function**, analogous to
    `show_checkpoint_win_rate_chart` but for `AgentMatchEvaluator` JSON:
-   win rate per participant with a simple confidence interval (or the same
-   chi-square-vs-uniform check used above), plus the secondary metrics
-   `AgentMatchEvaluator` already records per game (`final_territory_count`,
+   win rate per participant with a simple confidence interval, plus the
+   secondary metrics `AgentMatchEvaluator` already records per game
+   (`final_territory_count`,
    `final_army_count`, `territories_conquered`, `agent_turns_survived`) as
    tie-breakers when win-rate differences aren't significant.
 2. **Cross-match leaderboard aggregator** for Phase 4: since one match caps
-   at 6 seats, sum wins/games per participant *name* across several match
-   JSON files into one ranked table. `AgentMatchEvaluator` itself has no
-   notion of "this participant also played in that other match file" — this
-   has to be a separate, small reducer over multiple result JSONs.
+   at 6 seats, aggregate only match JSONs with an identical anchored schedule
+   for a participant into one ranked table. The reducer must reject a mix of
+   unmatched rosters rather than silently summing their win totals.
+   `AgentMatchEvaluator` itself has no notion of "this participant also played
+   in that other match file" — this has to be a separate, small reducer over
+   multiple result JSONs.
 3. **Candidate-list builder**: given a run directory, read `best/manifest.json`
    (or a `CheckpointEvaluator` result JSON) and emit the top-K checkpoint
    paths as ready-to-use `AgentMatchEvaluator` participant dicts, instead of

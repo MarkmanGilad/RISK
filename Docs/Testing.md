@@ -81,7 +81,8 @@ cached action-index validation, grouped minibatches, checkpoint restoration,
 rollout-progress metrics, and the non-negative k3 KL estimate used for PPO
 early stopping. It also verifies diagnostic optimizer/sample counters and
 their checkpoint round trip, plus the separation between optimized Huber
-critic loss and raw MSE/RMSE diagnostics. `test_trainer.py` covers common compute metrics
+critic loss and raw MSE/RMSE diagnostics, and PPO_200's finite update-wide
+critic-to-actor encoder-gradient ratio. `test_trainer.py` covers common compute metrics
 and aggregation of every update in an episode, including `_max` fields.
 
 ## Conventions worth mirroring

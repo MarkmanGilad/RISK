@@ -52,6 +52,7 @@ class PPO_Agent(BaseAgent):
             "ppo_advantage_std",
             "ppo_policy_encoder_grad_norm",
             "ppo_value_encoder_grad_norm",
+            "ppo_value_to_policy_encoder_grad_ratio",
             "ppo_epochs_completed",
             "ppo_early_stopped",
             "ppo_early_stop_kl",
@@ -327,6 +328,17 @@ class PPO_Agent(BaseAgent):
     def _mean_tensor(self, values: Sequence[torch.Tensor]) -> float:
         return float(torch.stack(list(values)).mean())
 
+    def _weighted_tensor_mean(self, values: Sequence[tuple[torch.Tensor, int]]) -> float:
+        total_weight = sum(weight for _, weight in values)
+        if total_weight == 0:
+            return 0.0
+        return float(sum(value * weight for value, weight in values) / total_weight)
+
+    def _value_to_policy_encoder_grad_ratio(
+        self, value_norm: float, policy_norm: float
+    ) -> float:
+        return value_norm / max(policy_norm, 1e-12)
+
     def learn(self, *, reached_max_steps: bool = False) -> list[float]:
         if reached_max_steps:
             self.rollout_buffer.mark_last_boundary()
@@ -357,9 +369,8 @@ class PPO_Agent(BaseAgent):
         policy_head_grad_norms: list[torch.Tensor] = []
         value_head_grad_norms: list[torch.Tensor] = []
         clipped_gradients: list[torch.Tensor] = []
-        policy_encoder_grad_norm = torch.tensor(0.0, device=self.device)
-        value_encoder_grad_norm = torch.tensor(0.0, device=self.device)
-        measured_component_encoder_grads = False
+        policy_encoder_component_norms: list[tuple[torch.Tensor, int]] = []
+        value_encoder_component_norms: list[tuple[torch.Tensor, int]] = []
         completed_epochs = 0
         early_stopped = False
         early_stop_kl = 0.0
@@ -392,25 +403,33 @@ class PPO_Agent(BaseAgent):
                 actor_loss = policy_loss - entropy_bonus
                 loss = actor_loss + weighted_value_loss
                 self.optimizer.zero_grad()
-                if not measured_component_encoder_grads:
-                    encoder_parameters = tuple(self.net.encoder.parameters())
-                    policy_encoder_grad_norm = self._detached_gradient_norm(
-                        torch.autograd.grad(
-                            actor_loss,
-                            encoder_parameters,
-                            retain_graph=True,
-                            allow_unused=True,
-                        )
+                encoder_parameters = tuple(self.net.encoder.parameters())
+                policy_encoder_component_norms.append(
+                    (
+                        self._detached_gradient_norm(
+                            torch.autograd.grad(
+                                actor_loss,
+                                encoder_parameters,
+                                retain_graph=True,
+                                allow_unused=True,
+                            )
+                        ),
+                        len(indices),
                     )
-                    value_encoder_grad_norm = self._detached_gradient_norm(
-                        torch.autograd.grad(
-                            weighted_value_loss,
-                            encoder_parameters,
-                            retain_graph=True,
-                            allow_unused=True,
-                        )
+                )
+                value_encoder_component_norms.append(
+                    (
+                        self._detached_gradient_norm(
+                            torch.autograd.grad(
+                                weighted_value_loss,
+                                encoder_parameters,
+                                retain_graph=True,
+                                allow_unused=True,
+                            )
+                        ),
+                        len(indices),
                     )
-                    measured_component_encoder_grads = True
+                )
                 loss.backward()
                 encoder_grad_norms.append(self._gradient_norm("encoder"))
                 policy_head_grad_norms.append(self._gradient_norm("policy_heads"))
@@ -447,6 +466,8 @@ class PPO_Agent(BaseAgent):
         explained = 1 - torch.var(returns - old_values) / (torch.var(returns) + 1e-8)
         mean_value_mse = sum(value_mse_losses) / len(value_mse_losses)
         mean_value_huber_loss = sum(value_huber_losses) / len(value_huber_losses)
+        policy_encoder_grad_norm = self._weighted_tensor_mean(policy_encoder_component_norms)
+        value_encoder_grad_norm = self._weighted_tensor_mean(value_encoder_component_norms)
         self.last_update_metrics = {
             "ppo_approx_kl": sum(kls) / len(kls),
             "ppo_clip_fraction": sum(clips) / len(clips),
@@ -482,8 +503,13 @@ class PPO_Agent(BaseAgent):
             "ppo_encoder_grad_norm": self._mean_tensor(encoder_grad_norms),
             "ppo_policy_head_grad_norm": self._mean_tensor(policy_head_grad_norms),
             "ppo_value_head_grad_norm": self._mean_tensor(value_head_grad_norms),
-            "ppo_policy_encoder_grad_norm": float(policy_encoder_grad_norm),
-            "ppo_value_encoder_grad_norm": float(value_encoder_grad_norm),
+            "ppo_policy_encoder_grad_norm": policy_encoder_grad_norm,
+            "ppo_value_encoder_grad_norm": value_encoder_grad_norm,
+            "ppo_value_to_policy_encoder_grad_ratio": (
+                self._value_to_policy_encoder_grad_ratio(
+                    value_encoder_grad_norm, policy_encoder_grad_norm
+                )
+            ),
             "ppo_gradient_clip_fraction": self._mean_tensor(clipped_gradients),
             "ppo_epochs_completed": float(completed_epochs),
             "ppo_early_stopped": float(early_stopped),

@@ -21,7 +21,7 @@ the agent against a temporary sizing environment, then passes it into
 
 ```python
 ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-agent = build_learner_agent("DQN", ctx)
+agent = build_learner_agent("PPO", ctx)
 
 trainer = Trainer(RUN_ID, agent=agent)
 trainer.train(n_episodes=TRAIN_EPISODES)
@@ -36,13 +36,14 @@ Dueling-comparable epsilon-greedy-Q behavior. `PQN_e0` is the matching
 Bellman-only control: the same epsilon-greedy behavior with a per-agent
 policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
-The current `main()` launcher resumes the classic-DQN experiment
-`DQN_105`: it uses reward shaping scale `0.3` and terminal rewards
-`+300/-300`, and changes reinforcement ready/total shaping to marginal
-before/after improvement. It uses an epsilon schedule from `1.0` to `0.01`
-over 100 episodes, restores the latest full checkpoint from
-`Checkpoints/DQN_105`, and reconnects to W&B run `5b66yunb`. The restart
-checkpoint is episode 400.
+The current `main()` launcher is the local `PPO_200` smoke configuration: it
+builds `PPO_Agent`, starts with no checkpoint (`resume=False`), writes under
+`Checkpoints/PPO_200`, and disables W&B (`use_wandb=False`). It uses the shared
+DQN_105 reward regime but the PPO_200 rollout/value settings documented in
+`Docs/PPO.md`. This is the required pre-W&B validation run, not a continuation
+of DQN_105. The prior DQN_105 resume values (`RUN_ID = 105`,
+`resume=True`, W&B id `5b66yunb`) remain as comments in `main()` for later
+restoration.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and future agents

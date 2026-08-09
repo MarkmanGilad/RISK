@@ -16,6 +16,95 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-09
 
+- **Configured the trainer entry point for PPO_200's local smoke run.**
+  `trainer.py` now builds `PPO_Agent` with run id 200, an empty fresh start,
+  and W&B disabled; it leaves the DQN_105 resume id and W&B id as comments for
+  later restoration. Updated the trainer and PPO launch documentation. Files:
+  `risk/learning/trainer.py`, `Docs/Trainer.md`, `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Implemented PPO_200's PPO-only optimization and diagnostic changes without
+  touching the active DQN_105 launcher.** Set PPO rollout/minibatch sizes to
+  `1024`/`256` and value-loss coefficient to `0.1`; entropy regularization
+  remains enabled at `0.01`. `PPO_Agent` now measures policy and weighted-value
+  encoder gradients on every executed minibatch, reports their sample-weighted
+  update means, and logs a finite
+  `ppo_value_to_policy_encoder_grad_ratio`. Added focused PPO coverage for the
+  changed loss coefficient and normal/zero-policy-gradient ratio behavior.
+  `trainer.py`, reward constants, and non-PPO learners are unchanged. Files:
+  `risk/learning/train_constants.py`, `risk/learning/ppo_agent.py`,
+  `Temp/tests/test_ppo.py`, `Docs/PPO.md`, `Docs/Testing.md`,
+  `Docs/ChangeLog.md`.
+
+- **Completed a final PPO_200 plan-readiness pass, doc only.** Repaired the
+  inline `PPO_Agent.unweighted_update_metrics` reference, removed a stale
+  reference to the old `0.1` reward regime, and made matched-turn DQN_105 the
+  primary comparison target, retaining DQN_103 only as a historical fallback
+  until DQN_105 reaches the budget. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Closed four implementation-readiness gaps in the PPO_200 plan, doc only.**
+  A re-read of `Docs/PPO.md` after the previous revision found: the new
+  `ppo_value_to_policy_encoder_grad_ratio` metric was never added to
+  `PPO_Agent.unweighted_update_metrics`, which would have made `Trainer`
+  weight it like a raw per-minibatch loss instead of averaging it with equal
+  per-update weight like its two input norms; "Trainer notes for PPO" still
+  described a "third commented block next to DQN/Dueling" in `main()` that
+  the newer PPO_200 wiring comment already contradicts; no test was named for
+  the new ratio's `1e-12` epsilon-floor behavior; and the "up to 32
+  `autograd.grad` calls" figure was stated as fact rather than specific to
+  today's `PPO_ROLLOUT_LENGTH`/`PPO_MINIBATCH_SIZE`/`PPO_EPOCHS`. All four are
+  now fixed in the doc: implementation step 2 requires adding the ratio to
+  `unweighted_update_metrics`; "Trainer notes for PPO" is marked superseded
+  and points at the PPO_200 wiring comment; a new test 15 (and a matching note
+  in step 6) requires exercising the epsilon floor; and the call-count
+  sentence is qualified as specific to the current constants. No constants,
+  agent code, or trainer wiring changed. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Tightened the PPO_200 diagnostic plan, doc only.** The planned
+  update-wide encoder-gradient ratio now has an explicit metric name and a
+  finite zero-policy-gradient guard, and the plan corrects the full-update
+  diagnostic cost to at most 32 `autograd.grad` calls (two per executed
+  minibatch), rather than an ambiguous count of 16. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Renamed the planned PPO restart from `PPO_104` to `PPO_200` and added
+  reviewer comments to the plan, doc only, no code.** `Docs/PPO.md` now uses a
+  fresh `PPO_200` numbering block (separate from the shared DQN/Dueling
+  run-id sequence and from the legacy `PPO_041-045` runs) throughout its
+  restart section. Added inline `**Comment:**` notes: launching `PPO_200` in
+  `trainer.py`'s `main()` replaces `DQN_105`'s current resume configuration
+  rather than running alongside it (keep `DQN_105`'s `RUN_ID`/`wandb_run_id`
+  as a comment when swapping it out); `train_constants.py` still holds the
+  PPO_045 values today, only three constants actually need to change;
+  aggregating the actor/critic encoder-gradient diagnostic across every
+  minibatch (weighted by minibatch size) instead of only the update's
+  first is a real, bounded compute-cost increase and a correctness fix to
+  the measurement, not just more logging; a fivefold `PPO_VALUE_LOSS_COEF`
+  cut needs explained-variance/value-RMSE monitoring alongside the
+  gradient-ratio target to catch an undertrained critic; and episode-counted
+  checkpoint/eval cadence should be sanity-checked against the 4x larger
+  rollout during the smoke run. No constants, agent code, or trainer wiring
+  changed. Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Kept the planned PPO_104 restart on DQN_105's current shared reward
+  regime.** The PPO plan no longer proposes changing global reward constants:
+  it retains shaping `0.3` and terminal `+300/-300` while DQN_105 remains the
+  promising active run. PPO_104 now limits planned changes to PPO rollout and
+  optimization settings, update-wide encoder-gradient diagnostics, and its
+  fresh launcher; it will not confound PPO tuning with a reward change. Files:
+  `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Corrected and tightened the model-selection plan after the five DQN_103
+  best-policy evaluations were appended.** `Docs/ModelSelection.md` now uses
+  the current 60-policy/1,080-six-player-game counts, corrects the seat test
+  to p=0.126, records sentinel/empire's 60.2% share of learner losses, and
+  makes Phase 1 use fresh seed-compatible result files rather than trying to
+  append to metadata-incompatible JSON. It also prevents Phase 4 from
+  aggregating raw win rates across unequal tournament rosters. Files:
+  `Docs/ModelSelection.md`, `Docs/ChangeLog.md`.
+
 - **Added a model-selection plan (`Docs/ModelSelection.md`), doc only, no
   code.** Written after analyzing the DQN_103 checkpoint-eval JSON directly:
   the top 3 non-leading 6-player checkpoints are tied at exactly 55.6%

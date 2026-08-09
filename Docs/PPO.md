@@ -330,16 +330,22 @@ change a max-step cutoff's `done` value: `Trainer` already leaves it `False`,
 which preserves DQN's and PPO's valid bootstrap. `Trainer` passes
 `reached_max_steps=True` to the existing `learn()` call for that transition;
 PPO records its internal `gae_boundary` marker there without changing
-`remember()` or branching the trainer on PPO. Build
-`PPO_Agent` in the caller (or in `trainer.py`'s `main()` as a third commented
-block next to DQN/Dueling), pass it into the existing `Trainer`, and rely on
+`remember()` or branching the trainer on PPO. Build `PPO_Agent` in the caller
+and pass it into the existing `Trainer`, relying on
 `label`/`agent_class`/`model_class` in the checkpoint path and W&B config to
 distinguish it. Use `resume=False` and a fresh run id for the first PPO run,
 same as Dueling.
 
+**Superseded (2026-08-09):** `trainer.py`'s `main()` does not actually have a
+commented second/third agent block today — it only ever builds one active
+agent. The paragraph above's "third commented block next to DQN/Dueling"
+described an aspiration, not the current file. See "Planned PPO restart:
+PPO_200"'s "Comment (wiring)" below for the concrete decision: selecting
+PPO_200 in `main()` replaces `DQN_105`'s active configuration outright: keep
+`DQN_105`'s `RUN_ID`/`wandb_run_id` as a comment rather than a live block.
+
 Beyond the optional-metrics hook, the trainer loop should stay unchanged.
-Adding a commented PPO import and construction block in `main()` is fine when
-implementation starts; changing `Trainer.train(...)` to branch on PPO is not.
+Changing `Trainer.train(...)` to branch on PPO is not permitted.
 
 ---
 
@@ -436,6 +442,12 @@ a new `Temp/tests/test_ppo.py` per `Docs/Testing.md`'s convention:
     optimizer/sample counts plus bounded normalized entropy.
 14. The optimized Huber critic loss remains below raw MSE, while the historical
     `ppo_value_loss` key and RMSE continue to report MSE-scale accuracy.
+15. **(Added for the PPO_200 restart, not part of v1.)**
+    `ppo_value_to_policy_encoder_grad_ratio` is present and finite in
+    `last_update_metrics` under normal conditions, and its `1e-12` epsilon
+    floor is exercised by a case with a (near-)zero policy-encoder gradient,
+    confirming a large-but-finite ratio rather than `NaN`/`Inf` or a silently
+    substituted zero. See the PPO_200 restart section's implementation step 6.
 
 ---
 
@@ -499,16 +511,34 @@ a new `Temp/tests/test_ppo.py` per `Docs/Testing.md`'s convention:
 
 ---
 
-## Planned PPO restart: PPO_104
+## Planned PPO restart: PPO_200
 
-**Status: plan only; none of the changes in this section are implemented.**
+**Status: PPO-specific configuration and diagnostics are implemented. The
+`PPO_200` launcher is configured for its required local smoke run with W&B
+disabled; it must pass before a fresh W&B run is enabled.**
+
+**Confirmed (2026-08-09):** run id `PPO_200`, not `PPO_104`/`PPO_106`. It
+deliberately starts a fresh numbering block, separate from the shared
+DQN/Dueling run-id sequence (`DQN_105` is the latest of those) and from the
+legacy `PPO_041--045` runs, so a chart name or checkpoint directory alone
+signals which era a run belongs to.
+
+**Comment (wiring):** `trainer.py`'s `main()` only ever selects one active
+agent — there is currently no commented second block despite earlier text in
+this doc assuming one. Launching `PPO_200` there **replaces** `DQN_105`'s
+current resume configuration (`resume=True`, pinned
+`wandb_run_id="5b66yunb"`, restart checkpoint episode 400 — see
+`Docs/ChangeLog.md`'s 2026-08-09 entry), it does not run alongside it. When
+implementing step 3 below, keep `DQN_105`'s exact `RUN_ID`/`wandb_run_id` as a
+commented reference next to the new PPO block rather than deleting it outright,
+so resuming `DQN_105` later doesn't require re-deriving those values.
 
 The historical PPO runs are not a clean test of PPO under the current task.
 They used the old 13-column graph/action representation, the old territory
 reward, and dense shaping at its unscaled effective strength.  The next PPO
 experiment must start fresh with the same current 15-column representation and
-implemented reinforcement formulas used by DQN_104, while using the PPO reward
-scale specified below. It must not load an old PPO checkpoint or rollout.
+the current shared DQN_105 reward regime, including its implemented
+reinforcement formulas.  It must not load an old PPO checkpoint or rollout.
 
 ### Evidence from PPO_041--PPO_045
 
@@ -539,28 +569,23 @@ Historical W&B runs:
 - `PPO_044`: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/xnfzycub`
 - `PPO_045`: `https://wandb.ai/giladmarkman/Risk-GNN-DQN/runs/dvskjyqh`
 
-### PPO_104 hypothesis
+### PPO_200 hypothesis
 
-Use `REWARD_SHAPING_SCALE = 0.1` with terminal rewards `+100/-100`.
-Unlike a global rescaling, this makes winning and losing ten times more
-important relative to dense shaping than in PPO_041--PPO_045.  It may slow
-initial discovery, but it should reduce accumulated dense-return scale, reduce
-critic pressure on the shared encoder, and prevent a high-shaping losing
-policy from looking successful.
-
-Do **not** reuse DQN_104's `0.5` shaping with `+500/-500` for this PPO restart.
-PPO normalizes advantages, so multiplying every reward by
-five is mostly removed from the actor update while making the critic's raw
-value target five times larger.  That works against the critic-stability goal.
+Keep the current shared DQN_105 reward constants unchanged: dense shaping
+scale `0.3` and terminal rewards `+300/-300`.  DQN_105 is currently the most
+promising DQN run, so PPO_200 must not alter the general reward regime while it
+is still training.  This makes PPO_200 a comparison under the same live task,
+not a reward experiment.  Any later PPO-only reward profile would be a
+separately planned experiment, because the present reward calculator is shared
+by every learner.
 
 PPO is on-policy and cannot replay rare wins.  Increase rollout diversity so
 each update includes several games and terminal outcomes, and lower the
 critic's shared-encoder influence.  The initial restart configuration is:
 
-| Constant | PPO_104 value | Reason |
+| Constant | PPO_200 value | Reason |
 |---|---:|---|
-| `REWARD_SHAPING_SCALE` | `0.1` | Restore the DQN_103 reward balance; terminal outcome remains important. |
-| terminal win/loss | `+100/-100` | Avoid DQN_104's global value-scale inflation. |
+| shared reward regime | DQN_105: shaping `0.3`, terminal `+300/-300` | Keep the currently promising DQN task unchanged; do not confound PPO tuning with a reward change. |
 | `PPO_ROLLOUT_LENGTH` | `1024` | More games, outcomes, seats, player counts, and rosters per on-policy update. |
 | `PPO_MINIBATCH_SIZE` | `256` | Lower-variance gradients; four minibatches per epoch. |
 | `PPO_EPOCHS` | `4` | At most four presentations of each on-policy sample. |
@@ -573,47 +598,130 @@ critic's shared-encoder influence.  The initial restart configuration is:
 | `PPO_ENTROPY_COEF` | `0.01` | Keep one initial entropy setting; react only to measured collapse. |
 | `GRAD_CLIP_MAX_NORM` | `10.0` | Keep the existing safety bound and avoid a second confounding change. |
 
-The reinforcement-reward revision in `Docs/Reward.md` is implemented. PPO_104
-must retain those formulas, and its exact reward constants must be captured in W&B.
-Do not implement a reward redesign as part of PPO tuning: that would prevent a
-clean comparison with DQN_103 and make a PPO regression ambiguous.
+**Comment (current code state, checked 2026-08-09):** `train_constants.py`
+now matches the PPO_200 target: `PPO_ROLLOUT_LENGTH=1024`,
+`PPO_MINIBATCH_SIZE=256`, and `PPO_VALUE_LOSS_COEF=0.1`. `PPO_CLIP_EPS`, `PPO_TARGET_KL`,
+`PPO_GAE_LAMBDA`, `PPO_VALUE_HUBER_BETA`, `PPO_ENTROPY_COEF`, `PPO_LR`, and
+`GRAD_CLIP_MAX_NORM` already match this table today and need no change.
+`GRAD_CLIP_MAX_NORM` is also shared with `GNN_DQN_Agent`/`Dueling_DQN_Agent`/
+`PQN_Agent`/`ADQN_Agent`, so leaving it untouched is required, not just
+convenient, to avoid a cross-agent confound.
+
+The reinforcement-reward revision in `Docs/Reward.md` is implemented. PPO_200
+must retain the current DQN_105 formulas and constants, and capture their exact
+values in W&B.  Do not implement a reward redesign as part of PPO tuning: that
+would alter DQN_105 and make a PPO regression ambiguous.
 
 ### Implementation steps
 
 1. Change only the PPO constants listed above in
-   `risk/learning/train_constants.py`; leave DQN-family behavior unchanged.
-2. Select `build_learner_agent("PPO", ctx)` in `trainer.py`, set
-   `RUN_ID = 104`, and use `resume=False`.
-3. Confirm the run resolves to new namespaces `Checkpoints/PPO_104` and
-   `PPO_104`, with a randomly initialized policy/value network and empty
+   `risk/learning/train_constants.py`; do not modify any shared reward
+   constant or DQN-family setting.
+2. Change `PPO_Agent`'s encoder-component diagnostics to aggregate every
+   executed minibatch in an update (weighted by minibatch size), rather than
+   reporting only the first minibatch.  Log a finite critic-to-actor ratio so
+   the primary PPO_045 failure signal is representative of the full rollout.
+
+   Name the new metric `ppo_value_to_policy_encoder_grad_ratio` and calculate
+   it as the update-wide value norm divided by
+   `max(update_wide_policy_norm, 1e-12)`.  This preserves a finite, visible
+   failure signal if the policy encoder gradient vanishes; do not silently drop
+   the ratio or substitute zero in that case. Add
+   `"ppo_value_to_policy_encoder_grad_ratio"` to
+   `PPO_Agent.unweighted_update_metrics` alongside its two inputs
+   (`ppo_policy_encoder_grad_norm`/`ppo_value_encoder_grad_norm`, already
+   listed there): it is a per-update-computed ratio, not a raw per-minibatch
+   loss, so `Trainer` must average it across multiple rollout updates in one
+   episode with equal per-update weight, not weighted by
+   `ppo_optimizer_steps_per_update` the way loss/return fields are
+   (`Docs/Trainer.md`'s "rollout-level fields remain equally weighted").
+   Omitting it from that set would not error; it would silently mis-weight the
+   ratio the same way its inputs would be mis-weighted if they were omitted.
+
+   **Comment (cost/design of this change):** today's code
+   (`measured_component_encoder_grads` in `ppo_agent.py`) runs the two
+   diagnostic `torch.autograd.grad(..., retain_graph=True)` calls exactly once
+   per update, on the update's first minibatch. That minibatch always has
+   KL≈0 by construction (nothing has moved yet), so it is the *least*
+   representative sample of the drift-induced imbalance the diagnostic exists
+   to catch — this is a correctness fix to the measurement, not only more
+   logging. Running it on every minibatch instead of once raises the diagnostic
+   cost from two `autograd.grad` calls to up to 32 per update at the current
+   PPO_200 sizing: two component gradients for each of `PPO_EPOCHS *
+   ceil(PPO_ROLLOUT_LENGTH / PPO_MINIBATCH_SIZE)` = `4 * 4` minibatches (fewer
+   if KL early-stops). That figure is specific to today's
+   `PPO_ROLLOUT_LENGTH`/`PPO_MINIBATCH_SIZE`/`PPO_EPOCHS` values and will
+   change if any of the three does later — it is not a fixed property of the
+   design. That is a real, bounded compute-cost increase, accepted here
+   because the two calls are diagnostic-only (no parameter update depends on
+   them) and because an update-wide reading is the only way to tell whether
+   critic dominance holds across the whole rollout rather than just its
+   least-drifted minibatch. Weight each minibatch's contribution by its
+   executed sample count (`len(indices)`) rather than averaging minibatches
+   equally — at `PPO_ROLLOUT_LENGTH=1024` and `PPO_MINIBATCH_SIZE=256` every
+   minibatch happens to be the same size, so the weighting is inert at these
+   particular values, but keep it so the code stays correct if either constant
+   changes later.
+3. Select `build_learner_agent("PPO", ctx)` in `trainer.py`, set
+   `RUN_ID = 200`, and use `resume=False`. **Implemented for the local smoke
+   run:** `main()` now builds PPO_200 with `use_wandb=False`; retain that until
+   the smoke validation passes, then enable a fresh W&B run without a run id.
+
+   **Comment:** this step also touches `Temp/tests/test_ppo.py`, which is not
+   separately listed but is covered by step 6. Specifically,
+   `test_kl_limit_stops_remaining_ppo_epochs` hardcodes the current
+   coefficient (`ppo_weighted_value_loss == 0.5 * ppo_value_huber_loss`); once
+   `PPO_VALUE_LOSS_COEF` becomes `0.1` that assertion must change to match, or
+   it will fail for the right reason but an unexpected one if not anticipated.
+4. Confirm the run resolves to new namespaces `Checkpoints/PPO_200` and
+   `PPO_200`, with a randomly initialized policy/value network and empty
    rollout.
-4. Confirm the current graph/action widths are derived from the current
+5. Confirm the current graph/action widths are derived from the current
    environment rather than hardcoded or adapted from a legacy PPO checkpoint.
-5. Add/update focused tests in the existing `Temp/tests/test_ppo.py` and
+6. Add/update focused tests in the existing `Temp/tests/test_ppo.py` and
    relevant constants/logger tests; do not add a new test file for this
-   subsystem.  Read `Docs/Testing.md` before changing or running tests.
-6. Update this document, `Docs/Trainer.md`, and `Docs/ChangeLog.md` with the
+   subsystem.  Read `Docs/Testing.md` before changing or running tests. At
+   minimum, update the existing `test_kl_limit_stops_remaining_ppo_epochs`
+   assertion for the new `PPO_VALUE_LOSS_COEF` (step 3's comment above), and
+   add a new case exercising `ppo_value_to_policy_encoder_grad_ratio`
+   end to end: assert it is present and finite in `last_update_metrics` under
+   normal conditions, and separately construct or mock a case where the
+   policy-encoder gradient is (near) zero to confirm the ratio reports a
+   large-but-finite value through the `1e-12` floor rather than `NaN`/`Inf`
+   or a silently substituted zero. This is item 15 in the "Tests" section
+   above, added there for a feature that section predates.
+7. Update this document, `Docs/Trainer.md`, and `Docs/ChangeLog.md` with the
    implemented launcher/configuration before starting the real run.
-7. Run the focused PPO/trainer/logger tests, then the full suite using the
+8. Run the focused PPO/trainer/logger tests, then the full suite using the
    project environment documented in `Docs/Testing.md`.
-8. Perform a short `use_wandb=False` smoke run that fills at least one complete
+9. Perform a short `use_wandb=False` smoke run that fills at least one complete
    1024-turn rollout, executes an update, clears the rollout, and emits finite
    diagnostics.
-9. Start the fresh W&B run only after the smoke run and configuration review
+
+   **Comment (cadence):** `CHECKPOINT_AFTER`/`CHECKPOINT_EVERY`/
+   `EVAL_EVERY_EPISODES` are shared, episode-counted constants this plan does
+   not propose changing. A 1024-turn rollout is 4x PPO_045's 256, so PPO_200
+   completes fewer rollout updates per episode-counted checkpoint/eval
+   interval than PPO_045 did. Not a reason to change those constants
+   preemptively — just confirm during this smoke run that the interval still
+   captures a reasonable number of rollout updates, and only revisit if it
+   doesn't.
+10. Start the fresh W&B run only after the smoke run and configuration review
    pass.
 
 ### Required monitoring
 
 Compare by `cumulative_learner_turns` first, not only by episode.  PPO and DQN
-present samples to their optimizers at very different rates.  Review PPO_104 at
+present samples to their optimizers at very different rates.  Review PPO_200 at
 approximately 250K, 500K, 1M, and 1.5M learner turns.
 
 Track at minimum:
 
 - training and deterministic evaluation win rate, including player-count and
   opponent-roster breakdowns;
-- `ppo_policy_encoder_grad_norm` and `ppo_value_encoder_grad_norm`, including
-  their ratio;
+- update-wide, minibatch-size-weighted `ppo_policy_encoder_grad_norm` and
+  `ppo_value_encoder_grad_norm`, plus
+  `ppo_value_to_policy_encoder_grad_ratio`;
 - total/head gradient norms and `ppo_gradient_clip_fraction`;
 - approximate KL, surrogate clip fraction, completed epochs, and KL early-stop
   fraction;
@@ -622,8 +730,16 @@ Track at minimum:
   variance;
 - cumulative learner turns, optimizer steps, processed samples, and wall time.
 
+**Comment (undercorrection risk):** cutting `PPO_VALUE_LOSS_COEF` fivefold
+reduces critic dominance of the shared encoder, but it also slows how fast the
+value function tracks returns. Explained variance and value RMSE (already
+listed above) are the guard against overshooting into an undertrained critic
+— a falling explained variance alongside a falling gradient ratio would mean
+the fix went too far, not that it is working. Watch both together, not the
+gradient ratio alone.
+
 The old 35:1 critic/actor encoder-gradient ratio is the primary failure signal.
-For PPO_104, a sustained ratio below 5:1 is the target; below 10:1 is acceptable
+For PPO_200, a sustained ratio below 5:1 is the target; below 10:1 is acceptable
 early; a sustained ratio above 20:1 means the critic still controls the shared
 representation.  Do not react to one minibatch or episode--use rollout-update
 windows.
@@ -639,7 +755,7 @@ below one, the next isolated experiment should reduce PPO LR to `5e-5`.  Do not
 raise the KL target merely to force all epochs through.  If the critic remains
 dominant despite coefficient `0.1`, the next isolated value coefficient is
 `0.05`; separate actor/critic encoders or optimizers are later structural
-experiments, not part of PPO_104.
+experiments, not part of PPO_200.
 
 ### Continue/stop criteria
 
@@ -647,11 +763,12 @@ experiments, not part of PPO_104.
   and evidence that the actor receives a meaningful shared-encoder gradient.
 - At 500K turns, require improving evaluation score or win rate and no
   premature entropy collapse.  A low absolute win rate alone is not a stop
-  condition because the `0.1` regime can learn slowly.
-- At 1M turns, PPO_104 must clearly exceed PPO_045's roughly 24% late-training
+  condition because a from-scratch PPO run can learn slowly.
+- At 1M turns, PPO_200 must clearly exceed PPO_045's roughly 24% late-training
   win level or show a strong, consistent evaluation trend that justifies more
-  time.  Compare against DQN_103 at the same learner-turn budget as the main
-  target, not as an early mandatory pass threshold.
+  time.  Compare against DQN_105 at the same learner-turn budget as the main
+  target once that run reaches the matched budget; use DQN_103 only as the
+  historical secondary reference until then.
 - Continue to 1.5M turns when the robust evaluation trend is still positive.
   Stop or fork an isolated hyperparameter correction when performance is flat
   and a diagnostic identifies critic dominance, KL saturation, or entropy
@@ -668,7 +785,7 @@ The restart succeeds operationally when it removes the old optimization
 pathology: the actor materially influences the encoder, entropy remains useful
 until the policy becomes competent, KL permits useful sample reuse, and
 evaluation improves at matched learner-turn budgets.  The long-run goal is to
-match or exceed DQN/Dueling evaluation performance, but PPO_104 is the first
+match or exceed DQN/Dueling evaluation performance, but PPO_200 is the first
 controlled test under the current task, not proof that one hyperparameter set
 must achieve parity.
 
