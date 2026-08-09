@@ -1,0 +1,151 @@
+{
+  "format_version": 1,
+  "games": [
+    {
+      "participants": {
+        "killbot": {
+          "agent_turns_survived": 18,
+          "final_army_count": 31,
+          "final_territory_count": 16,
+          "territories_conquered": 6,
+          "win": 0
+        },
+        "raider": {
+          "agent_turns_survived": 26,
+          "final_army_count": 27,
+          "final_territory_count": 14,
+          "territories_conquered": 7,
+          "win": 0
+        },
+        "sentinel": {
+          "agent_turns_survived": 16,
+          "final_army_count": 29,
+          "final_territory_count": 12,
+          "territories_conquered": 5,
+          "win": 0
+        }
+      },
+      "reached_max_steps": true,
+      "roster": [
+        "raider",
+        "sentinel",
+        "killbot"
+      ],
+      "rotation": 0,
+      "seed": 0,
+      "step_count": 60,
+      "winner": null,
+      "winner_seat": null
+    },
+    {
+      "participants": {
+        "killbot": {
+          "agent_turns_survived": 18,
+          "final_army_count": 29,
+          "final_territory_count": 12,
+          "territories_conquered": 6,
+          "win": 0
+        },
+        "raider": {
+          "agent_turns_survived": 17,
+          "final_army_count": 32,
+          "final_territory_count": 17,
+          "territories_conquered": 5,
+          "win": 0
+        },
+        "sentinel": {
+          "agent_turns_survived": 25,
+          "final_army_count": 26,
+          "final_territory_count": 13,
+          "territories_conquered": 5,
+          "win": 0
+        }
+      },
+      "reached_max_steps": true,
+      "roster": [
+        "sentinel",
+        "killbot",
+        "raider"
+      ],
+      "rotation": 1,
+      "seed": 0,
+      "step_count": 60,
+      "winner": null,
+      "winner_seat": null
+    },
+    {
+      "participants": {
+        "killbot": {
+          "agent_turns_survived": 25,
+          "final_army_count": 26,
+          "final_territory_count": 13,
+          "territories_conquered": 5,
+          "win": 0
+        },
+        "raider": {
+          "agent_turns_survived": 18,
+          "final_army_count": 27,
+          "final_territory_count": 11,
+          "territories_conquered": 5,
+          "win": 0
+        },
+        "sentinel": {
+          "agent_turns_survived": 17,
+          "final_army_count": 34,
+          "final_territory_count": 18,
+          "territories_conquered": 6,
+          "win": 0
+        }
+      },
+      "reached_max_steps": true,
+      "roster": [
+        "killbot",
+        "raider",
+        "sentinel"
+      ],
+      "rotation": 2,
+      "seed": 0,
+      "step_count": 60,
+      "winner": null,
+      "winner_seat": null
+    }
+  ],
+  "max_steps": 60,
+  "participants": [
+    {
+      "agent_kind": "raider",
+      "kind": "heuristic",
+      "name": "raider"
+    },
+    {
+      "agent_kind": "sentinel",
+      "kind": "heuristic",
+      "name": "sentinel"
+    },
+    {
+      "agent_kind": "killbot",
+      "kind": "heuristic",
+      "name": "killbot"
+    }
+  ],
+  "seeds": [
+    0
+  ],
+  "totals": {
+    "killbot": {
+      "completed_games": 3,
+      "total_win_rate": 0.0,
+      "total_wins": 0
+    },
+    "raider": {
+      "completed_games": 3,
+      "total_win_rate": 0.0,
+      "total_wins": 0
+    },
+    "sentinel": {
+      "completed_games": 3,
+      "total_win_rate": 0.0,
+      "total_wins": 0
+    }
+  }
+}

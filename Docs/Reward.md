@@ -277,13 +277,40 @@ only the current implemented reward system.
 This plan is **not implemented**. It has three pieces: continent priority,
 frontier readiness, and an interior-placement penalty.
 
-| Condition | Reward | What it teaches |
+#### Implementation policy summary
+
+This replaces the current reinforcement concentration, capped readiness, and
+continent-push rewards.  It is deliberately a small set of preferences, not a
+script for the DQN: the agent must still learn which continent to pursue,
+which frontier to reinforce, which enemy to attack, and when splitting force
+is worthwhile.
+
+For every `ReinforcementAction`, calculate the following from the destination
+and the board state immediately before/after that one placement:
+
+| Situation | Planned shaping | Policy expressed |
 |---|---|---|
-| Frontier placement, compared with its weakest direct enemy neighbour | Proportional reward above 1.5:1; negative below it | First make at least one attack plausible. |
-| Frontier placement, compared with all direct enemy-neighbour armies combined | Additional proportional reward above 2:1 | Reward a stack that can dominate its whole local frontier. |
-| Frontier reinforcement is in a contested continent | Placement fraction x continent priority | Build strength in small, partly owned continents where the learner already controls a larger share of armies. |
-| Destination has no enemy neighbour | Existing `REWARD_REINFORCE_NO_ENEMY_NEIGHBOR = -0.80` penalty | Do not reinforce a pure interior territory. |
-| Reinforcement leaves armies in the current reinforcement budget | Small negative reward per unused army | Prefer committing the available force instead of making redundant split placements. |
+| Frontier with one or more enemy neighbours | Signed readiness against the weakest direct enemy: `weak_scale x (min(A / min(E), 7) - 1.5)` | Make at least one nearby attack viable; a larger advantage earns more up to 7:1. |
+| Same frontier | Additional reward only above local-frontier dominance: `sum_scale x max(0, min(A / sum(E), 7) - 2.0)` | A strong stack that can cover its whole direct frontier is better, without rewarding overstacking beyond 7:1. |
+| Same frontier, at least 1.5:1 ready, contested continent | `placement_fraction x continent_priority` | Prefer small continents in which the learner already has territory and army presence, so a conquest is plausible. |
+| Destination has no enemy neighbour | `-0.8`; none of the positive terms above apply | Do not place armies in an interior territory that cannot immediately support an attack. |
+| The action leaves part of the visible reinforcement budget | `-unused_scale x (budget_before - armies_placed)` | Put all currently available armies in one strong place rather than split them across redundant decisions. |
+
+Here `A` is the destination army count **after** placement and `E` is the
+list of its direct enemy-neighbour army counts.  The continent term applies
+only when the destination is a frontier and the continent is contested
+(`0 < territory_share < 1`) **and** `A / min(E) >= 1.5`; a fully owned
+continent or a not-yet-ready frontier gets no reinforcement continent reward.
+This preserves the policy that a placement which does not make any direct
+attack viable remains negative. The unused-budget term is evaluated on every placement:
+placing the entire remaining budget has zero penalty, while `30 -> [15, 15]`
+is penalized on the first action and `30 -> [30]` is not.  The common
+`[-10, +10]` step-shaping cap remains the final safety bound.
+
+None of this touches `FortifyAction`. Its existing `_continent_push` term
+(which rewards concentrating into an already-fully-owned continent, to help
+hold it against recapture) is a separate calculation and is left exactly as
+implemented today; this plan only replaces reinforcement's terms.
 
 For a reinforced frontier territory `x`, use its army count after placement
 and the armies of its direct enemy neighbours:
@@ -297,20 +324,21 @@ total_ratio = A / sum(E)
 
 weak_neighbour_reward =
     REWARD_REINFORCE_WEAK_NEIGHBOR_SCALE
-    x (weak_ratio - 1.5)
+    x (min(weak_ratio, 7.0) - 1.5)
 
 total_frontier_reward =
     REWARD_REINFORCE_FRONTIER_SUM_SCALE
-    x max(0, total_ratio - 2.0)
+    x max(0, min(total_ratio, 7.0) - 2.0)
 ```
 
 The first term is negative below 1.5:1 against the weakest neighbour, zero
-at 1.5:1, and grows as that ratio improves. It ensures that reinforcement is
-first capable of supporting at least one attack. The second term is zero until
-the stack reaches 2:1 against the **sum** of all direct enemy-neighbour
-armies; it then grows proportionally, so a force that dominates the complete
-local frontier gets an additional reward. The shared per-action shaping cap
-is the only cap for these ratios.
+at 1.5:1, and grows as that ratio improves up to 7:1. It ensures that
+reinforcement is first capable of supporting at least one attack. The second
+term is zero until the stack reaches 2:1 against the **sum** of all direct
+enemy-neighbour armies; it then grows proportionally up to 7:1, so a force
+that dominates the complete local frontier gets an additional reward without
+paying for armies beyond that readiness. The shared per-action shaping cap is
+still the final safety bound.
 
 If `E` is empty, do not calculate either positive term; apply only the
 existing `REWARD_REINFORCE_NO_ENEMY_NEIGHBOR` negative reward.
@@ -333,10 +361,11 @@ continent_reward =
     x continent_priority(c)
 ```
 
-Apply it only if the destination has an enemy neighbour and
-`0 < territory_share(c) < 1`. Thus a fully owned continent receives no
-continent reinforcement reward, and an interior placement cannot overcome the
-no-enemy-neighbour penalty with a positive continent reward. Set
+Apply it only if the destination has an enemy neighbour,
+`A / min(E) >= 1.5`, and `0 < territory_share(c) < 1`. Thus a fully owned
+continent or a not-yet-ready frontier receives no continent reinforcement
+reward, and an interior placement cannot overcome the no-enemy-neighbour
+penalty with a positive continent reward. Set
 `REWARD_REINFORCE_CONTINENT_PRIORITY_SCALE = 10.0` for the first experiment;
 it is an overall scale, not a weight favoring armies over territories.
 Dividing by the continent's territory count favors small continents; high army
@@ -377,21 +406,65 @@ not add the new terms on top of them. The agreed initial constants are:
 
 ```text
 REWARD_REINFORCE_CONTINENT_PRIORITY_SCALE = 10.0
-REWARD_REINFORCE_WEAK_NEIGHBOR_SCALE      = 0.5
-REWARD_REINFORCE_FRONTIER_SUM_SCALE       = 0.5
+REWARD_REINFORCE_WEAK_NEIGHBOR_SCALE      = 0.50
+REWARD_REINFORCE_FRONTIER_SUM_SCALE       = 0.50
+REWARD_REINFORCE_FRONTIER_RATIO_CAP       = 7.0   # new name; distinct from the
+                                                   # currently implemented
+                                                   # REWARD_REINFORCE_RATIO_CAP
+                                                   # (2.5), which this plan
+                                                   # removes entirely
 REWARD_REINFORCE_UNUSED_ARMY_PENALTY      = 0.05
 REWARD_REINFORCE_NO_ENEMY_NEIGHBOR        = -0.8  # unchanged
 ```
 
+`REWARD_REINFORCE_FRONTIER_RATIO_CAP` is deliberately a new constant name, not
+a reuse of the existing `REWARD_REINFORCE_RATIO_CAP = 2.5`: the two cap
+different terms at different scales (`2.5` shifted by `-1.0` today vs. `7.0`
+shifted by `-1.5`/`-2.0` here), and reusing the name risks a stale reference
+to the old semantics surviving the migration.
+
+The 7:1 ratio ceiling keeps ordinary strong placements below the shared
+`[-10, +10]` cap while preserving meaningful growth from 1.5:1 through 7:1.
+It is a tactical readiness ceiling, not a second reward cap: further armies
+may still be strategically useful, but reinforcement shaping stops paying for
+an already overwhelming direct advantage. Seven-to-one leaves room to prepare
+a stack for a stronger next target after taking an adjacent weak territory.
 The frontier terms use the post-placement army count and are intentionally
 continuous rather than one-time threshold bonuses. Test weak-neighbour ratios
-below, at, and above 1.5:1; total-frontier ratios below, at, and above 2:1;
-the weak-neighbour reward without the total-frontier reward; no enemy
+below, at, and above 1.5:1; exactly 7:1 and above 7:1; total-frontier ratios below, at, and above
+2:1; the weak-neighbour reward without the total-frontier reward; no enemy
 neighbour; unused armies at zero, part, and all of the budget; and the shared
-cap. Also test continent size/share ordering, a
-weak small continent with only one learner territory,
-fully-owned-continent exclusion, and one-placement versus split-placement
-totals. Run only as a fresh experiment after DQN 102 concludes.
+cap. Also test continent size/share ordering, a weak small continent with only
+one learner territory, the not-yet-ready and fully-owned-continent exclusions,
+and one-placement versus split-placement totals. Run only as a fresh
+experiment after DQN 102 concludes.
+
+#### Worked calibration examples
+
+The values below are raw reinforcement shaping, followed by the replay value
+after the global `REWARD_SHAPING_SCALE = 0.1`. They use the initial constants
+above. `C` denotes the already-calculated continent reward where shown; it is
+zero below the 1.5:1 readiness threshold.
+
+| Case | Inputs and components | Raw -> replay |
+|---|---|---:|
+| Interior, full budget | no enemy neighbour: `-0.8` | `-0.80 -> -0.080` |
+| Interior, split | no enemy; budget `20`, placed `10`: `-0.8 - 0.05 x 10` | `-1.30 -> -0.130` |
+| Unready frontier | `A=3`, `E=[4, 5]`: `0.50 x (3/4 - 1.5)`; no `C` | `-0.375 -> -0.038` |
+| Exactly ready | `A=6`, `E=[4, 8]`, `C=0.375`: weak and sum terms are zero | `+0.375 -> +0.038` |
+| Ready against weakest only | `A=8`, `E=[4, 8]`, `C=0.375`: `0.50 x (2 - 1.5)` | `+0.625 -> +0.063` |
+| Dominates weakest, reaches total threshold | `A=16`, `E=[4, 4]`, `C=0.375`: `0.50 x (4 - 1.5)`; total term zero at exactly `2:1` | `+1.625 -> +0.163` |
+| Dominates the whole local frontier | `A=20`, `E=[4, 4]`, `C=0.375`: weak `0.50 x (5 - 1.5) = +1.750`, sum `0.50 x (2.5 - 2)` | `+2.375 -> +0.238` |
+| Small, promising two-territory continent | `A=15`, `E=[1]`, `C=2.167`: weak `+2.750`, sum `+2.500` (both at 7:1 cap) | `+7.417 -> +0.742` |
+| Good target but split placement | `A=16`, `E=[4,4]`, `C=0.500`, budget `30`, placed `15`: `+1.250 - 0.750 + C` | `+1.000 -> +0.100` |
+| Same stack, tiny first split | `A=16`, `E=[4,4]`, `C=0.050`, budget `30`, placed `1`: `+1.250 - 1.450 + C` | `-0.150 -> -0.015` |
+| Strong stack against three neighbours | `A=45`, `E=[5,5,5]`, `C=0.500`: weak `+2.750` (7:1 cap), sum `+0.500` | `+3.750 -> +0.375` |
+| Extreme overstack: no extra reward beyond 7:1 | `A=62`, `E=[1]`, no `C`: weak `0.50 x (7 - 1.5)`, sum `0.50 x (7 - 2)` | `+5.250 -> +0.525` |
+
+For the examples with `C=0.375`, the continent has four territories, the
+learner owns two and 40% of its armies, has 30 total armies before placement,
+and places six armies: `continent_priority = 10 x (0.5 + 0.4) / 4 = 2.25`
+and `placement_fraction = 6 / (30 + 6)`, hence `C = 0.375`.
 
 ### Planned favorable-attack stop penalty
 
@@ -423,181 +496,42 @@ leaving several favorable territories unconquered is worse than leaving one.
 
 It must be a distinct, logged component and must not stack with the current
 generic `StopAttackAction` penalties: this proportional favorable-attack
-penalty replaces the applicable generic no-conquest or unfinished-target stop
-penalty for that stop. The shared per-action `[-10, +10]` cap is the final
-safety cap on the whole sum. Add focused tests for exactly 2:1, below-2:1,
+penalty replaces the already-**implemented** `-2.0` no-conquest penalty and
+the already-implemented `unfinished_attack_targets_this_turn` /
+`REWARD_ATTACK_UNFINISHED_TARGET = -0.5`-per-target penalty (see "Current
+combined-update changes" above) for that stop — those are live code today,
+not a past plan. The shared per-action `[-10, +10]` cap is the final safety
+cap on the whole sum. Add focused tests for exactly 2:1, below-2:1,
 ratio-proportional growth, multiple attacker sources for one target (count
 once), multiple favorable targets (sum), a favorable target after an earlier
 conquest, and no double penalty. Choose the scale constant after testing its
 raw component distribution.
 
-### Superseded detailed reinforcement draft
+### Superseded reinforcement-shaping drafts
 
-This plan is **not implemented**. It replaces the current
-frontier-concentration and weakest-neighbour-ratio rewards with only three
-coarse preferences. It must not prescribe attack targets, battle odds, or a
-conquest route: those are the DQN's policy to learn from Q-values and the
-existing attack, conquest, and terminal rewards.
+Two earlier drafts were superseded by the "simple draft" above. Per this
+file's own policy (see the top of this section), superseded proposals are not
+reproduced here in full — their complete formulas remain available in
+`Docs/ChangeLog.md` and git history:
 
-| Reinforcement situation | Proposed shaping | Purpose |
-|---|---|---|
-| A frontier territory crosses from unready to ready against its strongest direct enemy neighbour | One small `REWARD_REINFORCE_LAUNCH_READY` bonus | Prefer concentration until a usable attack stack exists. |
-| Two territories both cross the readiness threshold | One bonus for each territory | Splitting is allowed when it creates two real attack launches. |
-| A placement leaves every affected frontier stack unready | No launch-ready bonus | Do not reward dividing armies before either attack is viable. |
-| Placement is in a contested continent (`0 < territory_share < 1`) | Small change in `territory_share x army_share` | Prefer building military presence where the learner already has a plausible continent conquest. |
-| Placement is in a fully owned continent | No reinforcement continent-progress reward | Do not pay merely for adding armies where there is nothing in that continent left to conquer. |
-| Destination has no enemy neighbour | Existing `REWARD_REINFORCE_NO_ENEMY = -0.80` penalty | Discourage interior reinforcement with no immediate attack option. |
-| Target, attack order, dice risk, future route, or exact battle odds | No reinforcement-specific formula | Leave these tactical choices to the DQN. |
-
-#### 1. Do not split an unready attacking force
-
-Give a small, one-time `launch-ready` bonus when reinforcement changes an
-owned frontier territory from unready to ready. Readiness is deliberately a
-simple direct-neighbour threshold:
-
-```text
-readiness_ratio(x, state) =
-    armies[x] / max(armies[y] for adjacent enemy y)
-
-launch_ready(x, state) = readiness_ratio(x, state) >= readiness_threshold
-
-launch_reward = REWARD_REINFORCE_LAUNCH_READY
-    when launch_ready changes from false to true
-```
-
-Start with `readiness_threshold = 1.5`, the point where the current attack
-ratio term stops being negative. Choose the bonus magnitude only when the
-revision is implemented and tested. There is no accumulating ratio,
-battle-probability, or route-value score.
-
-Two incomplete stacks receive no bonus; concentrating enough force on one
-stack receives one bonus. Two bonuses are possible only when both stacks are
-actually ready, which allows two attacks. A strong direct neighbour prevents
-the territory from being ready even if another neighbour is weak. This is
-Markov (it uses `before` and `after`) and cannot be farmed by splitting one
-allocation into several actions.
-
-#### 2. Reinforce a continent that is being conquered
-
-For each contested continent `c`, use only its territory share and army share:
-
-```text
-territory_share(c) = learner territories in c / territories in c
-army_share(c)      = learner armies in c / all armies in c
-continent_progress(c) = territory_share(c) x army_share(c)
-
-reinforcement_continent_reward = REWARD_REINFORCE_CONTINENT_PROGRESS x
-    (continent_progress(c, after) - continent_progress(c, before))
-```
-
-Apply this only when `0 < territory_share(c) < 1`. It is a small bias toward
-strengthening a plausible partly owned continent, not a rule that selects a
-continent or attack target. The potential difference is split-action
-invariant; the DQN decides whether concentrating there is worth it.
-
-#### 3. Reinforce where an attack can be launched
-
-The launch-ready bonus provides the positive signal. Retain
-`REWARD_REINFORCE_NO_ENEMY = -0.80` when a destination has no enemy neighbour,
-so interior placement remains discouraged. Do not add battle-win probability,
-total hostile-army, frontier-allocation, or future-route terms: they are too
-heuristic for shaping and should remain learnable policy decisions.
-
-Keep the shared per-action `[-10, +10]` shaping cap and
-`REWARD_SHAPING_SCALE = 0.1`. Test threshold crossing, sub-threshold
-splitting, two genuinely ready stacks, the no-enemy penalty, contested
-continent progress, fully-owned-continent exclusion, and split-action
-invariance of the continent potential. Run only as a fresh experiment after
-DQN 102 concludes.
-
-### Superseded launch-value proposal
-
-This plan is **not implemented**. It replaces only the frontier-concentration
-and weakest-neighbour-ratio terms with one Markov launch-value term; the
-continent-push term is kept (with a correctness fix, below). The launch value
-does not depend on the reinforcement budget at the start of a turn: that
-value is not represented in `State`, so using it would make the reward depend
-on hidden history.
-
-The frontier-concentration term is removed for two related reasons. Its
-current denominator is the **remaining** budget, so the same allocation earns
-more reward when split into several actions as the denominator shrinks. A
-fixed turn-start denominator would remove that split incentive, but it is not
-visible to the agent in the current state representation and would therefore
-make the learning problem non-Markov. A fixed ratio against only the weakest
-enemy is also insufficient: a stack may easily beat a one-army neighbour yet
-be unable to continue through stronger enemy territories adjacent to its
-launch point. The replacement below measures both immediate attack quality
-and the total local hostile force.
-
-For an owned territory `x` with adjacent enemy territories, define:
-
-```text
-best_battle(x, state) = max over adjacent enemies y of
-    battle_win_probability(armies[x], armies[y])
-
-frontier_security(x, state) = clamp(
-    (armies[x] - 1) / sum(adjacent enemy armies),
-    0,
-    1,
-)
-
-launch_value(x, state) =
-    best_battle(x, state) x frontier_security(x, state)
-
-reinforcement_launch_reward = REWARD_REINFORCE_LAUNCH_VALUE_SCALE x (
-    launch_value(x, after) - launch_value(x, before)
-)
-```
-
-`battle_win_probability` is the exact full-force one-territory battle
-probability already used by the heuristic agents. `frontier_security` uses
-the **sum** of all direct enemy-neighbour armies, so an easy one-army target
-cannot by itself make a launch stack look ready when the same territory also
-faces stronger enemies. `REWARD_REINFORCE_LAUNCH_VALUE_SCALE` is a new
-constant whose value must be chosen and documented with the implementation.
-
-The difference between after and before launch value is essential. It is
-Markov because both states are already inputs to reward calculation, and it
-makes the total reward independent of how one allocation is split across
-actions on the same territory: the intermediate launch values cancel. The
-learner may therefore split armies when that is strategically useful, but
-cannot earn extra reward merely for dividing a placement.
-
-This is intentionally a *local* launch signal, not a hand-coded conquest
-route planner. A later enemy territory not directly adjacent to `x` depends
-on dice, occupation choices, and the next state after conquest. The DQN must
-learn that multi-territory continuation through its Q-values and the existing
-attack, conquest, and terminal rewards; reinforcement shaping should not
-pretend to know the whole future route.
-
-When a reinforced territory has no adjacent enemy, retain the existing
-`-0.80` interior-reinforcement penalty. Continent-push still applies to every
-placement, but the "already fully owned" fix applies to **reinforcement
-only**, not to `FortifyAction`. The two phases want opposite behavior once a
-continent is fully owned: reinforcement should stop being rewarded for
-placing into a continent with nothing left to conquer, but fortify should
-keep being rewarded for concentrating strength there, since holding an
-already-completed continent against recapture (and its ongoing bonus) is
-itself a goal. `_continent_push` currently scales with `owned / total`, which
-peaks — rather than stops — once `owned == total`; that peak-at-full-ownership
-shape is correct for fortify and should not change. For reinforcement, add a
-guard so the term returns `0.0` once the continent is already fully owned by
-the learner before the placement, without touching the formula or behavior
-used by `FortifyAction`. Concretely, give `_continent_push` an
-`allow_completed_continent` parameter (or an equivalent split into two
-call sites) so reinforcement and fortify can diverge without duplicating the
-`owned / total` calculation.
-
-Keep the shared per-action `[-10, +10]` shaping cap and
-`REWARD_SHAPING_SCALE = 0.1`. Add focused reward tests for the no-enemy
-penalty, exact battle-probability improvement, total-adjacent-enemy security,
-a weak neighbour beside stronger direct threats, split-action invariance on a
-single territory, reinforcement's continent-push returning `0.0` once a
-continent is fully owned, and a regression test that `FortifyAction`'s
-continent-push is unchanged (still positive and peaking at full ownership).
-Run this as a new, fresh experiment only after the current DQN 102 experiment
-has concluded.
+- **Detailed reinforcement draft.** A one-time `launch-ready` bonus on
+  crossing a readiness threshold against the territory's *strongest* direct
+  enemy neighbour, plus a separate `territory_share x army_share`
+  continent-progress delta. Superseded because the simple draft's continuous
+  weak-neighbour and sum-of-frontier terms reward partial progress toward
+  readiness rather than only the crossing instant, and it separates the
+  concentration incentive into its own explicit unused-budget penalty instead
+  of relying on a one-time bonus's shape to discourage splitting.
+- **Launch-value proposal.** A single Markov delta term,
+  `battle_win_probability(A, weakest enemy) x frontier_security(sum of
+  enemies)`. Superseded because it depends on the full-force battle-
+  probability table that reward shaping otherwise avoids, and it folds
+  weakest-neighbour and whole-frontier readiness into one multiplicative
+  term where the simple draft's two additive terms are easier to test and
+  calibrate independently. Its one useful correction — that reinforcement's
+  continent term, not `FortifyAction`'s, should stop paying once a continent
+  is fully owned — carried forward and is now stated directly in the "simple
+  draft" section above.
 
 ## Tests and related files
 
