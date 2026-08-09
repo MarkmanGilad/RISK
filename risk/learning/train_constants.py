@@ -100,12 +100,12 @@ EVAL_MAX_STEPS: Final[int] = MAX_STEPS_PER_EPISODE
 # region Reward
 
 REWARD_SHAPING_STEP_CAP: Final[float] = 10.0
-# Keeps dense local rewards below the terminal win/loss signal without
-# changing the relative preference between shaping terms.
-REWARD_SHAPING_SCALE: Final[float] = 0.1
+# DQN_105 uses an intermediate scale while testing the marginal reinforcement
+# correction, preserving the same dense-to-terminal ratio as DQN_103/104.
+REWARD_SHAPING_SCALE: Final[float] = 0.3
 
-REWARD_TERMINAL_WIN: Final[float] = 100.0
-REWARD_TERMINAL_LOSS: Final[float] = -100.0
+REWARD_TERMINAL_WIN: Final[float] = 300.0
+REWARD_TERMINAL_LOSS: Final[float] = -300.0
 
 REWARD_TRADE_IN_EARLY: Final[float] = 0.30
 REWARD_TRADE_IN_TERRITORY_MATCH: Final[float] = 0.60

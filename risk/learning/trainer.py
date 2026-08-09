@@ -270,6 +270,25 @@ class Trainer:
             winner = env.winner()
             win = int(winner == seat)
             self._recent_wins.append(win)
+            reinforce_action_count = reward_components.get("reinforce_action_count", 0.0)
+            reinforce_partial_action_count = reward_components.get(
+                "reinforce_partial_action_count", 0.0
+            )
+            reinforce_per_action = (
+                reward_components.get("reinforce", 0.0) / reinforce_action_count
+                if reinforce_action_count
+                else 0.0
+            )
+            reinforce_ready_per_action = (
+                reward_components.get("reinforce_ready", 0.0) / reinforce_action_count
+                if reinforce_action_count
+                else 0.0
+            )
+            reinforce_total_per_action = (
+                reward_components.get("reinforce_total", 0.0) / reinforce_action_count
+                if reinforce_action_count
+                else 0.0
+            )
             metrics = {
                 "win": win,
                 f"win_rate_last_{ROLLING_WIN_RATE_WINDOW}": (sum(self._recent_wins) / len(self._recent_wins)),
@@ -283,6 +302,11 @@ class Trainer:
                 "samples_processed_in_episode": samples_processed - samples_processed_before,
                 "cumulative_optimizer_steps": optimizer_steps,
                 "cumulative_samples_processed": samples_processed,
+                "reinforce_action_count": reinforce_action_count,
+                "reinforce_partial_action_count": reinforce_partial_action_count,
+                "reward_component_reinforce_per_action": reinforce_per_action,
+                "reward_component_reinforce_ready_per_action": reinforce_ready_per_action,
+                "reward_component_reinforce_total_per_action": reinforce_total_per_action,
                 **self._opponent_metrics(
                     opponent_kinds=opponent_kinds,
                     winner=winner,
@@ -292,6 +316,10 @@ class Trainer:
                 **{
                     f"reward_component_{name}": total
                     for name, total in reward_components.items()
+                    if name not in {
+                        "reinforce_action_count",
+                        "reinforce_partial_action_count",
+                    }
                 },
                 **update_metrics,
                 **agent_progress,
@@ -422,14 +450,15 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    RUN_ID = 103
+    RUN_ID = 105
 
     ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
     agent = build_learner_agent("DQN", ctx)
     trainer = Trainer(
         RUN_ID,
         agent=agent,
-        resume=False,
+        resume=True,
+        wandb_run_id="5b66yunb",
     )
     trainer.train(n_episodes=TRAIN_EPISODES)
     trainer.logger.finish()

@@ -109,6 +109,10 @@ class RewardCalculator:
         trade_in = self._trade_in(action, before, reward_player)
         reinforce_components = self._reinforce(action, before, after, reward_player)
         reinforce = sum(reinforce_components.values())
+        is_reinforce = (
+            before.current_player_index == reward_player
+            and isinstance(action, ReinforcementAction)
+        )
         attack, eliminate, unfinished_attack = self._attack(
             action, info, before, after, reward_player
         )
@@ -121,6 +125,10 @@ class RewardCalculator:
             "trade_in": trade_in,
             "reinforce": reinforce,
             **{f"reinforce_{name}": value for name, value in reinforce_components.items()},
+            "reinforce_action_count": float(is_reinforce),
+            "reinforce_partial_action_count": float(
+                is_reinforce and action.total < before.reinforcement_budget
+            ),
             "attack": attack - eliminate - unfinished_attack,
             "eliminate": eliminate,
             "unfinished_attack": unfinished_attack,
@@ -328,24 +336,49 @@ class RewardCalculator:
                 components["interior"] += REWARD_REINFORCE_INTERIOR
                 continue
 
+            armies_before = before.armies[idx]
             armies_after = after.armies[idx]
-            weak_ratio = armies_after / min(enemy_armies)
-            total_ratio = armies_after / sum(enemy_armies)
-            components["ready"] += REWARD_REINFORCE_READY_SCALE * (
-                min(weak_ratio, REWARD_REINFORCE_READY_CAP)
-                - REWARD_REINFORCE_READY_RATIO
-            )
-            components["total"] += REWARD_REINFORCE_TOTAL_SCALE * max(
+            weakest_enemy = min(enemy_armies)
+            total_enemy = sum(enemy_armies)
+            weak_ratio_before = armies_before / weakest_enemy
+            weak_ratio_after = armies_after / weakest_enemy
+            total_ratio_before = armies_before / total_enemy
+            total_ratio_after = armies_after / total_enemy
+            ready_before = max(
                 0.0,
-                min(total_ratio, REWARD_REINFORCE_READY_CAP)
+                min(weak_ratio_before, REWARD_REINFORCE_READY_CAP)
+                - REWARD_REINFORCE_READY_RATIO,
+            )
+            ready_after = max(
+                0.0,
+                min(weak_ratio_after, REWARD_REINFORCE_READY_CAP)
+                - REWARD_REINFORCE_READY_RATIO,
+            )
+            total_before = max(
+                0.0,
+                min(total_ratio_before, REWARD_REINFORCE_READY_CAP)
                 - REWARD_REINFORCE_TOTAL_RATIO,
+            )
+            total_after = max(
+                0.0,
+                min(total_ratio_after, REWARD_REINFORCE_READY_CAP)
+                - REWARD_REINFORCE_TOTAL_RATIO,
+            )
+            components["ready"] += REWARD_REINFORCE_READY_SCALE * (
+                ready_after - ready_before
+            )
+            components["total"] += REWARD_REINFORCE_TOTAL_SCALE * (
+                total_after - total_before
             )
 
             continent = self.topology.continent_of(terr)
             owned, continent_size = self.topology.continent_owner_counts(
                 before.owners, continent, pid
             )
-            if weak_ratio >= REWARD_REINFORCE_READY_RATIO and 0 < owned < continent_size:
+            if (
+                weak_ratio_after >= REWARD_REINFORCE_READY_RATIO
+                and 0 < owned < continent_size
+            ):
                 member_indices = self.topology.continent_member_indices(continent)
                 continent_armies = sum(before.armies[i] for i in member_indices)
                 learner_armies = sum(

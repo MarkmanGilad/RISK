@@ -36,11 +36,13 @@ Dueling-comparable epsilon-greedy-Q behavior. `PQN_e0` is the matching
 Bellman-only control: the same epsilon-greedy behavior with a per-agent
 policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
-The current `main()` launcher is the fresh classic-DQN experiment
-`DQN_103`: it uses the globally configured reward shaping scale `0.1`, an
-epsilon schedule from `1.0` to `0.01` over 100 episodes, and `resume=False`.
-Its checkpoint and W&B namespaces are therefore new (`Checkpoints/DQN_103`
-and `DQN_103`), with an empty replay buffer.
+The current `main()` launcher resumes the classic-DQN experiment
+`DQN_105`: it uses reward shaping scale `0.3` and terminal rewards
+`+300/-300`, and changes reinforcement ready/total shaping to marginal
+before/after improvement. It uses an epsilon schedule from `1.0` to `0.01`
+over 100 episodes, restores the latest full checkpoint from
+`Checkpoints/DQN_105`, and reconnects to W&B run `5b66yunb`. The restart
+checkpoint is episode 400.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and future agents
@@ -155,6 +157,9 @@ At the end of each episode, the trainer logs one metrics row through
   `reinforce_continent`, `reinforce_interior`, and `reinforce_split`; these five
   raw values sum to the combined `reinforce` component,
   `last_end_of_turn_components`
+- `reinforce_action_count`, `reinforce_partial_action_count`, and raw
+  reinforcement/ready/total reward per reinforcement action, used to separate
+  reward magnitude from episode length and detect repeated partial placement
 - `player_count`, `roster`, `winner_seat`, and `winner_kind` — episode-level
   roster/result diagnostics. `roster` is readable text such as
   `p0=raider, p1=learner:DQN, p2=killbot`; the other fields can be filtered

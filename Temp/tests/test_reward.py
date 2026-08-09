@@ -38,11 +38,8 @@ from risk.learning.train_constants import (
     REWARD_OCCUPY_FORWARD_MOMENTUM,
     REWARD_REINFORCE_CONTINENT_SCALE,
     REWARD_REINFORCE_INTERIOR,
-    REWARD_REINFORCE_READY_CAP,
-    REWARD_REINFORCE_READY_RATIO,
     REWARD_REINFORCE_READY_SCALE,
     REWARD_REINFORCE_SPLIT,
-    REWARD_REINFORCE_TOTAL_RATIO,
     REWARD_REINFORCE_TOTAL_SCALE,
     REWARD_SHAPING_SCALE,
     REWARD_TERMINAL_LOSS,
@@ -137,6 +134,12 @@ def _calc_env():
 
 def _shaping(value: float) -> float:
     return REWARD_SHAPING_SCALE * value
+
+
+def test_dqn_105_reward_scale_and_terminal_values() -> None:
+    assert REWARD_SHAPING_SCALE == 0.3
+    assert REWARD_TERMINAL_WIN == 300.0
+    assert REWARD_TERMINAL_LOSS == -300.0
 
 
 # --- TRADE_IN -------------------------------------------------------------
@@ -239,6 +242,8 @@ def test_reinforce_interior_and_split_penalties_are_separate_components() -> Non
     assert calc.last_components["reinforce_split"] == pytest.approx(
         -REWARD_REINFORCE_SPLIT
     )
+    assert calc.last_components["reinforce_action_count"] == 1.0
+    assert calc.last_components["reinforce_partial_action_count"] == 1.0
 
 
 def _frontier_reinforcement(
@@ -295,47 +300,55 @@ def _expected_continent_component(env, state, target: str, action: Reinforcement
 
 
 @pytest.mark.parametrize(
-    ("target_armies", "expected"),
+    ("target_armies", "placed", "expected"),
     [
-        (4, REWARD_REINFORCE_READY_SCALE * (1.0 - REWARD_REINFORCE_READY_RATIO)),
-        (6, 0.0),
-        (8, REWARD_REINFORCE_READY_SCALE * (2.0 - REWARD_REINFORCE_READY_RATIO)),
+        (5, 1, 0.0),
+        (6, 1, 0.0),
+        (7, 2, REWARD_REINFORCE_READY_SCALE * 0.25),
+        (8, 1, REWARD_REINFORCE_READY_SCALE * 0.25),
     ],
 )
-def test_reinforce_ready_reward_uses_weakest_enemy_threshold(
-    target_armies: int, expected: float
+def test_reinforce_ready_reward_uses_marginal_weakest_enemy_improvement(
+    target_armies: int, placed: int, expected: float
 ) -> None:
     calc, _, _, _, _ = _frontier_reinforcement(
-        target_armies=target_armies, enemy_armies=[4]
+        target_armies=target_armies, enemy_armies=[4], placed=placed
     )
     assert calc.last_components["reinforce_ready"] == pytest.approx(expected)
 
 
-def test_reinforce_total_reward_starts_above_combined_enemy_threshold() -> None:
-    at_threshold, _, _, _, _ = _frontier_reinforcement(
-        target_armies=16, enemy_armies=[4, 4]
+@pytest.mark.parametrize(
+    ("target_armies", "placed", "expected"),
+    [
+        (15, 1, 0.0),
+        (16, 1, 0.0),
+        (20, 4, REWARD_REINFORCE_TOTAL_SCALE * 0.5),
+        (24, 1, REWARD_REINFORCE_TOTAL_SCALE * 0.125),
+    ],
+)
+def test_reinforce_total_reward_uses_marginal_combined_enemy_improvement(
+    target_armies: int, placed: int, expected: float
+) -> None:
+    calc, _, _, _, _ = _frontier_reinforcement(
+        target_armies=target_armies, enemy_armies=[4, 4], placed=placed
     )
-    above_threshold, _, _, _, _ = _frontier_reinforcement(
-        target_armies=24, enemy_armies=[4, 4]
-    )
-
-    assert at_threshold.last_components["reinforce_total"] == pytest.approx(0.0)
-    assert above_threshold.last_components["reinforce_total"] == pytest.approx(
-        REWARD_REINFORCE_TOTAL_SCALE * (3.0 - REWARD_REINFORCE_TOTAL_RATIO)
-    )
+    assert calc.last_components["reinforce_total"] == pytest.approx(expected)
 
 
-def test_reinforce_ready_rewards_stop_growing_at_cap() -> None:
+def test_reinforce_ready_rewards_are_zero_when_already_capped() -> None:
     calc, _, _, _, _ = _frontier_reinforcement(target_armies=20, enemy_armies=[1])
 
-    assert calc.last_components["reinforce_ready"] == pytest.approx(
-        REWARD_REINFORCE_READY_SCALE
-        * (REWARD_REINFORCE_READY_CAP - REWARD_REINFORCE_READY_RATIO)
+    assert calc.last_components["reinforce_ready"] == pytest.approx(0.0)
+    assert calc.last_components["reinforce_total"] == pytest.approx(0.0)
+
+
+def test_reinforce_ready_and_total_match_complete_sequence_bounds() -> None:
+    calc, _, _, _, _ = _frontier_reinforcement(
+        target_armies=8, enemy_armies=[1], placed=7
     )
-    assert calc.last_components["reinforce_total"] == pytest.approx(
-        REWARD_REINFORCE_TOTAL_SCALE
-        * (REWARD_REINFORCE_READY_CAP - REWARD_REINFORCE_TOTAL_RATIO)
-    )
+
+    assert calc.last_components["reinforce_ready"] == pytest.approx(2.75)
+    assert calc.last_components["reinforce_total"] == pytest.approx(2.50)
 
 
 def test_reinforce_continent_reward_uses_before_state_shares() -> None:
@@ -441,6 +454,54 @@ def test_reinforce_full_budget_has_no_split_penalty() -> None:
         target_armies=12, enemy_armies=[4], placed=10
     )
     assert calc.last_components["reinforce_split"] == pytest.approx(0.0)
+    assert calc.last_components["reinforce_action_count"] == 1.0
+    assert calc.last_components["reinforce_partial_action_count"] == 0.0
+
+
+def _reinforce_sequence(placements: list[int]) -> tuple[float, float, float]:
+    calc, env = _calc_env()
+    topo = env.topology
+    state = env.current_state().snapshot()
+    state.current_player_index = 0
+    state.owners = [0] * len(state.owners)
+    target = "Afghanistan"
+    enemy = "China"
+    target_idx = topo.index_of(target)
+    enemy_idx = topo.index_of(enemy)
+    state.owners[enemy_idx] = 1
+    state.armies[target_idx] = 5
+    state.armies[enemy_idx] = 4
+    state.reinforcement_budget = sum(placements)
+    totals = {"ready": 0.0, "total": 0.0, "split": 0.0}
+
+    for placed in placements:
+        after = state.snapshot()
+        after.armies[target_idx] += placed
+        after.reinforcement_budget -= placed
+        calc.compute(
+            action=ReinforcementAction(placements={target: placed}),
+            info={},
+            before=state,
+            after=after,
+            reward_player=0,
+            done=False,
+            winner=None,
+        )
+        for name in totals:
+            totals[name] += calc.last_components[f"reinforce_{name}"]
+        state = after
+
+    return totals["ready"], totals["total"], totals["split"]
+
+
+def test_reinforce_split_sequence_has_same_marginal_reward_before_penalties() -> None:
+    full_ready, full_total, full_split = _reinforce_sequence([7])
+    split_ready, split_total, split_penalty = _reinforce_sequence([2, 2, 3])
+
+    assert split_ready == pytest.approx(full_ready)
+    assert split_total == pytest.approx(full_total)
+    assert full_split == pytest.approx(0.0)
+    assert split_penalty == pytest.approx(-2 * REWARD_REINFORCE_SPLIT)
 
 
 def test_reinforce_multi_destination_action_applies_split_penalty_once() -> None:

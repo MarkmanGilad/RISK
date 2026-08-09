@@ -26,7 +26,7 @@ step_shaping = clip(
     trade_in + reinforce + attack + occupy + fortify,
     -10, +10,
 )
-step_reward = terminal + 0.1 x step_shaping
+step_reward = terminal + 0.3 x step_shaping
 ```
 
 At the learner's turn boundary, `Trainer` also adds:
@@ -41,7 +41,7 @@ learner fortifies or when its action ends the episode. The latter means a
 winning `AttackAction` or `OccupyAction` also receives end-of-turn reward.
 
 One replay transition is stored per learner decision. Its reward is the step
-reward above, plus `0.1 x` end-of-turn reward when that boundary is reached.
+reward above, plus `0.3 x` end-of-turn reward when that boundary is reached.
 
 There is no terminal reward for a `MAX_STEPS_PER_EPISODE` timeout: it is a
 truncation, not a terminal game state, so its replay transition keeps
@@ -51,8 +51,8 @@ truncation, not a terminal game state, so its replay transition keeps
 
 | Area | Constants | Values |
 |---|---|---|
-| Terminal | win / loss | `+100`, `-100` |
-| Dense shaping | scale (terminal excluded) | `0.1` |
+| Terminal | win / loss | `+300`, `-300` |
+| Dense shaping | scale (terminal excluded) | `0.3` |
 | Step safety | shaping cap | `±10` |
 | Trade-in | early / territory match | `0.30`, `0.60` |
 | Reinforce | ready scale / ready ratio / ready cap | `0.50`, `1.50`, `7.00` |
@@ -74,7 +74,7 @@ action-local fraction or an army-ratio term.
 
 All applicable terms in an action row are added, then the total **step
 shaping** is clipped to `[-10, +10]` and multiplied by
-`REWARD_SHAPING_SCALE = 0.1`. Terminal reward is not scaled. End-of-turn
+`REWARD_SHAPING_SCALE = 0.3`. Terminal reward is not scaled. End-of-turn
 shaping is separately calculated and multiplied by the same scale.
 
 | Action | Rewarded behavior / formula | Main scale |
@@ -202,7 +202,7 @@ Skipping fortification gets no fortify shaping.
 ## End-of-turn shaping
 
 These terms are calculated once per learner turn boundary, not per action.
-Their combined value is multiplied by `REWARD_SHAPING_SCALE = 0.1`; terminal
+Their combined value is multiplied by `REWARD_SHAPING_SCALE = 0.3`; terminal
 win/loss is not part of this calculation.
 
 - `territory_delta`: learner territory-share change across the opponent round.
@@ -250,6 +250,11 @@ per-territory history and `conquered_this_turn`; W&B logs the latter penalty as
 objective. The primary success metric is win rate, with deterministic
 evaluation used to remove epsilon-greedy action noise.
 
+The `reward_component_*` metrics are raw, pre-scale totals accumulated over
+the complete episode. A component value of `600` therefore does not mean that
+one action received `600`, and it has not yet been multiplied by
+`REWARD_SHAPING_SCALE`.
+
 ## Current interpretation
 
 The latest DQN baseline, run 060, confirms that dense shaping is much larger
@@ -258,28 +263,64 @@ than the terminal result over a whole game: mean learner reward was about
 shaping is the dominant component. A high total reward can therefore describe
 active local play rather than a win.
 
-The dense local rewards are now multiplied by `REWARD_SHAPING_SCALE = 0.1`
-before they reach replay, while terminal `+100/-100` remains unchanged. This
-makes winning or losing dominate an episode's accumulated local shaping without
-increasing TD-target magnitude. Compare win rate, loss-game reward, Q/target
-scale, and gradient clipping against the previous baseline in a fresh run.
+For DQN_104, dense local rewards are multiplied by
+`REWARD_SHAPING_SCALE = 0.5` before they reach replay, while terminal reward is
+`+500/-500`. Both are five times their DQN_103 values, so their relative
+balance is preserved while the reward and TD-target magnitudes increase.
+Compare learning speed, win rate, Q/target scale, loss, and gradient clipping
+against DQN_103.
 
-## Reinforcement reward implementation
+DQN_105 uses the intermediate global scale `0.3` with terminal `+300/-300`.
+This preserves the same dense-to-terminal ratio while reducing DQN_104's
+absolute TD-target and gradient scale by 40%. Its reinforcement formulas are
+the marginal correction documented below.
 
-This is the current implemented reinforcement reward. It rewards attack-ready frontier placement,
+### DQN_104 reinforcement finding
+
+At episode 311, DQN_104 logged `reward_component_reinforce = 879.6` across
+691 learner decisions. Its raw reinforcement components were:
+
+| Component | Episode total |
+|---|---:|
+| Weak-neighbour readiness | `533.9` |
+| Whole-frontier strength | `371.2` |
+| Continent priority | `9.7` |
+| Interior placement | `0.0` |
+| Split placement | `-35.2` |
+
+The continent term is not causing the large total. The readiness terms are.
+The `-35.2` split total also means that 176 partial reinforcement actions were
+scored during the episode because each partial action costs only `-0.20`.
+
+The absolute episode total is enlarged by the long episode, but the reward has
+a real repeat-payment problem: each reinforcement action scores the complete
+strength of the destination stack after placement. It does not score only the
+improvement produced by that placement. A one-army action on an already strong
+stack can therefore receive nearly the full readiness reward again, and the
+environment permits repeated one/half/all-budget reinforcement actions.
+
+After the global `0.5` scale, the episode's reinforcement shaping contributed
+approximately `440` replay reward before interaction with the shared step cap.
+That is close to the `+500` terminal win reward. Attack shaping was also large
+(`1156.7` raw), so reinforcement is not the only episode-accumulation issue,
+but it is the component with a clear repeated-state reward mechanism.
+
+## Current reinforcement reward
+
+The current reward encourages attack-ready frontier placement,
 whole-frontier strength, and promising contested continents. It penalizes
 interior placement and splitting the visible reinforcement budget.
 
 ### Complete formula
 
-This implementation replaced the previous reinforcement concentration,
-readiness, and continent-push terms. It does not change `FortifyAction` or its separate
-continent-push reward.
+This reward does not affect `FortifyAction` or its separate continent-push
+reward.
 
 For every destination territory `x` in a `ReinforcementAction`, define:
 
 ```text
-A                   = armies on x after this placement
+A_before            = armies on x before this placement
+A_after             = armies on x after this placement
 E                   = armies on direct enemy neighbours of x
 armies_placed       = action.placements[x]
 budget_before       = before.reinforcement_budget
@@ -288,6 +329,14 @@ territory_share(c)  = learner territories in c before placement / territories in
 army_share(c)       = learner armies in c before placement / all armies in c before placement
 continent_armies(c) = all armies in c before this placement
 continent_size(c)   = number of territories in c
+
+ready_score(A, E) =
+    max(0, min(A / min(E), REWARD_REINFORCE_READY_CAP)
+           - REWARD_REINFORCE_READY_RATIO)
+
+total_score(A, E) =
+    max(0, min(A / sum(E), REWARD_REINFORCE_READY_CAP)
+           - REWARD_REINFORCE_TOTAL_RATIO)
 ```
 
 Use these named constants:
@@ -295,11 +344,11 @@ Use these named constants:
 | Constant | Value | Meaning |
 |---|---:|---|
 | `REWARD_REINFORCE_READY_SCALE` | `0.50` | Strength of the reward for readiness against the easiest adjacent enemy. |
-| `REWARD_REINFORCE_READY_RATIO` | `1.50` | A stack at 1.5:1 against its weakest neighbour is considered ready for at least one plausible attack. Subtracting this value makes weaker stacks negative, exactly-ready stacks zero, and stronger stacks positive. |
+| `REWARD_REINFORCE_READY_RATIO` | `1.50` | Readiness improvement starts only above 1.5:1 against the weakest neighbour. |
 | `REWARD_REINFORCE_TOTAL_SCALE` | `0.50` | Strength of the additional reward for being ready against the complete adjacent enemy force. |
 | `REWARD_REINFORCE_TOTAL_RATIO` | `2.00` | Whole-frontier reward starts only when the stack is at least twice the sum of all directly adjacent enemy armies. |
 | `REWARD_REINFORCE_READY_CAP` | `7.00` | Stops both readiness rewards growing beyond an overwhelming 7:1 advantage. |
-| `REWARD_REINFORCE_CONTINENT_SCALE` | `5.00` | Conservative 1K-pilot strength for the contested-continent preference before placement and continent-size normalization. |
+| `REWARD_REINFORCE_CONTINENT_SCALE` | `5.00` | Strength of the contested-continent preference before placement and continent-size normalization. |
 | `REWARD_REINFORCE_INTERIOR` | `-0.80` | Penalty for reinforcing an interior territory that cannot directly support an attack. |
 | `REWARD_REINFORCE_SPLIT` | `0.20` | Positive magnitude of the one-time penalty for placing less than the full visible budget; the reward formula applies its negative sign. |
 
@@ -308,9 +357,9 @@ condition and formula.
 
 | Reward | When it applies | Full raw formula |
 |---|---|---|
-| Weak-neighbour readiness | `E` is not empty | `REWARD_REINFORCE_READY_SCALE * (min(A / min(E), REWARD_REINFORCE_READY_CAP) - REWARD_REINFORCE_READY_RATIO)` |
-| Whole-frontier strength | `E` is not empty | `REWARD_REINFORCE_TOTAL_SCALE * max(0, min(A / sum(E), REWARD_REINFORCE_READY_CAP) - REWARD_REINFORCE_TOTAL_RATIO)` |
-| Continent priority | `E` is not empty, `A / min(E) >= REWARD_REINFORCE_READY_RATIO`, and `0 < territory_share(c) < 1` | `(armies_placed / (continent_armies(c) + armies_placed)) * REWARD_REINFORCE_CONTINENT_SCALE * (territory_share(c) + army_share(c)) / continent_size(c)` |
+| Weak-neighbour readiness | `E` is not empty | `REWARD_REINFORCE_READY_SCALE * (ready_score(A_after, E) - ready_score(A_before, E))` |
+| Whole-frontier strength | `E` is not empty | `REWARD_REINFORCE_TOTAL_SCALE * (total_score(A_after, E) - total_score(A_before, E))` |
+| Continent priority | `E` is not empty, `A_after / min(E) >= REWARD_REINFORCE_READY_RATIO`, and `0 < territory_share(c) < 1` | `(armies_placed / (continent_armies(c) + armies_placed)) * REWARD_REINFORCE_CONTINENT_SCALE * (territory_share(c) + army_share(c)) / continent_size(c)` |
 | Interior placement | `E` is empty | `REWARD_REINFORCE_INTERIOR` |
 | Split placement | Applied once per action when `action.total < budget_before` | `-REWARD_REINFORCE_SPLIT` |
 
@@ -319,33 +368,37 @@ continent rewards. For an interior placement, add only the interior reward;
 the frontier and continent rewards are zero. After summing all destination
 rewards, add the split penalty once for the complete action.
 
-The weak-neighbour term is negative below 1.5:1, zero at 1.5:1, and positive
-above it. The whole-frontier term begins only above 2:1 against the sum of
-adjacent enemy armies. Both ratios stop growing at 7:1. The continent reward
-favors small contested continents where the learner already has territory and
-army presence, but it is available only after the reinforced territory reaches
-1.5:1 readiness against its weakest neighbour.
+The ready and total terms reward only the improvement caused by the current
+placement. Ready improvement is zero while both ratios remain at or below
+1.5:1 against the weakest neighbour. Total improvement is zero while both
+ratios remain at or below 2:1 against the sum of adjacent enemy armies. Both
+potentials stop growing at 7:1, so adding armies to an already capped stack
+earns no ready/total reward. The continent reward favors small contested
+continents where the learner already has territory and army presence, but it
+is available only after the reinforced territory reaches 1.5:1 readiness
+against its weakest neighbour.
 
-The continent scale starts at `5.00` so the term cannot dominate the first
-pilot. On the current board, the smallest contested continent has four
+The zero floor is important: without it, the readiness threshold subtracts
+out of the before/after difference and every increase in armies earns reward
+even while the stack remains below 1.5:1. For repeated placements on one
+territory with unchanged enemies, the summed marginal reward is bounded at
+`2.75` ready, `2.50` total, and `5.25` combined for the complete sequence.
+
+The continent scale is `5.00`. On the current board, the smallest contested
+continent has four
 territories, giving this term a theoretical upper bound below `2.19`. Together
 with the maximum weak-neighbour (`2.75`) and whole-frontier (`2.50`) terms, the
 maximum reinforcement shaping remains below about `7.44`, leaving room below
-the shared `+10` step cap. Review the logged continent distribution at the 1K
-checkpoint and raise the scale only if the signal is consistently negligible.
+the shared `+10` step cap.
 
 The split penalty is constant: leaving one army or most of the budget receives
 the same penalty. It is applied once per action, including a custom action with
 several destinations. Using the full visible budget receives no split penalty.
-This is a simple heuristic action cost, not a split-invariance guarantee:
-because the readiness and continent formulas score each action's resulting
-state, a sequence of partial placements can still accumulate more total
-positive shaping than one full placement. Tests must verify the fixed penalty
-itself, not assume that every split sequence has a lower combined reward.
-
-These terms replace the previous reinforcement concentration,
-capped weakest-neighbour-ratio, and continent-push terms. The old terms are not
-added to the new reward.
+The marginal ready and total terms telescope: equivalent split placements on
+the same territory with unchanged enemies sum to the same positive ready/total
+reward as one full placement. Each partial action still pays the fixed split
+penalty. The continent term remains action-local and is not guaranteed to be
+split invariant, but DQN_104 showed that it was a very small contribution.
 
 #### Aggregation and scaling
 
@@ -380,37 +433,41 @@ reward_component_reinforce_total
 reward_component_reinforce_continent
 reward_component_reinforce_interior
 reward_component_reinforce_split
+reinforce_action_count
+reinforce_partial_action_count
+reward_component_reinforce_per_action
+reward_component_reinforce_ready_per_action
+reward_component_reinforce_total_per_action
 ```
 
 For every reinforcement action, the five component values must sum to the raw
 reinforcement reward before the shared step-shaping cap and global shaping
 scale. These fields are diagnostic only and do not alter replay reward.
 
-### Implementation invariants and tests
+### DQN_105 validation targets
 
-- The new formulas replace the three previous reinforcement terms.
-- Keep `FortifyAction` and `REWARD_FORTIFY_CONTINENT_PUSH` unchanged.
-- Calculate destination rewards once per destination and the split penalty
-  once per action.
-- Preserve the five raw reinforcement subcomponents separately for W&B while
-  keeping their sum as the existing combined reinforcement component.
-- Test the weak ratio below, at, and above 1.5; at and above the 7:1 cap.
-- Test the total-frontier ratio below, at, and above 2.0; at and above the 7:1
-  cap.
-- Test interior placement, contested-continent eligibility, readiness gating,
-  fully owned continents, continent size/share ordering, and a contested
-  continent where the learner owns only one territory.
-- Test no split penalty for the full budget and the same `-0.20` penalty when
-  a partial action leaves one, some, or almost all armies.
-- Test that a custom multi-destination action receives the split penalty only
-  once.
-- Compare one full placement with split placements, asserting each action's
-  exact formula and fixed penalty without asserting that the split sequence
-  must have a lower combined reward.
-- Test that the five raw logged subcomponents sum to the raw reinforcement
-  reward, and test the shared shaping cap separately.
-- Run only as a fresh experiment after DQN_103; do not reuse its checkpoint or
-  replay buffer. Pause for the first review at 1,000 episodes.
+Exact episode totals cannot be recovered from DQN_104's W&B aggregates because
+the individual reinforcement before/after states were not logged. Fresh
+DQN_105 should use these forecast and acceptance ranges rather than pretend to
+have an exact predicted number:
+
+| Metric | DQN_104 now | Expected after correction | Acceptance guidance |
+|---|---:|---:|---|
+| Raw reinforce per learner decision | `1.373` | `0.20` to `0.50` | Investigate if it remains above `0.50`. |
+| Raw reinforce per episode at DQN_104's mean 435 decisions | `597` | about `90` to `220` | Always interpret with episode length. |
+| Actual reinforce per learner decision | about `0.687` at DQN_104's `0.5` scale | `0.06` to `0.15` at DQN_105's `0.3` scale | Should remain clearly below attack. |
+| Actual reinforce per equally long episode | about `299` at DQN_104's `0.5` scale | about `27` to `66` at DQN_105's `0.3` scale | Should be well below terminal `300`. |
+| Share of positive shaping | `46.7%` | approximately `10%` to `20%` | Above `25%` indicates continued dominance. |
+| Partial reinforcement actions per episode | about `133` | should fall materially | Track directly; do not set a fixed target until action counts are logged. |
+
+These ranges assume roughly DQN_104-like episode length and attack behavior.
+They are expected calibration ranges, not formula guarantees: the trained
+policy and episode length will change in response to the corrected reward. The
+mathematical sequence bounds above are the guarantees. Do not reduce
+`REWARD_REINFORCE_READY_SCALE` or `REWARD_REINFORCE_TOTAL_SCALE` in the first
+correction run. If the marginal formula still leaves reinforcement above 25%
+of positive shaping after learning stabilizes, then test lower scales as a
+separate experiment.
 
 ## Planned reward updates
 
@@ -457,32 +514,6 @@ ratio-proportional growth, multiple attacker sources for one target (count
 once), multiple favorable targets (sum), a favorable target after an earlier
 conquest, and no double penalty. Choose the scale constant after testing its
 raw component distribution.
-
-### Superseded reinforcement-shaping drafts
-
-Two earlier drafts were superseded by the reinforcement plan above. Per this
-file's own policy (see the top of this section), superseded proposals are not
-reproduced here in full — their complete formulas remain available in
-`Docs/ChangeLog.md` and git history:
-
-- **Detailed reinforcement draft.** A one-time `launch-ready` bonus on
-  crossing a readiness threshold against the territory's *strongest* direct
-  enemy neighbour, plus a separate `territory_share x army_share`
-  continent-progress delta. Superseded because the current plan's continuous
-  weak-neighbour and sum-of-frontier terms reward partial progress toward
-  readiness rather than only the crossing instant, and it separates the
-  concentration incentive into its own explicit unused-budget penalty instead
-  of relying on a one-time bonus's shape to discourage splitting.
-- **Launch-value proposal.** A single Markov delta term,
-  `battle_win_probability(A, weakest enemy) x frontier_security(sum of
-  enemies)`. Superseded because it depends on the full-force battle-
-  probability table that reward shaping otherwise avoids, and it folds
-  weakest-neighbour and whole-frontier readiness into one multiplicative
-  term where the current plan's two additive terms are easier to test and
-  calibrate independently. Its one useful correction — that reinforcement's
-  continent term, not `FortifyAction`'s, should stop paying once a continent
-  is fully owned — carried forward and is now stated directly in the "simple
-  draft" section above.
 
 ## Tests and related files
 

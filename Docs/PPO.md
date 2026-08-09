@@ -507,8 +507,8 @@ The historical PPO runs are not a clean test of PPO under the current task.
 They used the old 13-column graph/action representation, the old territory
 reward, and dense shaping at its unscaled effective strength.  The next PPO
 experiment must start fresh with the same current 15-column representation and
-implemented reward used by DQN_103.  It must not load an old PPO checkpoint or
-rollout.
+implemented reinforcement formulas used by DQN_104, while using the PPO reward
+scale specified below. It must not load an old PPO checkpoint or rollout.
 
 ### Evidence from PPO_041--PPO_045
 
@@ -541,15 +541,15 @@ Historical W&B runs:
 
 ### PPO_104 hypothesis
 
-Use the current `REWARD_SHAPING_SCALE = 0.1` with terminal rewards `+100/-100`.
+Use `REWARD_SHAPING_SCALE = 0.1` with terminal rewards `+100/-100`.
 Unlike a global rescaling, this makes winning and losing ten times more
 important relative to dense shaping than in PPO_041--PPO_045.  It may slow
 initial discovery, but it should reduce accumulated dense-return scale, reduce
 critic pressure on the shared encoder, and prevent a high-shaping losing
 policy from looking successful.
 
-Do **not** use the proposed DQN experiment's `0.5` shaping with `+500/-500` for
-this PPO restart.  PPO normalizes advantages, so multiplying every reward by
+Do **not** reuse DQN_104's `0.5` shaping with `+500/-500` for this PPO restart.
+PPO normalizes advantages, so multiplying every reward by
 five is mostly removed from the actor update while making the critic's raw
 value target five times larger.  That works against the critic-stability goal.
 
@@ -559,8 +559,8 @@ critic's shared-encoder influence.  The initial restart configuration is:
 
 | Constant | PPO_104 value | Reason |
 |---|---:|---|
-| `REWARD_SHAPING_SCALE` | `0.1` | Current DQN_103 reward balance; terminal outcome remains important. |
-| terminal win/loss | `+100/-100` | Keep the current task and avoid global value-scale inflation. |
+| `REWARD_SHAPING_SCALE` | `0.1` | Restore the DQN_103 reward balance; terminal outcome remains important. |
+| terminal win/loss | `+100/-100` | Avoid DQN_104's global value-scale inflation. |
 | `PPO_ROLLOUT_LENGTH` | `1024` | More games, outcomes, seats, player counts, and rosters per on-policy update. |
 | `PPO_MINIBATCH_SIZE` | `256` | Lower-variance gradients; four minibatches per epoch. |
 | `PPO_EPOCHS` | `4` | At most four presentations of each on-policy sample. |
@@ -573,9 +573,8 @@ critic's shared-encoder influence.  The initial restart configuration is:
 | `PPO_ENTROPY_COEF` | `0.01` | Keep one initial entropy setting; react only to measured collapse. |
 | `GRAD_CLIP_MAX_NORM` | `10.0` | Keep the existing safety bound and avoid a second confounding change. |
 
-The implemented reinforcement-reward revision later in `Docs/Reward.md` is
-still pending.  PPO_104 must use the reward that is actually implemented when
-the run is prepared, and its exact reward constants must be captured in W&B.
+The reinforcement-reward revision in `Docs/Reward.md` is implemented. PPO_104
+must retain those formulas, and its exact reward constants must be captured in W&B.
 Do not implement a reward redesign as part of PPO tuning: that would prevent a
 clean comparison with DQN_103 and make a PPO regression ambiguous.
 

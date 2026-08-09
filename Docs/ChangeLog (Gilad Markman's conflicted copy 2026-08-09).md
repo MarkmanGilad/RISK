@@ -16,186 +16,257 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-09
 
-- **Added a model-selection plan (`Docs/ModelSelection.md`), doc only, no
-  code.** Written after analyzing the DQN_103 checkpoint-eval JSON directly:
-  the top 3 non-leading 6-player checkpoints are tied at exactly 55.6%
-  (18 games/checkpoint is too few to separate them; seat position is not
-  significant, p=0.53, but opponent identity is, p<0.0001 — sentinel/empire
-  cause 57% of losses despite being 2 of 5 opponents). The plan notes
-  `AgentMatchEvaluator` (`risk/learning/choose_agent.py`) already supports
-  learner-vs-learner and cross-run/cross-architecture matches today — no new
-  evaluator code needed — and proposes a phased approach: more seeds to
-  break the DQN_103 tie, a self-tournament among top DQN_103 checkpoints, an
-  anchored tournament (candidates + sentinel/empire heuristics), and a
-  stretch cross-run/cross-architecture bracket using each run's
-  `best/manifest.json`. Flags legacy `run_0XX` checkpoint dirs as
-  unconfirmed `agent_kind` and proposes three small new read-only tools (a
-  match report/plot, a cross-match leaderboard aggregator, a candidate-list
-  builder) rather than changing `CheckpointEvaluator`/`AgentMatchEvaluator`.
-  Files: `Docs/ModelSelection.md`, `Docs/ChangeLog.md`.
+- **Made local chart rendering independent of the broken Tk GUI runtime.**
+  `risk/learning/choose_agent.py` now renders its Matplotlib charts with the
+  non-interactive Agg backend and saves the PNG without attempting a Tk window.
+  Files: `risk/learning/choose_agent.py`, `Temp/tests/test_choose_agent.py`,
+  `Docs/ChangeLog.md`.
 
-- **Made saved-evaluation JSON persistence resilient to transient Windows file
-  locks.** Atomic replacement now retries a brief lock held by Dropbox,
-  antivirus, or an editor before surfacing a persistent failure, so checkpoint
-  evaluation can continue after a momentary `WinError 5`. Added focused
-  coverage and documented the bounded retry. Files:
+- **Added an explicit shared-results path to the direct evaluator entry point.**
+  `main()` in `risk/learning/choose_agent.py` now exposes `RESULTS_PATH` for
+  compatible episode windows to append to one JSON. It is configured to add
+  DQN 103 episodes 5000--6150 to the existing 6200--6700 results file.
+  `Docs/ChooseAgent.md` explains the option. Files:
+  `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Made the local checkpoint bar chart downloadable.**
+  `show_checkpoint_win_rate_chart(...)` now saves its Matplotlib chart as a
+  PNG beside the source evaluation JSON and returns that path; `main()` prints
+  it after plotting. Files: `risk/learning/choose_agent.py`,
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Added a local Matplotlib checkpoint bar chart.**
+  `show_checkpoint_win_rate_chart(...)` in `risk/learning/choose_agent.py`
+  reads a saved evaluation JSON and opens a completed-checkpoint win-rate bar
+  chart. `main()` exposes `PLOT_RESULTS_PATH` to run it without W&B or games.
+  Files: `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Changed the checkpoint W&B visualization into a real bar-chart image.**
+  `risk/learning/choose_agent.py` now renders and logs
+  `checkpoint_win_rate_bar_chart` as a labeled PNG through W&B, while retaining
+  `checkpoint_win_rate_table` as its source data. Files:
   `risk/learning/choose_agent.py`, `Temp/tests/test_choose_agent.py`,
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Added an automatic W&B checkpoint win-rate bar chart.**
+  `risk/learning/choose_agent.py` now builds a W&B table and custom bar plot
+  after every completed checkpoint, with checkpoint/agent name on X and final
+  win rate on Y. Incomplete 54-game suites are excluded. `Docs/ChooseAgent.md`
+  documents the panel. Files: `risk/learning/choose_agent.py`,
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Made new versus resumed evaluations explicit in `main()`.**
+  `risk/learning/choose_agent.py` now exposes `EVALUATION_NAME`: `None`
+  resumes the default compatible JSON, while a new label writes a distinct
+  named result file. `Docs/ChooseAgent.md` documents the choice. Files:
+  `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added an immediate evaluator startup message.**
+  `risk/learning/choose_agent.py` now prints the selected agent run and
+  episode range before checkpoint discovery or W&B initialization. Files:
+  `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Separated W&B evaluation charts from training charts.**
+  `risk/learning/choose_agent.py` now logs checkpoint evaluation and custom
+  agent-match runs to the `Risk-Model-Evaluation` project instead of
+  `Risk-GNN-DQN`; `Docs/ChooseAgent.md` explains why. Files:
+  `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added live evaluation progress output.**
+  `risk/learning/choose_agent.py` now prints checkpoint/game start and finish
+  summaries plus a configurable periodic action count (`PROGRESS_EVERY_STEPS`,
+  default 200). The same progress applies to custom matches. Updated focused
+  test doubles and `Docs/ChooseAgent.md`. Files:
+  `risk/learning/choose_agent.py`, `Temp/tests/test_choose_agent.py`,
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Fixed direct execution of the saved-policy evaluator.**
+  `risk/learning/choose_agent.py` now adds the repository root to Python's
+  import path when it is launched by file path or the VS Code Run button, as
+  the trainer already does. `Docs/ChooseAgent.md` now documents both supported
+  launch forms. Files: `risk/learning/choose_agent.py`,
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Added an editable direct-run entry point for saved-policy evaluation.**
+  `risk/learning/choose_agent.py` now has `main()` with simple constants for
+  the normal checkpoint suite and a commented custom `AgentMatchEvaluator`
+  example; no CLI arguments are required. `Docs/ChooseAgent.md` documents
+  what to edit. Files: `risk/learning/choose_agent.py`,
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Fixed checkpoint evaluation reward accounting and repeated checkpoint reads.**
+  `risk/learning/choose_agent.py` now applies end-of-turn reward when an
+  opponent ends or eliminates the learner, matching the trainer's terminal
+  rule. It also reads each checkpoint's online state dictionary once and
+  supplies that in-memory policy to each fresh evaluation agent. Added focused
+  tests for both behaviors and updated `Docs/ChooseAgent.md`. Files:
+  `risk/learning/choose_agent.py`, `Temp/tests/test_choose_agent.py`,
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Found and logged an unfixed reward-accounting bug in `choose_agent.py`.**
+  `_play_game` (`risk/learning/choose_agent.py:143-145`) only fires
+  `env.reward.end_of_turn(...)` on `isinstance(learner_last_action,
+  FortifyAction) or learner_terminal_action`, where `learner_terminal_action`
+  requires the learner's own step to be the one ending the game/eliminating
+  it. `Trainer` (`trainer.py:238`) fires on `isinstance(action,
+  FortifyAction) or done` regardless of whose step made `done` true, so a
+  non-Fortify learner turn that ends via a later opponent step
+  under-reports `episode_reward_sum`/`reward_per_agent_turn` relative to
+  `Trainer`. Found by manual comparison against `trainer.py` after running
+  real (non-mocked) games through `CheckpointEvaluator`/`AgentMatchEvaluator`
+  — all 7 existing tests in `Temp/tests/test_choose_agent.py` monkeypatch
+  `_play_game` out, so none of them would have caught it. Documented as a
+  known issue with the exact fix in `Docs/ChooseAgent.md`; **not yet fixed**.
+  Files: `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Planned checkpoint-weight caching for repeated evaluation games.**
+  `Docs/ChooseAgent.md` now records the follow-up optimization: read one
+  checkpoint's online network once, then initialize a fresh isolated agent
+  from those in-memory weights for every game. Files: `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Kept each saved-policy evaluation fresh without creating a spare game.**
+  `risk/learning/choose_agent.py` now constructs each fresh learned agent from
+  the real game's context before attaching it to its evaluated seat. This
+  avoids an unnecessary temporary game per policy while preserving isolated
+  agent instances and net-only loading. Files: `risk/learning/choose_agent.py`,
+  `Docs/ChangeLog.md`.
+
+- **Implemented independent saved-policy evaluation.**
+  `risk/learning/choose_agent.py` adds `CheckpointEvaluator` for the
+  3--6-player, all-seat fixed heuristic suites and `AgentMatchEvaluator` for
+  caller-chosen cyclic matches. Both persist resumable raw JSON game results;
+  optional W&B logging is isolated in a separate evaluation run. Existing
+  `Evaluator` and training code are untouched. `Temp/tests/test_choose_agent.py`
+  covers scheduling, ranges, persistence/resume, and custom match totals;
+  `Docs/ChooseAgent.md` and `Docs/Testing.md` document the implementation.
+  Files: `risk/learning/choose_agent.py`, `Temp/tests/test_choose_agent.py`,
   `Docs/ChooseAgent.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`.
 
-- **Configured the launcher to resume DQN_105 after episode 400.** Enabled
-  local checkpoint restoration and pinned W&B run `5b66yunb`, so restarting
-  continues the saved model, optimizer, replay buffer, counters, and existing
-  cloud history instead of starting run 105 from scratch. Files:
-  `risk/learning/trainer.py`, `Docs/Trainer.md`, `Docs/ChangeLog.md`.
+- **Defined predictable checkpoint-evaluation result locations.**
+  `Docs/ChooseAgent.md` now gives `CheckpointEvaluator` a default JSON path
+  under the evaluated run's `evaluations/` folder, while allowing a custom
+  path. Custom mixed-agent matches still require an explicit path. Files:
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
 
-## 2026-08-08
-
-- **Reduced DQN_105's joint reward magnitude to the intermediate `0.3/300`
-  setting.** Changed the global dense-shaping coefficient from `0.5` to `0.3`
-  and terminal win/loss from `+500/-500` to `+300/-300`. Their relative
-  balance remains unchanged while absolute replay targets and gradient pressure
-  are reduced by 40%. The marginal reinforcement formula and run ID 105 are
-  unchanged; updated its exact-value test and recalculated the documented
-  expected actual reinforcement ranges. Files:
-  `risk/learning/train_constants.py`, `Temp/tests/test_reward.py`,
-  `Docs/Reward.md`, `Docs/Trainer.md`, `Docs/ChangeLog.md`. Validation:
-  `377 passed, 1 skipped` in the full test suite.
-
-- **Implemented marginal reinforcement shaping for fresh DQN_105.** Ready and
-  total-frontier rewards now use zero-floored before/after potential
-  differences, so equivalent partial placements telescope instead of paying
-  repeatedly for strength already present. Continent, interior, split, all
-  non-reinforcement rewards, global scale `0.5`, and terminal `+500/-500`
-  remain unchanged. Added reinforcement/partial-action counts, per-action W&B
-  diagnostics, marginal threshold/cap/boundary and split-invariance tests, and
-  advanced the non-resuming launcher from DQN_104 to DQN_105. Converted the
-  completed plan into current reward documentation. Files:
-  `risk/learning/reward.py`, `risk/learning/trainer.py`,
-  `Temp/tests/test_reward.py`, `Temp/tests/test_trainer.py`, `Docs/Reward.md`,
-  `Docs/Trainer.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`. Validation:
-  `377 passed, 1 skipped` in the full test suite.
-
-- **Floored the planned `ready_score` at zero, matching `total_score`.**
-  `Docs/Reward.md`'s marginal reinforcement correction plan now wraps
-  `ready_score` in the same `max(0, ...)` used by `total_score`. Without it,
-  the `- REWARD_REINFORCE_READY_RATIO` offset cancels out of the before/after
-  subtraction, so any placement that raises armies on a destination earns a
-  small positive `reinforce_ready` no matter how far below 1.5:1 the ratio
-  stays. The floor removes that leftover reward for progress that never
-  reaches readiness without reintroducing a penalty or breaking the
-  telescoping-sum property split sequences rely on. Added a matching test
-  requirement and corrected the resulting maximum sequence bounds to `2.75`
-  for ready improvement and `5.25` for ready plus total. Still unimplemented;
-  no code or reward values changed. Files: `Docs/Reward.md`,
+- **Added inclusive checkpoint episode-range filtering to the evaluation plan.**
+  `Docs/ChooseAgent.md` now lets callers restrict `CheckpointEvaluator` to
+  `min_episode`/`max_episode`, while allowing a later wider run to reuse the
+  same result file and add only missing games. Files: `Docs/ChooseAgent.md`,
   `Docs/ChangeLog.md`.
 
-- **Documented DQN_104's repeated reinforcement-reward finding and correction
-  plan.** `Docs/Reward.md` now explains that W&B components are raw episode
-  totals, records episode 311's ready/total-dominated breakdown, and identifies
-  repeated full-stack scoring across partial reinforcement actions. Recast the
-  completed reinforcement section as current behavior, removed its obsolete
-  implementation checklist and superseded drafts, and added an unimplemented
-  plan to change ready/total shaping to before/after potential differences with
-  per-action diagnostics and split-invariance tests. Added the last-50-episode
-  component comparison, mathematical corrected-sequence bounds, and explicit
-  expected/acceptance ranges for the next run. No code or reward values changed.
-  Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+- **Hardened planned evaluation results for partial runs and mixed-agent games.**
+  `Docs/ChooseAgent.md` now separates scheduled from completed game counts,
+  records timeout/final-board outcome facts, and validates max-step settings
+  on resume. It limits mixed-agent metrics to objective board/game facts rather
+  than incorrectly promising shaped reward for every participant. Files:
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
 
-## 2026-08-07
-
-- **Prepared fresh DQN_104 with jointly scaled rewards.** Changed dense
-  shaping from `0.1` to `0.5` and terminal win/loss from `+100/-100` to
-  `+500/-500`, preserving their relative ratio while increasing reward and
-  TD-target magnitudes fivefold. Advanced the fresh classic-DQN launcher from
-  run 103 to 104 with `resume=False`; the reinforcement formulas themselves
-  are unchanged. Updated the PPO restart plan to distinguish its planned
-  restored `0.1`/`+100/-100` scale from DQN_104. Files:
-  `risk/learning/train_constants.py`, `risk/learning/trainer.py`,
-  `Temp/tests/test_reward.py`, `Docs/Reward.md`, `Docs/Trainer.md`,
-  `Docs/PPO.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`. Validation:
-  `371 passed, 1 skipped` in the full test suite.
-
-- **Closed reinforcement reward test gaps and removed dead helper.** Added
-  the four cases the reinforcement-revision test checklist called for but the
-  initial implementation pass missed: continent term is zero on a fully owned
-  continent, zero when the readiness gate hasn't been met, strictly larger
-  for a smaller contested continent than a larger one under matching
-  per-territory setup (South America vs. Asia), and the case where the
-  learner owns only one territory in a contested continent. Factored the
-  continent-component formula recomputation shared by these tests into
-  `_expected_continent_component` and generalized `_frontier_reinforcement`
-  to accept a custom target/enemy territory instead of hardcoding
-  Afghanistan/China/India. Also deleted `RewardCalculator
-  ._weakest_adjacent_enemy_armies`, left unused after `_reinforce` was
-  rewritten to compute weakest/sum enemy armies inline in one pass. Files:
-  `risk/learning/reward.py`, `Temp/tests/test_reward.py`. Validation:
-  `370 passed, 1 skipped` in the full suite.
-
-- **Implemented the reinforcement-only reward revision.** Reinforcement now
-  uses weak-neighbour readiness, whole-frontier strength, gated contested-
-  continent priority, interior placement, and one fixed partial-action split
-  penalty. Added separate raw diagnostic components and focused formula,
-  boundary, cap, split, and aggregation tests. No other action reward was
-  changed. Files: `risk/learning/train_constants.py`,
-  `risk/learning/reward.py`, `Temp/tests/test_reward.py`, `Docs/Reward.md`,
-  `Docs/Trainer.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`. Validation:
-  `366 passed, 1 skipped` in the full test suite.
-
-- **Halved the planned reinforcement continent scale for the 1K pilot.**
-  `Docs/Reward.md` now starts `REWARD_REINFORCE_CONTINENT_SCALE` at `5.00`
-  instead of `10.00`. Documented its board-specific upper bound below `2.19`,
-  the combined reinforcement bound below about `7.44`, and the requirement to
-  inspect the logged component distribution before considering an increase.
-  This remains unimplemented. Files: `Docs/Reward.md`,
+- **Reverted the agent-evaluation plan's shared helpers back to plain
+  functions; dropped the private base class.** `Docs/ChooseAgent.md`'s
+  `_RolloutEvaluator` base class (previous entry below) is undone:
+  `CheckpointEvaluator` and `AgentMatchEvaluator` again share two plain
+  module-level private helpers instead of inheriting from a common base.
+  Inheritance wasn't reusing `Evaluator` or making the code simpler — the two
+  new classes don't specialize each other, so a class hierarchy added
+  structure without benefit; plain shared functions are the smaller, more
+  direct fix. Still entirely unimplemented. Files: `Docs/ChooseAgent.md`,
   `Docs/ChangeLog.md`.
 
-- **Clarified the reinforcement plan's split semantics and diagnostics.**
-  `Docs/Reward.md` now states that the fixed `-0.20` partial-action cost does
-  not guarantee split-invariant cumulative shaping, scopes split tests to the
-  exact per-action formula, and requires separate ready/total/continent/
-  interior/split W&B components whose raw sum equals the combined
-  reinforcement reward. Reward logic and constants remain unchanged; no code
-  is implemented. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+- **Switched the agent-evaluation plan's shared helpers to a private base
+  class.** `Docs/ChooseAgent.md` now has `CheckpointEvaluator` and
+  `AgentMatchEvaluator` both inherit from a new `_RolloutEvaluator` base
+  class (`_play_game`, `_load_net_only`, and optionally the resume/atomic-
+  write logic as protected methods) instead of sharing plain module-level
+  functions. `_RolloutEvaluator` is a wholly new hierarchy local to
+  `choose_agent.py` — it does not subclass or otherwise depend on
+  `Evaluator`, which stays untouched, matching the requirement not to change
+  any existing/working class. Still entirely unimplemented. Files:
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
 
-- **Shortened the planned reinforcement constant names.** `Docs/Reward.md`
-  now uses compact `READY`, `TOTAL`, `CONTINENT`, `INTERIOR`, and `SPLIT`
-  names while retaining the common `REWARD_REINFORCE_` namespace. The new
-  `READY_CAP` name remains distinct from the existing, differently defined
-  `REWARD_REINFORCE_RATIO_CAP`. Formulas, values, and reward behavior are
-  unchanged. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+- **Restored the no-existing-class-change boundary in the agent-evaluation plan.**
+  `Docs/ChooseAgent.md` now keeps its rollout and full-checkpoint net-only
+  loading helpers private to the new module, rather than extracting from
+  `Evaluator` or adding an agent method. It also specifies self-describing,
+  atomic per-game JSON persistence and safe resume validation, so all
+  checkpoint/agent results remain usable after interruption. Files:
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
 
-- **Named and explained every reinforcement-plan tuning value.**
-  `Docs/Reward.md` now defines the `1.50` weak-neighbour readiness threshold
-  and `2.00` whole-frontier threshold as named constants, moves all planned
-  reinforcement constants ahead of the formula table, explains the policy
-  meaning of each value, and removes numeric literals from the reward and
-  shaping-cap formulas. Reward logic and initial values are unchanged. Files:
-  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+- **Review-fixed the agent-evaluation plan: reuse `Evaluator`'s game loop
+  instead of duplicating it, and close two implementation gaps.**
+  `Docs/ChooseAgent.md` now requires extracting `Evaluator._play_one`
+  (`risk/learning/evaluator.py:93-168`) into a shared `play_eval_game(...)`
+  helper before implementing `CheckpointEvaluator`/`AgentMatchEvaluator`,
+  since — unlike the existing `Trainer`-vs-`Evaluator` "copy, don't share"
+  precedent in `Docs/Eval.md` — all three evaluators have identical
+  no-side-effect requirements, so duplicating the loop a second time has no
+  justification and conflicts with `CLAUDE.md`'s no-duplicate-logic rule.
+  Also spelled out two previously-unstated gaps: `epNNNNNN/model.pt` full
+  checkpoints need a new net-only loader distinct from the existing
+  `load_params` (which targets separate `best/*.pt` policy-only files), and
+  `build_learner_agent(...)` always returns a `train_mode=True` agent with no
+  seat, so eval-mode/`attach(...)` setup must happen explicitly. Cross-
+  referenced `Eval.md`'s open held-out-opponent question so the two docs'
+  roster choices don't diverge independently if it's resolved later. Still
+  entirely unimplemented. Files: `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
 
-- **Rewrote the planned reinforcement revision as one implementation
-  reference without changing its reward logic.** `Docs/Reward.md` now defines
-  every input once, gives each reward's complete condition and formula in one
-  table, states the exact aggregation/scaling order, and consolidates the
-  implementation and test checklist. Removed the worked calibration examples
-  and updated the fresh-run instruction to the post-DQN_103 1K pilot. Files:
-  `Docs/Reward.md`, `Docs/ChangeLog.md`.
+- **Simplified the agent-evaluation plan to raw result dictionaries.**
+  `Docs/ChooseAgent.md` now removes the automatic selector/ranking design and
+  retains only exhaustive checkpoint evaluation plus caller-configured mixed
+  agent matches. Both persist raw per-game results and totals for a later
+  decision. Files: `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
 
-- **Simplified the planned reinforcement split penalty to one constant.**
-  `Docs/Reward.md` now applies a single raw `-0.20` penalty once to any
-  `ReinforcementAction` that places less than the visible remaining budget,
-  replacing the proposed `-0.05 x unused_armies` formula. Updated the named
-  constant, multi-destination scope, required boundary tests, and worked
-  examples; all other reinforcement-plan terms remain unchanged. This remains
-  unimplemented. Files: `Docs/Reward.md`, `Docs/ChangeLog.md`.
+- **Planned caller-configured saved-agent and heuristic matches.**
+  `Docs/ChooseAgent.md` now defines a separate custom-match evaluator where
+  Python code supplies a 3--6 player mixture of saved policies and built-in
+  heuristics. It cyclically rotates seats, retains per-game outcomes and
+  totals, and never changes the training path or checkpoints. Files:
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
 
-- **Planned a controlled PPO restart under the current DQN_103 task.** Added
-  the unimplemented `PPO_104` plan: current 15-column action representation,
-  shaping scale `0.1` with terminal `+100/-100`, rollout 1024, minibatch 256,
-  and value-loss coefficient `0.1`. The plan records PPO_041--045 evidence,
-  targets their measured critic-over-actor gradient dominance, defines
-  learner-turn review gates and diagnostic reactions, requires fresh
-  namespaces and robust evaluation, and separates a possible DQN-assisted PPO
-  fallback from the from-scratch comparison. Files: `Docs/PPO.md`,
+- **Added total wins as the primary checkpoint-evaluation result.**
+  `Docs/ChooseAgent.md` now requires every checkpoint record to include
+  `total_wins`, `total_games`, and `total_win_rate` across its 54 games, while
+  retaining raw game records for later player-count and seat analysis. Files:
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Made the planned checkpoint evaluator preserve every game result.**
+  `Docs/ChooseAgent.md` now requires per-checkpoint raw game records and
+  incremental JSON persistence rather than a global winner/score, so a later
+  run can select different best policies for different player counts, seats,
+  or other slices. W&B likewise logs one row per game. Files:
+  `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Expanded the planned checkpoint evaluator to all legal player counts.**
+  `Docs/ChooseAgent.md` now defines fixed heuristic suites for 3-, 4-, 5-, and
+  6-player games and rotates the learner through every seat in each. With
+  three seeds this yields 54 games per checkpoint; the current training
+  evaluator remains unchanged. Files: `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Corrected the checkpoint-evaluation seat coverage.**
+  `Docs/ChooseAgent.md` now records that the existing evaluator's three- and
+  five-opponent suites are four- and six-player games. The expanded evaluator
+  therefore rotates through all four and all six seats, respectively: 30
+  games per checkpoint across three seeds, with the heuristic roster fixed.
+  Files: `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Added an exhaustive checkpoint-evaluation option to the ChooseAgent plan.**
+  `Docs/ChooseAgent.md` now specifies a separate class that evaluates every
+  regular checkpoint against the heuristic suites with all legal learner-seat
+  rotations, returning a plain per-checkpoint results dictionary for a later
+  selection run. Files: `Docs/ChooseAgent.md`, `Docs/ChangeLog.md`.
+
+- **Added the standalone ChooseAgent implementation plan.**
+  `Docs/ChooseAgent.md` specifies a non-invasive checkpoint selector that
+  shortlists saved-best plus latest policies, combines fresh fixed-opponent
+  evaluation with seat-rotated learned-agent matches, and records its own W&B
+  selection run. The plan explicitly leaves current training, evaluator, and
+  agent classes unchanged. Files: `Docs/ChooseAgent.md`,
   `Docs/ChangeLog.md`.
 
 ## 2026-08-02

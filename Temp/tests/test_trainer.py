@@ -19,6 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from risk.agents.base_agent import BaseAgent
 from risk.game.environment import Environment
 from risk.learning import trainer as trainer_module
@@ -229,8 +231,18 @@ def test_trainer_logs_expected_metric_keys(tmp_path: Path) -> None:
         "samples_processed_in_episode",
         "cumulative_optimizer_steps",
         "cumulative_samples_processed",
+        "reinforce_action_count",
+        "reinforce_partial_action_count",
+        "reward_component_reinforce_per_action",
+        "reward_component_reinforce_ready_per_action",
+        "reward_component_reinforce_total_per_action",
     }
     assert expected_keys.issubset(logged[0].keys())
+    reinforce_actions = logged[0]["reinforce_action_count"]
+    if reinforce_actions:
+        assert logged[0]["reward_component_reinforce_per_action"] == pytest.approx(
+            logged[0]["reward_component_reinforce"] / reinforce_actions
+        )
     assert logged[0]["cumulative_learner_turns"] == logged[0]["agent_turns_survived"]
     assert logged[0]["player_count"] == trainer_module.MIN_PLAYERS
     assert logged[0]["opponent_count_random"] == trainer_module.MIN_PLAYERS - 1
