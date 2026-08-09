@@ -514,8 +514,9 @@ a new `Temp/tests/test_ppo.py` per `Docs/Testing.md`'s convention:
 ## Planned PPO restart: PPO_200
 
 **Status: PPO-specific configuration and diagnostics are implemented. The
-`PPO_200` launcher is configured for its required local smoke run with W&B
-disabled; it must pass before a fresh W&B run is enabled.**
+local smoke run passed through episode 250 (27 rollout updates, 426 optimizer
+steps, 109,056 processed samples), and the launcher is now configured for a
+fresh W&B-backed PPO_200 run.**
 
 **Confirmed (2026-08-09):** run id `PPO_200`, not `PPO_104`/`PPO_106`. It
 deliberately starts a fresh numbering block, separate from the shared
@@ -663,9 +664,9 @@ would alter DQN_105 and make a PPO regression ambiguous.
    particular values, but keep it so the code stays correct if either constant
    changes later.
 3. Select `build_learner_agent("PPO", ctx)` in `trainer.py`, set
-   `RUN_ID = 200`, and use `resume=False`. **Implemented for the local smoke
-   run:** `main()` now builds PPO_200 with `use_wandb=False`; retain that until
-   the smoke validation passes, then enable a fresh W&B run without a run id.
+   `RUN_ID = 200`, and use `resume=False`. **Implemented:** after the local
+   smoke run passed, `main()` now builds PPO_200 with W&B enabled and no W&B
+   run id, creating a fresh cloud run rather than resuming local or cloud state.
 
    **Comment:** this step also touches `Temp/tests/test_ppo.py`, which is not
    separately listed but is covered by step 6. Specifically,
@@ -706,8 +707,10 @@ would alter DQN_105 and make a PPO regression ambiguous.
    preemptively — just confirm during this smoke run that the interval still
    captures a reasonable number of rollout updates, and only revisit if it
    doesn't.
-10. Start the fresh W&B run only after the smoke run and configuration review
-   pass.
+10. **Implemented:** start the fresh W&B run only after the smoke run and
+   configuration review pass. The 250-episode smoke checkpoint is preserved as
+   `Checkpoints/PPO_200_smoke_ep000250`; PPO_200 itself begins with an empty
+   checkpoint namespace and random network initialization.
 
 ### Required monitoring
 

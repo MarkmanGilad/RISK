@@ -16,6 +16,15 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-09
 
+- **Promoted PPO_200 from a completed local smoke run to a fresh W&B run.**
+  The smoke reached episode 250 with 27 PPO updates, 426 optimizer steps, and
+  109,056 processed samples. Preserved its checkpoints under
+  `Checkpoints/PPO_200_smoke_ep000250`, then changed the launcher to enable
+  W&B with `resume=False` and no cloud run id, ensuring PPO_200 starts with an
+  empty checkpoint namespace and a fresh W&B history. Files:
+  `risk/learning/trainer.py`, `Docs/Trainer.md`, `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
 - **Configured the trainer entry point for PPO_200's local smoke run.**
   `trainer.py` now builds `PPO_Agent` with run id 200, an empty fresh start,
   and W&B disabled; it leaves the DQN_105 resume id and W&B id as comments for

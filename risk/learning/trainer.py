@@ -459,7 +459,7 @@ def main() -> None:
     trainer = Trainer(
         RUN_ID,
         agent=agent,
-        use_wandb=False,
+        use_wandb=True,
         resume=False,
     )
     trainer.train(n_episodes=TRAIN_EPISODES)
