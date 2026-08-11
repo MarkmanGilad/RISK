@@ -56,6 +56,7 @@ class HudPanel:
         rect: pygame.Rect,
         state: State,
         settings: GameSettings,
+        player_labels: Optional[dict[int, str]] = None,
         message: str = "",
         last_action_text: str = "",
         last_action_lines: tuple[str, ...] = (),
@@ -76,7 +77,8 @@ class HudPanel:
         swatch = pygame.Rect(x, y + 3, 14, 14)
         pygame.draw.rect(target, player.color, swatch)
         pygame.draw.rect(target, self.FG, swatch, 1)
-        kind_label = AGENT_KIND_LABELS.get(player.agent_kind, player.agent_kind.title())
+        player_labels = player_labels or {}
+        kind_label = player_labels.get(player.id, AGENT_KIND_LABELS.get(player.agent_kind, player.agent_kind.title()))
         label = self.font.render(
             f"{player.name}  ({kind_label})", True, self.FG
         )
@@ -105,7 +107,7 @@ class HudPanel:
             tag = "X" if p.id in state.eliminated else ("*" if p.id == pid else " ")
             sw = pygame.Rect(x, y + 3, 10, 10)
             pygame.draw.rect(target, p.color, sw)
-            p_kind_label = AGENT_KIND_LABELS.get(p.agent_kind, p.agent_kind.title())
+            p_kind_label = player_labels.get(p.id, AGENT_KIND_LABELS.get(p.agent_kind, p.agent_kind.title()))
             line = self.font.render(
                 f"{tag} {p.name[:6]:<6} {p_kind_label:<8} t={n_owned:>2} a={n_armies:>3} c={n_cards}",
                 True,

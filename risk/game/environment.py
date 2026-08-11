@@ -285,8 +285,15 @@ class Environment:
             s.armies[idx] += count
         s.reinforcement_budget -= action.total
         if s.reinforcement_budget == 0:
-            s.phase = Phase.ATTACK
-            s.conquered_this_turn = False
+            if s.pending_attack is not None:
+                # A mid-attack forced trade-in's earned armies are placed;
+                # resume the parked OccupyAction rather than starting a
+                # fresh ATTACK phase, and leave conquered_this_turn as-is —
+                # this turn's conquest streak is still in progress.
+                s.phase = Phase.OCCUPY
+            else:
+                s.phase = Phase.ATTACK
+                s.conquered_this_turn = False
         return {"placed": dict(action.placements), "remaining_budget": s.reinforcement_budget}
 
     def _trade_in_set(self, s: State, pid: int, trio: tuple[Card, Card, Card]) -> int:
@@ -319,12 +326,16 @@ class Environment:
             raise ValueError("Selected cards are not a valid set")
         value = self._trade_in_set(s, pid, trio)  # type: ignore[arg-type]
         s.reinforcement_budget += value
+        # A hand at or above MAX_CARDS_IN_HAND keeps legal_actions() offering
+        # only trade-ins (no skip), so a large inherited hand loops through
+        # here until no valid set remains — each set's value accumulates in
+        # reinforcement_budget. Once done, every accumulated value (including
+        # a mid-attack forced trade's) gets one shared REINFORCE_PLACE step;
+        # _apply_reinforce resumes the parked OCCUPY once it's fully placed
+        # instead of silently overwriting an unplaced budget at next turn.
         auto_skipped = not any(self._legal_trade_ins(s))
         if auto_skipped:
-            # Mid-attack forced trade-in (hand inherited from an eliminated
-            # opponent) resumes the parked OccupyAction instead of advancing
-            # to REINFORCE_PLACE.
-            s.phase = Phase.OCCUPY if s.pending_attack is not None else Phase.REINFORCE_PLACE
+            s.phase = Phase.REINFORCE_PLACE
         return {
             "traded": value,
             "cards": len(hand) - 3,
@@ -332,8 +343,13 @@ class Environment:
         }
 
     def _apply_skip_trade(self, s: State) -> dict:
-        # Same resume-OCCUPY rule as the auto-skip path in _apply_trade_in.
-        s.phase = Phase.OCCUPY if s.pending_attack is not None else Phase.REINFORCE_PLACE
+        # Only legal once the hand is below MAX_CARDS_IN_HAND (legal_actions()
+        # withholds it otherwise), including mid-attack once a forced
+        # sequence has traded down far enough to make further trading
+        # optional. Either way, any value already accumulated this TRADE_IN
+        # (turn-start or mid-attack) still needs its REINFORCE_PLACE step;
+        # _apply_reinforce resumes the parked OCCUPY once it's placed.
+        s.phase = Phase.REINFORCE_PLACE
         return {}
 
     def _legal_trade_ins(self, s: State) -> Iterable[Action]:
@@ -429,7 +445,11 @@ class Environment:
             info["conquered"] = True
             s.unfinished_attack_targets_this_turn.discard(ti)
 
-            # Card draw on first conquest of the turn.
+            # Card draw on first conquest of the turn. An ordinary conquest
+            # that brings the hand to MAX_CARDS_IN_HAND is not force-traded
+            # here — the player keeps the card and finishes this
+            # attack/occupy/fortify flow; the forced trade waits for their
+            # next turn's TRADE_IN phase (_begin_turn_for).
             if not s.conquered_this_turn:
                 card = self._draw_card()
                 if card is not None:
@@ -452,12 +472,13 @@ class Environment:
             s.pending_attack = PendingAttack(
                 from_index=fi, to_index=ti, attacker_dice=action.dice
             )
-            # An eliminated player's cards can push the winner's hand to or
-            # past MAX_CARDS_IN_HAND mid-attack — forced trade-ins (legal_
-            # actions() already makes TRADE_IN mandatory at that hand size)
-            # must resolve before the parked OccupyAction; _apply_trade_in/
-            # _apply_skip_trade route back here via pending_attack.
-            if len(s.hands[pid]) >= MAX_CARDS_IN_HAND:
+            # Only an eliminated defender's transferred cards force an
+            # immediate trade-in — an ordinary conquest-card draw never does
+            # (see above). That transfer can land the hand arbitrarily above
+            # MAX_CARDS_IN_HAND, so _apply_trade_in/_apply_reinforce route
+            # back here (via pending_attack) until every required set is
+            # traded and its value placed, before OCCUPY resumes.
+            if info["eliminated"] is not None and len(s.hands[pid]) >= MAX_CARDS_IN_HAND:
                 s.phase = Phase.TRADE_IN
             else:
                 s.phase = Phase.OCCUPY
@@ -576,19 +597,24 @@ class Environment:
         pid = s.current_player_index
         # Always allow skipping.
         yield FortifyAction(from_territory=None, to_territory=None, count=0)
-        # Enumerate move endpoints — only count=1..armies-1 for tractability;
-        # agents that want larger counts can submit them directly.
+        # Offer a bounded choice of small, middle, and maximum transfers.
+        # Every intermediate positive count remains valid when submitted
+        # directly (the human UI can choose one), but enumerating them all
+        # would grow with army count and make learned-agent scoring expensive.
         for i, o in enumerate(s.owners):
             if o != pid or s.armies[i] < 2:
                 continue
             t = self.topology.territory_at(i)
+            maximum = s.armies[i] - 1
+            amounts = sorted({1, (1 + maximum) // 2, maximum})
             # Find all owned territories reachable through owned chain.
             for j, oj in enumerate(s.owners):
                 if i == j or oj != pid:
                     continue
                 u = self.topology.territory_at(j)
                 if self._connected_through_owned(s, pid, t, u):
-                    yield FortifyAction(from_territory=t, to_territory=u, count=s.armies[i] - 1)
+                    for count in amounts:
+                        yield FortifyAction(from_territory=t, to_territory=u, count=count)
 
     def _advance_turn(self, s: State) -> None:
         n = self.settings.player_count

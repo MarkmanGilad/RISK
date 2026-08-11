@@ -129,8 +129,12 @@ unique color, and a seat type:
 - **Click a color swatch** to cycle to the next color not already taken by
   another seat.
 - **Click the seat-type cell** to cycle: `Human → Random → Raider → Sentinel
-  → Empire → Human ...` (see [agent kinds](#riskagents--who-decides-each-move)
-  below).
+  → Empire → Killbot → Learned Agent → Human ...`. A Learned Agent can load a
+  local DQN, Dueling DQN, or PPO policy through **File...** or **Folder...**,
+  or cycle through the five evaluated DQN 103 presets with **Best DQN**. Each
+  click selects the next preset and shows its label beside the controls. Its
+  selected model must load successfully before the game can start (see [agent
+  kinds](#riskagents--who-decides-each-move) below).
 - **Click "Start Game"** — disabled (greyed out, with a reason shown) while
   any name is blank or two seats share a color.
 

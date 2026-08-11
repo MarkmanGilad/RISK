@@ -471,8 +471,9 @@ separate experiment.
 
 ## Planned reward updates
 
-The sections below remain unimplemented proposals. `Docs/Update_Plan.md`
-covers the older combined-update experiment.
+The sections below remain unimplemented historical proposals. The older
+combined-update experiment is recorded in `Docs/ChangeLog.md`; current shared
+environment/action-space proposals live in `Docs/EnvironmentActionPlan.md`.
 
 ### Planned favorable-attack stop penalty
 

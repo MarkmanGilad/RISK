@@ -16,6 +16,322 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-11
 
+- **Implemented bounded fortify amounts for learned agents.**
+  `Environment._legal_fortify(...)` now offers each reachable owned pair the
+  deduplicated `1 / half / maximum` move amounts plus skip, while preserving
+  arbitrary valid direct `FortifyAction` counts for the human UI. Added
+  environment coverage and updated the action-space plan, action reference,
+  and poster accuracy note. This changes the learner action space, so
+  `DQN_300` starts fresh. Files: `risk/game/environment.py`,
+  `Temp/tests/test_environment.py`, `Docs/EnvironmentActionPlan.md`,
+  `Docs/Action.md`, `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Configured the training launcher for fresh `DQN_300`.**
+  `risk/learning/trainer.py` now selects `DQN` with `RUN_ID = 300` and
+  `resume=False`, so it creates `Checkpoints/DQN_300` without loading an
+  incompatible pre-change checkpoint. `Docs/Trainer.md` now describes the
+  active launcher. Files: `risk/learning/trainer.py`, `Docs/Trainer.md`,
+  `Docs/ChangeLog.md`.
+
+- **Implemented the deferred-trade-in card rule fix from
+  `Docs/EnvironmentActionPlan.md`.** `Environment._apply_attack` no longer
+  forces `Phase.TRADE_IN` for an ordinary conquest-card draw that brings the
+  hand to `MAX_CARDS_IN_HAND` — only an eliminated defender's transferred
+  cards still force an immediate mid-attack trade-in; the ordinary case now
+  finishes attack/occupy/fortify normally and is forced to trade at the
+  start of the player's *next* turn instead (`TRADE_IN` already starts every
+  turn). Also fixed a real, independently-reachable bug in the *existing*
+  mid-attack forced-trade path: `_apply_trade_in`'s `auto_skipped` branch and
+  `_apply_skip_trade` used to jump straight from `TRADE_IN` to `OCCUPY`,
+  never giving the accumulated trade-in value a `REINFORCE_PLACE` step —
+  that budget was silently discarded when `_begin_turn_for` overwrote
+  `reinforcement_budget` at the start of the player's next turn. Both paths
+  now route through `REINFORCE_PLACE` first; `_apply_reinforce`'s completion
+  now checks `pending_attack` to resume `OCCUPY` (without resetting
+  `conquered_this_turn`) instead of always advancing to a fresh `ATTACK`
+  phase.
+  **Consequential, breaking change:** the fix means a player's own hand can
+  now legitimately sit at the full `MAX_CARDS_IN_HAND` (not just
+  `MAX_CARDS_IN_HAND - 1`) between an ordinary conquest and their next turn
+  — including while sitting as someone else's defender. Combined with an
+  eliminated defender's own hand having the same property, the true worst-
+  case mid-attack transient hand grows from 9 to 10 cards, so
+  `MAX_TRANSIENT_HAND_SIZE` in `risk/constants.py` changed from
+  `2 * (MAX_CARDS_IN_HAND - 1) + 1` to `2 * MAX_CARDS_IN_HAND`. This resizes
+  `TradeInHead`'s card-slot embedding table
+  (`risk/learning/heads.py`) — **any existing DQN/Dueling DQN/PQN/ADQN
+  checkpoint using `TradeInHead` will fail `load_state_dict` with a shape
+  mismatch** (a loud failure, not silent corruption) and needs a fresh
+  training run, same as any other environment/action-space change (see the
+  "Experiment rule" pattern in `Docs/EnvironmentActionPlan.md`'s other
+  section).
+  Updated `Docs/Action.md`'s `TradeInAction`/`AttackAction` sections and
+  `risk/constants.py`'s `MAX_TRANSIENT_HAND_SIZE` comment to match, marked
+  `Docs/EnvironmentActionPlan.md`'s first section "implemented", and added
+  `Temp/tests/test_environment.py` coverage: an ordinary four-to-five
+  conquest that defers to the next turn, the corrected mid-attack elimination
+  path's `REINFORCE_PLACE` step, a nine-card elimination needing two
+  consecutive trade-ins summed into one placement, and the existing +2
+  matching-territory-card bonus (previously untested). Full suite: 409
+  passed, 1 skipped. Files: `risk/game/environment.py`, `risk/constants.py`,
+  `Docs/Action.md`, `Docs/EnvironmentActionPlan.md`,
+  `Temp/tests/test_environment.py`, `Docs/ChangeLog.md`.
+
+- **Planned the five-card conquest rule correction without changing code.**
+  `Docs/EnvironmentActionPlan.md` now distinguishes a normal four-to-five-card
+  conquest (finish the current turn; forced trade-in at the next turn start)
+  from an elimination card transfer (force trade-in before the parked occupy
+  action resumes). The plan now also requires a dedicated placement step for
+  the elimination trade-in set value before occupation resumes, preventing it
+  from being overwritten and lost, and explicitly requires repeated trade-ins
+  until fewer than five cards remain (including a nine-card regression case).
+  Files:
+  `Docs/EnvironmentActionPlan.md`, `Docs/ChangeLog.md`.
+
+- **Clarified the learned-seat controls in the New Game screen.** Replaced the
+  clipped `Learned Agent` type label with `AI Agent`, renamed the ambiguous
+  `Best...` button to `Best DQN`, and documented that each click cycles to the
+  next of the five evaluated DQN 103 presets and shows its label. Files:
+  `risk/ui/render/init_screen_view.py`, `README.md`,
+  `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Closed the learned-agent play test-coverage gap called out in the
+  previous review.** Added real coverage to `Temp/tests/test_learned_agent_play.py`:
+  policy-only `.pt` and `epNNNNNN` round-trips through `choose_agent.py`'s
+  reused private helpers (built from a real `GNN_DQN_Agent` fixture, not a
+  mock), real-seat attachment (`epsilon=0.0`, `train_mode=False`,
+  `player_id`/`env` rebinding, deterministic repeated inference),
+  `validate_selections` accept/missing-checkpoint/agent-kind-mismatch cases,
+  independent agent instances for two seats sharing one checkpoint, and a
+  mixed human/heuristic/learned `AppLoop` smoke run driven through the real
+  loop under `SDL_VIDEODRIVER=dummy`. The previous `callable(...)`-only
+  "coupling" check is replaced by tests that actually call the private
+  helpers and would fail on a signature/behavior-breaking refactor. Updated
+  `Docs/Testing.md`'s row accordingly (the app-loop coverage lives in this
+  file, not `test_game_loop.py`, since `Game`/`Game.tick()` aren't on the
+  interactive path). Full suite: 406 passed, 1 skipped. Files:
+  `Temp/tests/test_learned_agent_play.py`, `Docs/Testing.md`,
+  `Docs/ChangeLog.md`.
+
+- **Fixed a stale-validation bug and cleaned up the learned-agent setup-screen
+  implementation.** `refresh_learned_validation()` was only called from
+  kind/model-change handlers, not from the `-`/`+` player-count buttons in
+  `risk/ui/render/init_screen_view.py`; reducing player count past an erroring
+  learned seat left Start Game blocked on a stale message about a seat that no
+  longer existed. Also replaced inline `__import__("pathlib")` calls with a
+  normal top-level `from pathlib import Path` import, and stopped the
+  algo-kind cycle button from being clickable on a preset-sourced selection
+  (a preset already supplies its own kind; cycling it desynced the checkpoint
+  from the claimed architecture until validation caught it later). Verified
+  the adapter end-to-end against a real `Checkpoints/DQN_103/ep006700`
+  preset (load, validate, attach, `epsilon=0.0`, `train_mode=False`, act) and
+  ran the full suite (396 passed, 1 skipped). Files:
+  `risk/ui/render/init_screen_view.py`, `Docs/ChangeLog.md`.
+
+- **Corrected predefined learned policies to use evaluation evidence.**
+  Replaced trainer-score DQN/Dueling/PPO manifests with DQN 103's five highest
+  evaluated checkpoint directories (episodes 6700, 6000, 5400, 5650, and
+  5600); Dueling DQN and PPO remain manual-only until evaluated. Files:
+  `Params/play_agents.json`, `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Implemented interactive learned-policy play setup.** Added UI-only learned
+  seats with manual file/folder selection and preset cycling, a policy-only
+  adapter that reuses the existing loader helpers, actual app-time agent
+  replacement, optional sidebar model labels, and focused setup/registry tests
+  without changing game-domain or training source files. Files:
+  `risk/app/learned_agent_play.py`, `risk/app/main.py`, `risk/app/loop.py`,
+  `risk/app/view.py`, `risk/ui/input/init_screen.py`,
+  `risk/ui/render/init_screen_view.py`, `risk/ui/render/panels.py`,
+  `Params/play_agents.json`, `Temp/tests/test_learned_agent_play.py`, `Temp/tests/test_ui.py`,
+  `README.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`.
+
+- **Preserved direct `GameView` compatibility in the learned-agent plan.** The
+  UI label mapping must be an optional empty-default argument through the
+  loop/view/panel layers because `risk.learning.self_play.py` already builds a
+  `GameView` directly and remains out of scope. Files:
+  `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Specified the UI-only learned-seat type cycle.** The plan now records the
+  explicit visible cycle, the underlying `ai` placeholder, and clearing the
+  learned selection when a seat switches back to an ordinary type or is
+  removed by a player-count reduction; the current `AGENT_KIND_ORDER` cannot
+  supply this behavior by itself. Files:
+  `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Fixed a scope-violating break in the learned-agent play plan's
+  `SetupStage.default_settings()` change.** Step 3 had it returning the new
+  `InteractiveSetupResult` wrapper for skip-menu/auto-restart/max-ticks paths,
+  but `default_settings()` is called directly as
+  `GameFactory.build(SetupStage.default_settings(...))` from
+  `risk/learning/self_play.py`, `risk/learning/trainer.py`, and several tests
+  — files the plan's scope boundary forbids editing. `default_settings()` now
+  keeps returning a bare `GameSettings` unchanged; `main.py`'s `run()` wraps
+  it locally instead. Files: `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Consolidated learned-agent play into one implementation-ready plan.**
+  Replaced the separate review-evidence section with a complete sequence that
+  incorporates import safety, lazy validation, setup-result flow, policy-only
+  loading, UI labels, multi-seat behavior, tests, and unchanged game/training
+  boundaries. Files: `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Flagged a lazy-import requirement in the learned-agent play plan.**
+  `risk/app/factory.py` has no `torch`/`risk/learning/` dependency today, and
+  `risk/app/setup.py` already defers its `init_screen_view` import to avoid
+  loading pygame for headless setup paths. If the new adapter (which reuses
+  `choose_agent.py`, which imports `torch`) were imported at module top of
+  `risk/ui/render/init_screen_view.py`, every interactive launch — including
+  all-human games — would newly pay a `torch` import cost. Step 1 now
+  requires a function-local import instead. Files: `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Closed the learned-agent setup-result and pre-start-validation gaps.** The
+  plan now returns UI-only selections/labels through the setup-to-main path and
+  validates them once in a short-lived, unchanged factory context before Start
+  Game is enabled. Files: `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Corrected the learned-agent play plan's fix for its own circular-import
+  risk after reading `risk/app/setup.py`.** The prior fix routed the new
+  checkpoint-load-validation adapter through `SetupStage`, but `SetupStage`
+  is a one-line static dispatcher with no event loop — it can't gate a live
+  "Start Game" button. That button, its `enabled=ok` flag, and the whole
+  pygame event loop actually live in `run_init_screen(...)` in
+  `risk/ui/render/init_screen_view.py`, a file `choose_agent.py` never
+  imports, so it's both the functionally correct call site and still
+  cycle-safe. Files: `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Corrected the learned-agent play plan's policy-only `.pt` wording.** The
+  reused `choose_agent.py` helper reads raw network state for both artifact
+  shapes; it does not call each agent's `load_params()` method. Files:
+  `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Re-reviewed the learned-agent play plan after it merged in the earlier
+  review notes, and caught a real circular-import risk left by the "reuse
+  `choose_agent.py`'s private helpers" decision.** `risk/learning/
+  choose_agent.py` already imports `InitScreenState` from
+  `risk/ui/input/init_screen.py` (to build evaluation rosters) and
+  `GameFactory` from `risk/app/factory.py`; if the new adapter that imports
+  `choose_agent.py`'s `_read_policy_state`/`_new_learned_agent` were itself
+  reachable from `init_screen.py`, the import graph would close a genuine
+  cycle. Moved the adapter and its checkpoint-load validation into
+  `risk/app/setup.py` (`SetupStage`, which already imports `InitScreenState`
+  and sits above both layers) and restricted `InitScreenState` to
+  syntactic-only checks. Also fixed a self-contradictory paragraph left over
+  from the previous merge (review item 4 said both "resolved by reuse" and
+  "must reimplement" in the same paragraph) and added a coupling-test
+  mitigation for depending on `choose_agent.py`'s private functions. Files:
+  `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Changed the learned-agent play plan to reuse existing policy-only
+  helpers.** The UI/app adapter imports `choose_agent.py`'s established
+  loader/constructor helpers without modifying them, rather than duplicating
+  saved-policy handling. Files: `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Applied the learned-agent play review findings to the implementation
+  sequence.** It now specifies UI-only sidebar labels, app-list replacement
+  timing, shared-`model.pt` net extraction, explicit class/evaluation-mode
+  handling, preset portability, dedicated tests, and the README Killbot fix.
+  Files: `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Added a review-notes section to the learned-agent play plan after
+  fact-checking it against the current code.** Flags a real gap (the
+  in-game sidebar can't show a model label while `Player.agent_kind` stays
+  `"ai"`, since `panels.py` reads labels straight from `AGENT_KIND_LABELS`),
+  clarifies that only `ctx.agents` — not `ctx.game.agents` — is load-bearing
+  for the interactive `AppLoop` path, corrects the checkpoint-file-layout
+  description (one shared `model.pt` with a `"net"` key, not a separate
+  file), notes the deliberate duplication of `choose_agent.py`'s private
+  net-only-loading helpers, and suggests a dedicated test file over folding
+  everything into `test_ui.py`/`test_game_loop.py`. Files:
+  `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Constrained the learned-agent play plan to the UI/app layer.** Learned
+  choices stay outside `GameSettings`; the app swaps validated policies into
+  existing `ai` placeholders before play, leaving game rules, the factory, and
+  all training files unchanged. Files: `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Split planned learned-policy selection into manual and predefined paths.**
+  Each seat will either browse for a local checkpoint or select a curated best
+  model; `Params/play_agents.json` now records only the maintained predefined
+  best-model registry. Files: `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Made the planned interactive learned-policy chooser file-picker first.**
+  Each learned seat will select a local checkpoint through a native dialog;
+  `Params/play_agents.json` is now optional recent-selection persistence, not
+  required configuration. Files: `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Narrowed the planned interactive learned-policy selector to DQN, Dueling
+  DQN, and PPO.** Deferred PQN and ADQN until a later explicit extension of
+  the play-mode plan. Files: `Docs/PlayLearnedAgents.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added the interactive learned-agent play plan.** Documented the New Game
+  selector, supported DQN/PPO/Dueling saved-policy kinds, the planned
+  `Params/play_agents.json` catalog, deterministic policy-only loading, and
+  validation/test criteria without changing application code. Files:
+  `Docs/PlayLearnedAgents.md`, `Docs/ChangeLog.md`.
+
+- **Replaced the stale completed combined-update plan with a current action-space
+  plan.** Removed `Docs/Update_Plan.md`, whose reward/history/injection work is
+  implemented and recorded in the reference docs and change log. Added
+  `Docs/EnvironmentActionPlan.md` with the proposed bounded `1 / half / max`
+  fortify candidates, test/measurement requirements, and fresh-run rule.
+  Retargeted `Docs/Reward.md`'s historical-plan reference. Files:
+  `Docs/Update_Plan.md`, `Docs/EnvironmentActionPlan.md`, `Docs/Reward.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added an A0 scientific-poster design brief for the GNN-RL Risk project.**
+  It specifies the story, draft poster text, graph/action-injection figures,
+  network explanation, W&B-result figure choices, evidence limits, and
+  production checklist without creating the poster artwork yet. Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Expanded the poster brief with reward and opponent explanations.** Added
+  poster-ready descriptions of bounded dense reward shaping, the terminal win/
+  loss signal, the varied heuristic-opponent roster, and the planned controlled
+  Dueling DQN rerun. Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Added poster attribution details.** Recorded Gilad Markman as author and
+  the 2026 Practical Deep Learning for Science course team: Prof. Eilam Gross,
+  Dmitrii Kobylianskii, Alon Levi, and Etienne Dreyer. Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Clarified the poster's core network message.** The title-area summary now
+  names the shared graph-attention encoder and separate action-phase heads.
+  Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Added the game environment as a poster foundation.** The brief now explains
+  the state/legal-action/transition/reward agent-environment loop and reserves
+  a compact figure for it. Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Connected heuristic opponents to the poster's environment section.** The
+  environment narrative now identifies the varied rule-based opponents as
+  agents using the same legal-action and transition interface. Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Documented quantitative-action discretisation for the poster.** The brief
+  now explains reinforcement's `1 / half / all` army buckets, why multi-step
+  placement retains flexibility, and that current fortification uses a
+  different max-transfer-plus-skip enumeration. Files: `Docs/Poster.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added the random baseline agent to the poster environment section.** Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Added a compact Risk-rules panel to the poster brief.** It introduces the
+  board, turn phases, cards, continent bonuses, and win objective for readers
+  unfamiliar with the game. Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Prioritized attack and conquest rules in the poster game explanation.**
+  The brief now explains the attacker/defender dice comparison and occupation
+  after eliminating defenders instead of emphasizing cards. Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
 - **Configured fresh PPO_202 as the midpoint learning-rate experiment.** Set
   PPO's default `PPO_LR` to `7.5e-5` and switched the PPO launcher to
   `RUN_ID = 202` with `resume=False`, producing a new `PPO_202` W&B run and

@@ -36,16 +36,14 @@ Dueling-comparable epsilon-greedy-Q behavior. `PQN_e0` is the matching
 Bellman-only control: the same epsilon-greedy behavior with a per-agent
 policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
-The current `main()` launcher starts a fresh W&B-backed `PPO_202` run: it builds
-`PPO_Agent`, starts with no checkpoint (`resume=False`), writes under
-`Checkpoints/PPO_202`, and has no `wandb_run_id`, so W&B creates a new run. The
-completed 250-episode local smoke checkpoint was preserved separately as
-`Checkpoints/PPO_200_smoke_ep000250`; it is not resumed or used to seed this
-experiment. The run keeps PPO_200's shared DQN_105 reward and PPO settings,
-with only `PPO_LR=7.5e-5` instead of `1e-4` to balance PPO_200's faster
-learning against PPO_201's lower KL drift. The prior DQN_105 resume
-values (`RUN_ID = 105`, `resume=True`, W&B id `5b66yunb`) remain as comments in
-`main()` for later restoration.
+The current `main()` launcher starts a fresh W&B-backed `DQN_300` run: it builds
+`GNN_DQN_Agent`, starts with no checkpoint (`resume=False`), writes under
+`Checkpoints/DQN_300`, and has no `wandb_run_id`, so W&B creates a new run.
+This is the first DQN experiment using the corrected card-trade environment:
+ordinary five-card conquest draws defer trading to the next turn, while
+elimination card transfers still resolve their required trades and placement
+before occupation resumes. It must not resume a pre-change checkpoint because
+the environment sequence and `TradeInHead` card-slot capacity changed.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and future agents

@@ -102,19 +102,29 @@ def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0
             # PRE-GAME: produce settings (menu, or defaults for smoke tests).
             # `--max-ticks` is used by smoke tests and implies no menu.
             if skip_menu or max_ticks is not None or auto_restart:
-                settings = SetupStage.default_settings(n=players, seed=current_seed)
+                setup_result = {"settings": SetupStage.default_settings(n=players, seed=current_seed),
+                                "selections": {}, "labels": {}}
             else:
-                settings = SetupStage.run_setup(
+                setup_result = SetupStage.run_setup(
                     screen,
                     players=players,
                     seed=current_seed,
                     skip_menu=False,
                 )
-            if settings is None:
+            if setup_result is None:
                 return 0  # user closed the window
+            if not isinstance(setup_result, dict):
+                setup_result = {"settings": setup_result, "selections": {}, "labels": {}}
+            settings = setup_result["settings"]
 
             # BUILD: pygame-free wiring shared with headless training.
             ctx = GameFactory.build(settings)
+            selections = setup_result["selections"]
+            if selections:
+                from risk.app.learned_agent_play import build_agents
+
+                for seat, agent in build_agents(ctx, selections).items():
+                    ctx.agents[seat] = agent
 
             # GAME: run the interactive loop.
             loop = AppLoop(
@@ -124,6 +134,7 @@ def run(width: Optional[int] = None, height: Optional[int] = None, seed: int = 0
                 height=height,
                 ai_delay_ms=ai_delay,
                 marker_ms=marker_dur,
+                player_labels=setup_result["labels"],
             )
             loop.run(max_ticks=max_ticks, show_win_screen=not auto_restart)
 

@@ -30,6 +30,7 @@ class _Seat:
 @dataclass
 class InitScreenState:
     seats: list[_Seat] = field(default_factory=list)
+    learned_selections: dict[int, dict[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.seats:
@@ -50,6 +51,9 @@ class InitScreenState:
             )
         while len(self.seats) > n:
             self.seats.pop()
+        self.learned_selections = {
+            seat: selection for seat, selection in self.learned_selections.items() if seat < n
+        }
 
     def set_name(self, index: int, name: str) -> None:
         self._check_index(index)
@@ -84,6 +88,47 @@ class InitScreenState:
         next_index = (AGENT_KIND_ORDER.index(current) + 1) % len(AGENT_KIND_ORDER)
         self.seats[index].agent_kind = AGENT_KIND_ORDER[next_index]
         return self.seats[index].agent_kind
+
+    def next_visible_agent_kind(self, index: int) -> str:
+        """Cycle the setup-screen types, including its UI-only learned seat."""
+        self._check_index(index)
+        if index in self.learned_selections:
+            self.learned_selections.pop(index)
+            self.seats[index].agent_kind = "human"
+            return "human"
+        if self.seats[index].agent_kind == "killbot":
+            self.seats[index].agent_kind = "ai"
+            self.learned_selections[index] = {
+                "source": "",
+                "checkpoint": "",
+                "agent_kind": "DQN",
+                "label": "",
+                "preset_id": "",
+            }
+            return "learned"
+        return self.next_agent_kind(index)
+
+    def set_learned_selection(
+        self, index: int, *, source: str, checkpoint: str, agent_kind: str,
+        label: str, preset_id: str = "",
+    ) -> None:
+        self._check_index(index)
+        if source not in {"manual", "preset"}:
+            raise ValueError("learned source must be manual or preset")
+        if agent_kind not in {"DQN", "Dueling_DQN", "PPO"}:
+            raise ValueError("unsupported learned agent kind")
+        self.seats[index].agent_kind = "ai"
+        self.learned_selections[index] = {
+            "source": source,
+            "checkpoint": checkpoint,
+            "agent_kind": agent_kind,
+            "label": label,
+            "preset_id": preset_id,
+        }
+
+    def is_learned(self, index: int) -> bool:
+        self._check_index(index)
+        return index in self.learned_selections
 
     def _check_index(self, index: int) -> None:
         if not (0 <= index < len(self.seats)):

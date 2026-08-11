@@ -16,7 +16,7 @@ from risk.game.actions import (
 )
 from .conftest import make_env, make_settings
 from risk.game.board_topology import BoardTopology
-from risk.constants import MIN_REINFORCEMENT
+from risk.constants import CARD_TERRITORY_BONUS_ARMIES, MAX_CARDS_IN_HAND, MIN_REINFORCEMENT
 from risk.game.card import Card
 from risk.game.environment import Environment
 from risk.game.phase import Phase
@@ -547,8 +547,9 @@ def test_occupy_rejects_count_below_dice() -> None:
 def test_mid_attack_elimination_forces_trade_in_before_occupy() -> None:
     """An eliminated defender's cards can push the winner's hand to/past
     MAX_CARDS_IN_HAND mid-attack; the environment must force TRADE_IN
-    before the parked OccupyAction, then resume OCCUPY once the hand is
-    back below the limit, rather than dropping into REINFORCE_PLACE."""
+    before the parked OccupyAction, route the accumulated trade value
+    through one REINFORCE_PLACE step, then resume OCCUPY — never dropping
+    the earned armies and never routing to the normal post-turn ATTACK."""
     env = Environment()
     env.reset(_settings(n=3, seed=0))
     s = env.current_state()
@@ -573,6 +574,7 @@ def test_mid_attack_elimination_forces_trade_in_before_occupy() -> None:
     s.current_player_index = pid
     s.phase = Phase.ATTACK
     s.conquered_this_turn = True  # skip the conquest card draw for an exact hand count
+    s.reinforcement_budget = 0  # clear the leftover turn-start budget from reset()
 
     card_ids = territories[:8]
     s.hands[pid] = [Card(territory_id=t, symbol="infantry") for t in card_ids[:4]]
@@ -590,13 +592,176 @@ def test_mid_attack_elimination_forces_trade_in_before_occupy() -> None:
         trades = [a for a in env.legal_actions() if isinstance(a, TradeInAction)]
         env.step(trades[0] if trades else SkipTradeAction())
 
-    assert s.phase is Phase.OCCUPY
+    # Two forced trades on an 8-card hand (8 -> 5 -> 2): values from
+    # card_set_value(0) + card_set_value(1) = 4 + 6 = 10, and the earned
+    # armies get one shared placement step before OCCUPY resumes.
+    assert s.phase is Phase.REINFORCE_PLACE
     assert len(s.hands[pid]) < 5
     assert s.pending_attack is not None
+    assert s.reinforcement_budget == 10
+    assert s.conquered_this_turn is True
+
+    env.step(ReinforcementAction(placements={attacker: s.reinforcement_budget}))
+
+    assert s.phase is Phase.OCCUPY
+    assert s.pending_attack is not None
+    assert s.conquered_this_turn is True
 
     env.step(OccupyAction(count=5))
     assert s.phase is Phase.ATTACK
     assert s.pending_attack is None
+
+
+def test_ordinary_four_to_five_conquest_defers_trade_to_next_turn() -> None:
+    """A normal (non-eliminating) conquest that draws the hand to
+    MAX_CARDS_IN_HAND must not interrupt OCCUPY — the forced trade waits
+    for this player's next TRADE_IN phase, not this attack sequence."""
+    env = Environment()
+    env.reset(_settings(n=3, seed=0))
+    s = env.current_state()
+    pid, defender_pid, other_pid = 0, 1, 2
+    territories = env.topology.territories
+
+    # `defender_pid` keeps two territories (survives the conquest);
+    # `other_pid` keeps one elsewhere; `pid` owns everything else.
+    defender_territories = [
+        t for t in territories if s.owners[env.topology.index_of(t)] == defender_pid
+    ][:2]
+    other_territory = next(
+        t for t in territories if s.owners[env.topology.index_of(t)] == other_pid
+    )
+    for t in territories:
+        i = env.topology.index_of(t)
+        if t in defender_territories:
+            s.owners[i] = defender_pid
+            s.armies[i] = 1
+        elif t == other_territory:
+            s.owners[i] = other_pid
+            s.armies[i] = 1
+        else:
+            s.owners[i] = pid
+            s.armies[i] = max(s.armies[i], 5)
+    target = defender_territories[0]
+    ti = env.topology.index_of(target)
+    attacker = next(
+        nb for nb in env.topology.neighbors(target)
+        if s.owners[env.topology.index_of(nb)] == pid
+    )
+    ai = env.topology.index_of(attacker)
+    s.armies[ai] = 50
+    s.armies[ti] = 1
+    s.current_player_index = pid
+    s.phase = Phase.ATTACK
+    s.conquered_this_turn = False
+    s.hands[pid] = [Card(territory_id=t, symbol="infantry") for t in territories[:4]]
+
+    while s.owners[ti] != pid:
+        env.step(AttackAction(from_territory=attacker, to_territory=target, dice=3))
+
+    assert defender_pid not in s.eliminated
+    assert len(s.hands[pid]) == 5
+    assert s.phase is Phase.OCCUPY
+    assert s.pending_attack is not None
+
+    # The rest of the attack/occupy/fortify flow proceeds untouched, at 5
+    # cards, all the way to ending the turn.
+    env.step(OccupyAction(count=5))
+    assert s.phase is Phase.ATTACK
+    env.step(StopAttackAction())
+    assert s.phase is Phase.FORTIFY
+    env.step(FortifyAction(from_territory=None, to_territory=None, count=0))
+
+    # Only at pid's own next turn does the 5-card hand become mandatory
+    # (mirrors test_reset_phase_is_trade_in_when_player_has_valid_set's
+    # direct-_begin_turn_for shortcut rather than playing the other two
+    # players' full turns). _begin_turn_for's own trade-in check reads
+    # current_player_index rather than its pid argument, so it must match.
+    s.current_player_index = pid
+    env._begin_turn_for(s, pid)
+    assert s.phase is Phase.TRADE_IN
+    assert [a for a in env.legal_actions() if isinstance(a, SkipTradeAction)] == []
+
+
+def test_nine_card_elimination_requires_two_trade_ins_before_one_placement() -> None:
+    """A 9-card inherited hand needs two consecutive forced trade-ins
+    (9 -> 6 -> 3) before the accumulated value is placed in one shared
+    REINFORCE_PLACE step; a voluntary third set is left untraded."""
+    env = Environment()
+    env.reset(_settings(n=3, seed=0))
+    s = env.current_state()
+    pid, defender_pid = 0, 1
+    territories = env.topology.territories
+    target = next(t for t in territories if s.owners[env.topology.index_of(t)] == defender_pid)
+    ti = env.topology.index_of(target)
+
+    for i in range(len(s.owners)):
+        if i != ti:
+            s.owners[i] = pid
+            s.armies[i] = max(s.armies[i], 5)
+    s.owners[ti] = defender_pid
+    s.armies[ti] = 1
+
+    attacker = next(nb for nb in env.topology.neighbors(target))
+    ai = env.topology.index_of(attacker)
+    s.armies[ai] = 50
+    s.current_player_index = pid
+    s.phase = Phase.ATTACK
+    s.conquered_this_turn = True  # skip the conquest card draw for an exact hand count
+    s.reinforcement_budget = 0  # clear the leftover turn-start budget from reset()
+
+    card_ids = territories[:9]
+    s.hands[pid] = [Card(territory_id=t, symbol="infantry") for t in card_ids[:4]]
+    s.hands[defender_pid] = [Card(territory_id=t, symbol="infantry") for t in card_ids[4:9]]
+
+    while s.phase not in (Phase.OCCUPY, Phase.TRADE_IN):
+        env.step(AttackAction(from_territory=attacker, to_territory=target, dice=3))
+
+    assert defender_pid in s.eliminated
+    assert len(s.hands[pid]) == 9
+    assert s.phase is Phase.TRADE_IN
+
+    trade_count = 0
+    while len(s.hands[pid]) >= MAX_CARDS_IN_HAND:
+        trades = [a for a in env.legal_actions() if isinstance(a, TradeInAction)]
+        assert trades, "an all-infantry hand at/above the limit always has a valid set"
+        env.step(trades[0])
+        trade_count += 1
+
+    assert trade_count == 2
+    assert len(s.hands[pid]) == 3
+    # A third (now voluntary) set is still tradeable but not required.
+    assert s.phase is Phase.TRADE_IN
+    assert any(isinstance(a, TradeInAction) for a in env.legal_actions())
+    env.step(SkipTradeAction())
+
+    assert s.phase is Phase.REINFORCE_PLACE
+    assert s.pending_attack is not None
+    # card_set_value(0) + card_set_value(1) = 4 + 6.
+    assert s.reinforcement_budget == 10
+
+    env.step(ReinforcementAction(placements={attacker: s.reinforcement_budget}))
+    assert s.phase is Phase.OCCUPY
+    assert s.pending_attack is not None
+
+
+def test_trade_in_places_territory_bonus_on_owned_matching_card() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    pid = s.current_player_index
+    owned_idx = next(i for i, o in enumerate(s.owners) if o == pid)
+    owned_territory = env.topology.territory_at(owned_idx)
+    other_territories = [t for t in env.topology.territories if t != owned_territory][:2]
+    s.hands[pid] = [
+        Card(territory_id=owned_territory, symbol="infantry"),
+        Card(territory_id=other_territories[0], symbol="cavalry"),
+        Card(territory_id=other_territories[1], symbol="artillery"),
+    ]
+    env._begin_turn_for(s, pid)
+    armies_before = s.armies[owned_idx]
+
+    env.step(TradeInAction(card_indices=(0, 1, 2)))
+
+    assert s.armies[owned_idx] == armies_before + CARD_TERRITORY_BONUS_ARMIES
 
 
 def test_occupy_rejects_count_above_available() -> None:
@@ -654,6 +819,49 @@ def test_fortify_requires_connected_owned_chain() -> None:
         s.armies[ai] = 5
     with pytest.raises(ValueError):
         env.step(FortifyAction(from_territory=a, to_territory=b, count=1))
+
+
+def test_legal_fortify_offers_one_half_and_maximum_transfer() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    pid = s.current_player_index
+    source = env.topology.territories[0]
+    destination = env.topology.neighbors(source)[0]
+    source_index = env.topology.index_of(source)
+    destination_index = env.topology.index_of(destination)
+    s.owners[source_index] = pid
+    s.owners[destination_index] = pid
+    s.armies[source_index] = 10
+    s.phase = Phase.FORTIFY
+
+    counts = sorted(
+        action.count for action in env.legal_actions()
+        if isinstance(action, FortifyAction)
+        and action.from_territory == source
+        and action.to_territory == destination
+    )
+
+    assert counts == [1, 5, 9]
+
+
+def test_fortify_accepts_an_unenumerated_valid_transfer() -> None:
+    env = _fresh_env()
+    s = env.current_state()
+    pid = s.current_player_index
+    source = env.topology.territories[0]
+    destination = env.topology.neighbors(source)[0]
+    source_index = env.topology.index_of(source)
+    destination_index = env.topology.index_of(destination)
+    s.owners[source_index] = pid
+    s.owners[destination_index] = pid
+    s.armies[source_index] = 10
+    s.armies[destination_index] = 1
+    s.phase = Phase.FORTIFY
+
+    env.step(FortifyAction(from_territory=source, to_territory=destination, count=4))
+
+    assert s.armies[source_index] == 6
+    assert s.armies[destination_index] == 5
 
 
 def test_winner_detected_when_only_one_alive() -> None:

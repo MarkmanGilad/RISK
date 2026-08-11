@@ -129,6 +129,14 @@ def test_init_screen_cycles_agent_kinds() -> None:
     assert s.next_agent_kind(0) == "human"
 
 
+def test_init_screen_visible_cycle_includes_learned_agent() -> None:
+    s = InitScreenState()
+    for _ in range(6):
+        s.next_visible_agent_kind(0)
+    assert s.is_learned(0)
+    assert s.seats[0].agent_kind == "ai"
+
+
 def test_init_screen_rejects_invalid_inputs() -> None:
     s = InitScreenState()
     with pytest.raises(ValueError):

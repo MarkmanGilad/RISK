@@ -27,9 +27,12 @@ class GameView:
         settings: GameSettings,
         width: int,
         height: int,
+        *,
+        player_labels: Optional[dict[int, str]] = None,
     ) -> None:
         self.screen = screen
         self.settings = settings
+        self.player_labels = player_labels or {}
         self.renderer = RiskMapRenderer()
         self.hud = HudPanel()
         self.topology = BoardTopology()
@@ -94,6 +97,7 @@ class GameView:
             self.hud_rect,
             state,
             self.settings,
+            player_labels=self.player_labels,
             message=message,
             last_action_text=last_action_text,
             last_action_lines=last_action_lines,

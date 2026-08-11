@@ -36,11 +36,12 @@ class AppLoop:
         height: int,
         ai_delay_ms: int,
         marker_ms: int,
+        player_labels: Optional[dict[int, str]] = None,
     ) -> None:
         self.env = ctx.env
         self.settings = ctx.settings
         self.agents = ctx.agents
-        self.view = GameView(screen, ctx.settings, width, height)
+        self.view = GameView(screen, ctx.settings, width, height, player_labels=player_labels)
         self.pacer = AITickPacer(ai_delay_ms)
         self.marker = ActionMarker(AI_MARKER_RGB, marker_ms)
         self.last_action_text = ""

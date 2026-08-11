@@ -16,6 +16,7 @@ Interaction:
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import pygame
@@ -74,7 +75,7 @@ def _next_unused_color(current: tuple[int, int, int],
     return current
 
 
-def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
+def run_init_screen(screen: pygame.Surface) -> Optional[object]:
     """Drive the init screen until the user starts a game or quits.
 
     Returns the chosen `GameSettings`, or `None` if the user quit.
@@ -89,6 +90,38 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
     editing: Optional[int] = None  # index of name-cell being typed into
     edit_buffer: str = ""
     clock = pygame.time.Clock()
+    learned_error = ""
+
+    def setup_result():
+        settings = state.build_settings(seed=None)
+        selections = {seat: dict(selection) for seat, selection in state.learned_selections.items()}
+        return {"settings": settings, "selections": selections,
+                "labels": {seat: s["label"] or s["agent_kind"] for seat, s in selections.items()}}
+
+    def refresh_learned_validation() -> None:
+        nonlocal learned_error
+        ok, _ = state.can_start()
+        if not ok or not state.learned_selections:
+            learned_error = ""
+            return
+        from risk.app.learned_agent_play import validate_selections
+
+        learned_error = validate_selections(state.build_settings(seed=None), state.learned_selections)
+
+    def choose_path(directory: bool) -> str:
+        from tkinter import Tk, filedialog
+
+        root = Tk()
+        root.withdraw()
+        try:
+            initial = str(Path.cwd() / "Checkpoints")
+            if directory:
+                return filedialog.askdirectory(initialdir=initial, parent=root)
+            return filedialog.askopenfilename(
+                initialdir=initial, parent=root, filetypes=[("Policy files", "*.pt"), ("All files", "*.*")]
+            )
+        finally:
+            root.destroy()
 
     def used_colors(exclude: int = -1) -> set[tuple[int, int, int]]:
         return {s.color for i, s in enumerate(state.seats) if i != exclude}
@@ -137,6 +170,7 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
         name_rects: list[pygame.Rect] = []
         color_rects: list[pygame.Rect] = []
         kind_rects: list[pygame.Rect] = []
+        learned_rects: list[tuple[pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect] | None] = []
 
         for i, seat in enumerate(state.seats):
             y = rows_top + i * (ROW_H + ROW_PAD)
@@ -176,14 +210,35 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
             pygame.draw.rect(screen, PANEL_HI, kind_rect, border_radius=4)
             pygame.draw.rect(screen, MUTED, kind_rect, 1, border_radius=4)
             kind_label = font.render(
-                AGENT_KIND_LABELS.get(seat.agent_kind, seat.agent_kind.title()),
+                "AI Agent" if state.is_learned(i) else AGENT_KIND_LABELS.get(seat.agent_kind, seat.agent_kind.title()),
                 True,
                 TEXT,
             )
+            if state.is_learned(i):
+                file_rect = pygame.Rect(COLUMN_X["kind"] + KIND_W + 12, y + 12, 90, ROW_H - 24)
+                dir_rect = pygame.Rect(file_rect.right + 6, y + 12, 70, ROW_H - 24)
+                preset_rect = pygame.Rect(dir_rect.right + 6, y + 12, 90, ROW_H - 24)
+                algo_rect = pygame.Rect(preset_rect.right + 6, y + 12, 110, ROW_H - 24)
+                selection = state.learned_selections[i]
+                for rect, label in ((file_rect, "File..."), (dir_rect, "Folder..."), (preset_rect, "Best DQN"),
+                                    (algo_rect, selection["agent_kind"].replace("_", " "))):
+                    pygame.draw.rect(screen, PANEL_HI, rect, border_radius=4)
+                    pygame.draw.rect(screen, MUTED, rect, 1, border_radius=4)
+                    text = small.render(label, True, TEXT)
+                    screen.blit(text, text.get_rect(center=rect.center))
+                if selection["label"]:
+                    screen.blit(small.render(selection["label"][:35], True, MUTED), (algo_rect.right + 10, y + 18))
+                learned_rects.append((file_rect, dir_rect, preset_rect, algo_rect))
+            else:
+                learned_rects.append(None)
             screen.blit(kind_label, kind_label.get_rect(center=kind_rect.center))
 
         # --- start button + validation ---------------------------------
         ok, why = state.can_start()
+        if learned_error:
+            ok, why = False, learned_error
+        elif any(not selection["checkpoint"] for selection in state.learned_selections.values()):
+            ok, why = False, "Choose a model for every Learned Agent."
         start_rect = pygame.Rect(w - 220, h - 80, 180, 50)
         start_btn = _Button(start_rect, "Start Game", enabled=ok)
         start_btn.draw(
@@ -217,7 +272,7 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
                     if event.key == pygame.K_ESCAPE:
                         return None
                     if event.key == pygame.K_RETURN and ok:
-                        return state.build_settings(seed=None)
+                        return setup_result()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 pos = event.pos
                 if editing is not None:
@@ -233,6 +288,7 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
                     state.set_player_count(state.player_count - 1)
                     if editing is not None and editing >= state.player_count:
                         editing = None
+                    refresh_learned_validation()
                     continue
                 if plus.hit(pos):
                     state.set_player_count(state.player_count + 1)
@@ -242,10 +298,11 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
                         state.seats[-1].color = _next_unused_color(
                             state.seats[-1].color, used
                         )
+                    refresh_learned_validation()
                     continue
 
                 if start_btn.hit(pos):
-                    return state.build_settings(seed=None)
+                    return setup_result()
 
                 for i, r in enumerate(name_rects):
                     if r.collidepoint(pos):
@@ -262,8 +319,55 @@ def run_init_screen(screen: pygame.Surface) -> Optional[GameSettings]:
                     else:
                         for i, r in enumerate(kind_rects):
                             if r.collidepoint(pos):
-                                state.next_agent_kind(i)
+                                state.next_visible_agent_kind(i)
+                                refresh_learned_validation()
                                 break
+                        else:
+                            for i, controls in enumerate(learned_rects):
+                                if controls is None:
+                                    continue
+                                file_rect, dir_rect, preset_rect, algo_rect = controls
+                                selection = state.learned_selections[i]
+                                if file_rect.collidepoint(pos) or dir_rect.collidepoint(pos):
+                                    checkpoint = choose_path(dir_rect.collidepoint(pos))
+                                    if checkpoint:
+                                        state.set_learned_selection(
+                                            i, source="manual", checkpoint=checkpoint,
+                                            agent_kind=selection["agent_kind"],
+                                            label=Path(checkpoint).name,
+                                        )
+                                        refresh_learned_validation()
+                                    break
+                                if preset_rect.collidepoint(pos):
+                                    from risk.app.learned_agent_play import load_presets
+
+                                    try:
+                                        presets = load_presets()
+                                        if not presets:
+                                            learned_error = "No predefined best models are configured."
+                                        else:
+                                            current = selection.get("preset_id", "")
+                                            index = next((j for j, p in enumerate(presets) if p["id"] == current), -1)
+                                            preset = presets[(index + 1) % len(presets)]
+                                            state.set_learned_selection(
+                                                i, source="preset", checkpoint=preset["checkpoint"],
+                                                agent_kind=preset["agent_kind"], label=preset["label"],
+                                                preset_id=preset["id"],
+                                            )
+                                            refresh_learned_validation()
+                                    except ValueError as exc:
+                                        learned_error = str(exc)
+                                    break
+                                if algo_rect.collidepoint(pos) and selection["source"] != "preset":
+                                    kinds = ("DQN", "Dueling_DQN", "PPO")
+                                    next_kind = kinds[(kinds.index(selection["agent_kind"]) + 1) % len(kinds)]
+                                    state.set_learned_selection(
+                                        i, source=selection["source"] or "manual",
+                                        checkpoint=selection["checkpoint"], agent_kind=next_kind,
+                                        label=selection["label"], preset_id=selection["preset_id"],
+                                    )
+                                    refresh_learned_validation()
+                                    break
 
 
 __all__ = ["run_init_screen"]

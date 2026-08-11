@@ -73,12 +73,16 @@ MAX_CARDS_IN_HAND: Final[int] = 5
 
 # Highest a hand can momentarily reach mid-attack, before the forced
 # trade-in (Environment._apply_attack) brings it back below
-# MAX_CARDS_IN_HAND: the attacker's own steady-state hand (<= MAX_CARDS_
-# IN_HAND - 1, since they always trade back down before continuing), plus
-# one conquest-card draw, plus the eliminated defender's own steady-state
-# hand (<= MAX_CARDS_IN_HAND - 1). Used to size TradeInHead's card-slot
-# embedding table so a real hand-slot index is never out of range.
-MAX_TRANSIENT_HAND_SIZE: Final[int] = 2 * (MAX_CARDS_IN_HAND - 1) + 1
+# MAX_CARDS_IN_HAND. Only an eliminated defender's transferred cards force
+# an immediate mid-attack trade-in — an ordinary conquest-card draw instead
+# defers to the attacker's next TRADE_IN phase, so by the time an
+# elimination happens either side may already be sitting at the full
+# MAX_CARDS_IN_HAND: the attacker's own hand (<= MAX_CARDS_IN_HAND, holding
+# a deferred conquest card from earlier this turn or this same conquest),
+# plus the eliminated defender's own hand (<= MAX_CARDS_IN_HAND, deferred
+# the same way since their own last turn). Used to size TradeInHead's
+# card-slot embedding table so a real hand-slot index is never out of range.
+MAX_TRANSIENT_HAND_SIZE: Final[int] = 2 * MAX_CARDS_IN_HAND
 
 # Classic Risk card-set trade-in progression. After the 6th trade-in
 # (value 15) each further trade-in is worth the previous value + 5,
