@@ -615,12 +615,12 @@ critic's shared-encoder influence.  The initial restart configuration is:
 | `PPO_ENTROPY_COEF` | `0.01` | Keep one initial entropy setting; react only to measured collapse. |
 | `GRAD_CLIP_MAX_NORM` | `10.0` | Keep the existing safety bound and avoid a second confounding change. |
 
-**Comment (current code state):** PPO_202 retains PPO_200's
-`PPO_ROLLOUT_LENGTH=1024`,
-`PPO_MINIBATCH_SIZE=256`, and `PPO_VALUE_LOSS_COEF=0.1`. `PPO_CLIP_EPS`, `PPO_TARGET_KL`,
-`PPO_GAE_LAMBDA`, `PPO_VALUE_HUBER_BETA`, `PPO_ENTROPY_COEF`, and
-`GRAD_CLIP_MAX_NORM` also remain unchanged. The sole PPO_202 difference is
-`PPO_LR=7.5e-5`, between PPO_200's `1e-4` and PPO_201's `5e-5`.
+**Comment (current code state):** PPO_301 retains
+`PPO_ROLLOUT_LENGTH=1024` and `PPO_VALUE_LOSS_COEF=0.1`, but uses
+`PPO_MINIBATCH_SIZE=64` to reduce the peak GPU batch created from its
+action-graph candidates. `PPO_CLIP_EPS`, `PPO_TARGET_KL`, `PPO_GAE_LAMBDA`,
+`PPO_VALUE_HUBER_BETA`, `PPO_ENTROPY_COEF`, and `GRAD_CLIP_MAX_NORM` remain
+unchanged; `PPO_LR=7.5e-5` is between PPO_200's `1e-4` and PPO_201's `5e-5`.
 `GRAD_CLIP_MAX_NORM` is also shared with `GNN_DQN_Agent`/`Dueling_DQN_Agent`/
 `PQN_Agent`/`ADQN_Agent`, so leaving it untouched is required, not just
 convenient, to avoid a cross-agent confound.

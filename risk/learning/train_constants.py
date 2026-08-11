@@ -39,7 +39,7 @@ GRAD_CLIP_MAX_NORM: Final[float] = 10.0
 
 PPO_ROLLOUT_LENGTH: Final[int] = 1024
 PPO_EPOCHS: Final[int] = 4
-PPO_MINIBATCH_SIZE: Final[int] = 256
+PPO_MINIBATCH_SIZE: Final[int] = 64
 PPO_CLIP_EPS: Final[float] = 0.2
 PPO_TARGET_KL: Final[float] = 0.02
 PPO_GAE_LAMBDA: Final[float] = 0.95

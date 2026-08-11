@@ -501,8 +501,11 @@ comparison window and a larger evaluation suite.
    generation and rule validation come from the environment, not from an
    unconstrained network output.
 10. Show the reinforcement `1 / half / all` choice as an action-space
-    discretisation. Keep the fortify description separate unless its legal
-    action generator is intentionally changed.
+    discretisation. Fortify uses the same `1 / middle / maximum` scheme as of
+    the `Docs/EnvironmentActionPlan.md` bucketed-fortify change
+    (`Environment._legal_fortify`) — describe both consistently rather than
+    singling reinforcement out, and re-check this note if either
+    generator's discretisation changes again.
 11. Keep the “How the game works” panel concise: objective, territories,
     turn phases, cards, and continent bonuses are sufficient context.
 
