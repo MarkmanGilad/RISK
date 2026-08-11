@@ -1,9 +1,8 @@
 """PPO learner using the same injected-action graphs as the DQN agents."""
 from __future__ import annotations
 
-import random
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Sequence
 
 import torch
 from torch.distributions import Categorical
@@ -65,17 +64,17 @@ class PPO_Agent(BaseAgent):
                  train_mode: bool = False, seed: int | None = None, gamma: float = 0.99,
                  lr: float = PPO_LR, rollout_length: int = PPO_ROLLOUT_LENGTH,
                  target_kl: float = PPO_TARGET_KL) -> None:
+        """Initialize PPO state, network, optimizer, and environment adapters."""
         super().__init__(player_id)
         self.env, self.device, self.gamma = env, resolve_device(device), float(gamma)
         self.rollout_length = int(rollout_length)
         self.target_kl = float(target_kl)
         self.epsilon = 0.0  # Evaluator compatibility; PPO never consults it.
-        self._rng = random.Random(seed)
         self.rollout_buffer = RolloutBuffer()
         self._pending: tuple[float, float, int] | None = None
-        self._train_steps = 0
-        self._optimizer_steps = 0
-        self._samples_processed = 0
+        self.train_steps = 0
+        self.optimizer_steps = 0
+        self.samples_processed = 0
         self._samples_processed_estimated = False
         self.last_update_metrics: dict[str, float] = {}
         self._bind_environment(env)
@@ -85,75 +84,70 @@ class PPO_Agent(BaseAgent):
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
         self.set_train_mode(train_mode)
 
-    @property
-    def train_steps(self) -> int:
-        return self._train_steps
-
-    @property
-    def optimizer_steps(self) -> int:
-        return self._optimizer_steps
-
-    @property
-    def samples_processed(self) -> int:
-        return self._samples_processed
-
     def progress_metrics(self) -> dict[str, float]:
         """Cheap rollout-state metrics for the generic trainer logger."""
         rollout_fill = len(self.rollout_buffer)
         return {
             "ppo_rollout_fill": float(rollout_fill),
             "ppo_rollout_fill_fraction": rollout_fill / self.rollout_length,
-            "ppo_rollout_updates": float(self._train_steps),
+            "ppo_rollout_updates": float(self.train_steps),
             "ppo_samples_processed_estimated": float(self._samples_processed_estimated),
         }
 
     def _bind_environment(self, env: Environment) -> None:
+        """Create graph and action encoders bound to this environment."""
         self.adapter = GraphAdapter(env.topology, env.settings)
         self.builder = ActionGraphBuilder(env.topology)
         self.action_encoder = ActionEncoder(env)
 
     def attach(self, player_id: int, env: Environment) -> None:
+        """Attach the agent to a player and refresh environment-specific helpers."""
         self.player_id, self.env = player_id, env
         self._bind_environment(env)
 
     def set_train_mode(self, train: bool) -> None:
+        """Set stochastic action selection and network training mode."""
         self.train_mode = bool(train)
         self.net.train(train)
 
     def save_params(self, path: str | Path) -> None:
+        """Save only the policy-value network parameters."""
         torch.save(self.net.state_dict(), path)
 
     def load_params(self, path: str | Path) -> None:
+        """Load only the policy-value network parameters."""
         self.net.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
 
     def save_checkpoint(self, dir_path: str | Path) -> None:
+        """Save network, optimizer, and PPO progress counters."""
         path = Path(dir_path)
         path.mkdir(parents=True, exist_ok=True)
         torch.save(
             {
                 "net": self.net.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
-                "train_steps": self._train_steps,
-                "optimizer_steps": self._optimizer_steps,
-                "samples_processed": self._samples_processed,
+                "train_steps": self.train_steps,
+                "optimizer_steps": self.optimizer_steps,
+                "samples_processed": self.samples_processed,
                 "samples_processed_estimated": self._samples_processed_estimated,
             },
             path / "model.pt",
         )
 
     def load_checkpoint(self, dir_path: str | Path) -> None:
+        """Restore network, optimizer, and PPO progress counters."""
         payload = torch.load(Path(dir_path) / "model.pt", map_location=self.device, weights_only=False)
         self.net.load_state_dict(payload["net"])
         self.optimizer.load_state_dict(payload["optimizer"])
-        self._train_steps = int(payload["train_steps"])
-        self._optimizer_steps = int(payload.get("optimizer_steps", self._optimizer_steps_from_state()))
+        self.train_steps = int(payload["train_steps"])
+        self.optimizer_steps = int(payload.get("optimizer_steps", self._optimizer_steps_from_state()))
         if "samples_processed" in payload:
-            self._samples_processed = int(payload["samples_processed"])
+            self.samples_processed = int(payload["samples_processed"])
             self._samples_processed_estimated = bool(
                 payload.get("samples_processed_estimated", False)
             )
         else:
-            self._samples_processed = self._optimizer_steps * PPO_MINIBATCH_SIZE
+            self.samples_processed = self.optimizer_steps * PPO_MINIBATCH_SIZE
             self._samples_processed_estimated = True
         self.rollout_buffer.clear()
 
@@ -167,6 +161,7 @@ class PPO_Agent(BaseAgent):
         return max(steps, default=0)
 
     def _decision_rows(self, state: State, actions: Sequence[Action], perspective: int) -> tuple[list[Data], torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build graph-network inputs for one state and its legal actions."""
         base = self.adapter(state, perspective=perspective)
         rows = [base] + [self.builder(base, action, state) for action in actions]
         encoded = self.action_encoder.encode_many(actions, state)
@@ -177,10 +172,12 @@ class PPO_Agent(BaseAgent):
         return rows, phase, cards, groups, value_mask
 
     def _forward_actions(self, state: State, actions: Sequence[Action], perspective: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Evaluate action logits and the state value for one decision."""
         rows, phase, cards, groups, value_mask = self._decision_rows(state, actions, perspective)
         return self.net(Batch.from_data_list(rows).to(self.device), phase.to(self.device), cards.to(self.device), groups.to(self.device), value_mask.to(self.device))
 
     def act(self, events: Sequence[object], state: State) -> Action | None:
+        """Select an action and cache its policy data for the rollout."""
         del events
         legal = self.env.legal_actions(state)
         if not legal:
@@ -193,6 +190,7 @@ class PPO_Agent(BaseAgent):
         return legal[int(index)]
 
     def remember(self, state: State, action: Action, reward: float, next_state: State, done: bool) -> None:
+        """Store the completed decision using the data cached by `act()`."""
         if self._pending is None:
             raise RuntimeError("PPO_Agent.remember() requires the preceding action from PPO_Agent.act()")
         log_prob, value, index = self._pending
@@ -235,6 +233,7 @@ class PPO_Agent(BaseAgent):
         return logits, values, action_group_index
 
     def _next_values(self, transitions: Sequence[RolloutTransition]) -> torch.Tensor:
+        """Evaluate bootstrap values for every non-terminal next state."""
         values = torch.zeros(len(transitions), dtype=torch.float32, device=self.device)
         entries = []
         positions = []
@@ -255,6 +254,7 @@ class PPO_Agent(BaseAgent):
         return values
 
     def _gae(self, transitions: Sequence[RolloutTransition], next_values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute generalized advantages and value targets for a rollout."""
         rewards = torch.tensor([t.reward for t in transitions], dtype=torch.float32, device=self.device)
         old_values = torch.tensor([t.old_value for t in transitions], dtype=torch.float32, device=self.device)
         advantages = torch.zeros_like(rewards)
@@ -282,6 +282,7 @@ class PPO_Agent(BaseAgent):
 
     def _evaluate_indices(self, cached_entries: Sequence[tuple[list[Data], torch.Tensor, torch.Tensor, torch.Tensor]],
                            transitions: Sequence[RolloutTransition], indices: Sequence[int]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Evaluate log-probabilities, values, and entropies for a minibatch."""
         entries = [cached_entries[i] for i in indices]
         logits, values, action_group_index = self._forward_grouped(entries)
         log_probs: list[torch.Tensor] = []
@@ -320,177 +321,115 @@ class PPO_Agent(BaseAgent):
         return torch.stack(gradient_norms).norm(2)
 
     def _detached_gradient_norm(self, gradients: Sequence[torch.Tensor | None]) -> torch.Tensor:
+        """Return the detached combined L2 norm of optional gradients."""
         norms = [gradient.detach().float().norm(2) for gradient in gradients if gradient is not None]
         if not norms:
             return torch.tensor(0.0, device=self.device)
         return torch.stack(norms).norm(2)
 
-    def _mean_tensor(self, values: Sequence[torch.Tensor]) -> float:
-        return float(torch.stack(list(values)).mean())
-
-    def _weighted_tensor_mean(self, values: Sequence[tuple[torch.Tensor, int]]) -> float:
-        total_weight = sum(weight for _, weight in values)
-        if total_weight == 0:
-            return 0.0
-        return float(sum(value * weight for value, weight in values) / total_weight)
-
-    def _value_to_policy_encoder_grad_ratio(
-        self, value_norm: float, policy_norm: float
-    ) -> float:
+    def _value_to_policy_encoder_grad_ratio(self, value_norm: float, policy_norm: float) -> float:
+        """Return the finite critic-to-actor encoder-gradient ratio."""
         return value_norm / max(policy_norm, 1e-12)
 
-    def learn(self, *, reached_max_steps: bool = False) -> list[float]:
-        if reached_max_steps:
-            self.rollout_buffer.mark_last_boundary()
-        if len(self.rollout_buffer) < self.rollout_length:
-            return []
-        transitions = self.rollout_buffer.all()
-        cached_entries = [self._cache_transition_entry(t) for t in transitions]
-        legal_action_counts = [len(entry[0]) - 1 for entry in cached_entries]
-        next_values = self._next_values(transitions)
-        advantages, returns = self._gae(transitions, next_values)
-        raw_advantages = advantages.clone()
-        advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
-        old_log_probs = torch.tensor([t.old_log_prob for t in transitions], dtype=torch.float32, device=self.device)
-        old_values = torch.tensor([t.old_value for t in transitions], dtype=torch.float32, device=self.device)
-        losses: list[float] = []
-        kls: list[float] = []
-        clips: list[float] = []
-        entropies: list[float] = []
-        normalized_entropy_sums: list[torch.Tensor] = []
-        normalized_entropy_counts: list[torch.Tensor] = []
-        value_mse_losses: list[float] = []
-        value_huber_losses: list[float] = []
-        policy_losses: list[float] = []
-        weighted_value_losses: list[float] = []
-        entropy_bonuses: list[float] = []
-        total_grad_norms: list[torch.Tensor] = []
-        encoder_grad_norms: list[torch.Tensor] = []
-        policy_head_grad_norms: list[torch.Tensor] = []
-        value_head_grad_norms: list[torch.Tensor] = []
-        clipped_gradients: list[torch.Tensor] = []
-        policy_encoder_component_norms: list[tuple[torch.Tensor, int]] = []
-        value_encoder_component_norms: list[tuple[torch.Tensor, int]] = []
-        completed_epochs = 0
-        early_stopped = False
-        early_stop_kl = 0.0
-        samples_before = self._samples_processed
-        optimizer_steps_before = self._optimizer_steps
-        for _ in range(PPO_EPOCHS):
-            order = torch.randperm(len(transitions), device=self.device)
-            for indices_tensor in order.split(PPO_MINIBATCH_SIZE):
-                indices = indices_tensor.tolist()
-                log_probs, values, entropy, max_entropy = self._evaluate_indices(
-                    cached_entries, transitions, indices
-                )
-                log_ratio = log_probs - old_log_probs[indices]
-                ratio = log_ratio.exp()
-                approximate_kl = float(self._k3_approx_kl(ratio, log_ratio).detach())
-                # The first minibatch has KL near zero. Later minibatches
-                # include drift from the preceding optimizer steps.
-                if losses and approximate_kl > self.target_kl:
-                    early_stopped = True
-                    early_stop_kl = approximate_kl
-                    break
-                surrogate = torch.minimum(ratio * advantages[indices], ratio.clamp(1 - PPO_CLIP_EPS, 1 + PPO_CLIP_EPS) * advantages[indices])
-                value_mse = torch.nn.functional.mse_loss(values, returns[indices])
-                value_loss = torch.nn.functional.smooth_l1_loss(
-                    values, returns[indices], beta=PPO_VALUE_HUBER_BETA
-                )
-                policy_loss = -surrogate.mean()
-                weighted_value_loss = PPO_VALUE_LOSS_COEF * value_loss
-                entropy_bonus = PPO_ENTROPY_COEF * entropy.mean()
-                actor_loss = policy_loss - entropy_bonus
-                loss = actor_loss + weighted_value_loss
-                self.optimizer.zero_grad()
-                encoder_parameters = tuple(self.net.encoder.parameters())
-                policy_encoder_component_norms.append(
-                    (
-                        self._detached_gradient_norm(
-                            torch.autograd.grad(
-                                actor_loss,
-                                encoder_parameters,
-                                retain_graph=True,
-                                allow_unused=True,
-                            )
-                        ),
-                        len(indices),
-                    )
-                )
-                value_encoder_component_norms.append(
-                    (
-                        self._detached_gradient_norm(
-                            torch.autograd.grad(
-                                weighted_value_loss,
-                                encoder_parameters,
-                                retain_graph=True,
-                                allow_unused=True,
-                            )
-                        ),
-                        len(indices),
-                    )
-                )
-                loss.backward()
-                encoder_grad_norms.append(self._gradient_norm("encoder"))
-                policy_head_grad_norms.append(self._gradient_norm("policy_heads"))
-                value_head_grad_norms.append(self._gradient_norm("value_head"))
-                total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    self.net.parameters(), GRAD_CLIP_MAX_NORM
-                ).detach()
-                total_grad_norms.append(total_grad_norm)
-                clipped_gradients.append((total_grad_norm > GRAD_CLIP_MAX_NORM).float())
-                self.optimizer.step()
-                self._optimizer_steps += 1
-                self._samples_processed += len(indices)
-                losses.append(float(loss.detach()))
-                kls.append(approximate_kl)
-                clips.append(float((ratio.sub(1).abs() > PPO_CLIP_EPS).float().mean().detach()))
-                entropies.append(float(entropy.mean().detach()))
-                variable_action_mask = max_entropy > 0
-                if variable_action_mask.any():
-                    normalized_entropy_sums.append(
-                        (entropy[variable_action_mask] / max_entropy[variable_action_mask])
-                        .detach()
-                        .sum()
-                    )
-                    normalized_entropy_counts.append(variable_action_mask.sum().detach())
-                value_mse_losses.append(float(value_mse.detach()))
-                value_huber_losses.append(float(value_loss.detach()))
-                policy_losses.append(float(policy_loss.detach()))
-                weighted_value_losses.append(float(weighted_value_loss.detach()))
-                entropy_bonuses.append(float(entropy_bonus.detach()))
-            if early_stopped:
-                break
-            completed_epochs += 1
-        self._train_steps += 1
+    def _run_minibatch(self, cached_entries: Sequence[tuple[list[Data], torch.Tensor, torch.Tensor, torch.Tensor]],
+            transitions: Sequence[RolloutTransition], indices: Sequence[int], old_log_probs: torch.Tensor,
+            advantages: torch.Tensor, returns: torch.Tensor, *, has_previous_step: bool, ) -> tuple[dict[str, float] | None, float]:
+        """Run one PPO optimizer step, or report its pre-step KL early stop."""
+        idx = list(indices)
+        log_probs, values, entropy, max_entropy = self._evaluate_indices(cached_entries, transitions, idx)
+        log_ratio = log_probs - old_log_probs[idx]
+        ratio = log_ratio.exp()
+        approximate_kl = float(self._k3_approx_kl(ratio, log_ratio).detach())
+        if has_previous_step and approximate_kl > self.target_kl:
+            return None, approximate_kl
+
+        surrogate = torch.minimum(ratio * advantages[idx], ratio.clamp(1 - PPO_CLIP_EPS, 1 + PPO_CLIP_EPS) * advantages[idx], )
+        value_mse = torch.nn.functional.mse_loss(values, returns[idx])
+        value_loss = torch.nn.functional.smooth_l1_loss(values, returns[idx], beta=PPO_VALUE_HUBER_BETA)
+        policy_loss = -surrogate.mean()
+        weighted_value_loss = PPO_VALUE_LOSS_COEF * value_loss
+        entropy_bonus = PPO_ENTROPY_COEF * entropy.mean()
+        actor_loss = policy_loss - entropy_bonus
+        loss = actor_loss + weighted_value_loss
+
+        self.optimizer.zero_grad()
+        # region Encoder-gradient diagnostics
+        encoder_parameters = tuple(self.net.encoder.parameters())
+        policy_encoder_grad_norm = self._detached_gradient_norm(torch.autograd.grad(actor_loss, encoder_parameters, retain_graph=True, allow_unused=True))
+        value_encoder_grad_norm = self._detached_gradient_norm(torch.autograd.grad(weighted_value_loss, encoder_parameters, retain_graph=True, allow_unused=True))
+        # endregion
+        loss.backward()
+        # region Post-backward gradient diagnostics
+        encoder_grad_norm = self._gradient_norm("encoder")
+        policy_head_grad_norm = self._gradient_norm("policy_heads")
+        value_head_grad_norm = self._gradient_norm("value_head")
+        # endregion
+        total_grad_norm = torch.nn.utils.clip_grad_norm_(self.net.parameters(), GRAD_CLIP_MAX_NORM).detach()
+        self.optimizer.step()
+        self.optimizer_steps += 1
+        self.samples_processed += len(idx)
+
+        # region Minibatch logging metrics
+        variable_action_mask = max_entropy > 0
+        normalized_entropy_sum = (float((entropy[variable_action_mask] / max_entropy[variable_action_mask]).detach().sum()) if variable_action_mask.any() else 0.0 )
+        return {
+            "loss": float(loss.detach()),
+            "approximate_kl": approximate_kl,
+            "clip_fraction": float((ratio.sub(1).abs() > PPO_CLIP_EPS).float().mean().detach()),
+            "entropy": float(entropy.mean().detach()),
+            "normalized_entropy_sum": normalized_entropy_sum,
+            "normalized_entropy_count": float(variable_action_mask.sum()),
+            "value_mse": float(value_mse.detach()),
+            "value_huber_loss": float(value_loss.detach()),
+            "policy_loss": float(policy_loss.detach()),
+            "weighted_value_loss": float(weighted_value_loss.detach()),
+            "entropy_bonus": float(entropy_bonus.detach()),
+            "grad_norm": float(total_grad_norm),
+            "encoder_grad_norm": float(encoder_grad_norm),
+            "policy_head_grad_norm": float(policy_head_grad_norm),
+            "value_head_grad_norm": float(value_head_grad_norm),
+            "policy_encoder_grad_norm": float(policy_encoder_grad_norm),
+            "value_encoder_grad_norm": float(value_encoder_grad_norm),
+            "gradient_clipped": float(total_grad_norm > GRAD_CLIP_MAX_NORM),
+            "sample_count": float(len(idx)),
+        }, approximate_kl
+        # endregion
+
+    def _mean_minibatch_metric(self, minibatches: Sequence[dict[str, float]], name: str) -> float:
+        """Return the unweighted mean for one recorded minibatch metric."""
+        return sum(minibatch[name] for minibatch in minibatches) / len(minibatches)
+
+    def _sample_weighted_minibatch_metric(self, minibatches: Sequence[dict[str, float]], name: str) -> float:
+        """Return the sample-weighted mean for one minibatch metric."""
+        total_samples = sum(minibatch["sample_count"] for minibatch in minibatches)
+        return sum(minibatch[name] * minibatch["sample_count"] for minibatch in minibatches) / total_samples
+
+    def _summarize_update(self, minibatches: Sequence[dict[str, float]], *, legal_action_counts: Sequence[int], returns: torch.Tensor,
+            old_values: torch.Tensor, raw_advantages: torch.Tensor, completed_epochs: int, early_stopped: bool, early_stop_kl: float, optimizer_steps_before: int,
+            samples_before: int, ) -> dict[str, float]:
+        """Preserve the public PPO metric schema while hiding collection detail."""
+        value_mse = self._mean_minibatch_metric(minibatches, "value_mse")
+        policy_encoder_grad_norm = self._sample_weighted_minibatch_metric(minibatches, "policy_encoder_grad_norm")
+        value_encoder_grad_norm = self._sample_weighted_minibatch_metric(minibatches, "value_encoder_grad_norm")
+        normalized_entropy_count = sum(minibatch["normalized_entropy_count"] for minibatch in minibatches)
         explained = 1 - torch.var(returns - old_values) / (torch.var(returns) + 1e-8)
-        mean_value_mse = sum(value_mse_losses) / len(value_mse_losses)
-        mean_value_huber_loss = sum(value_huber_losses) / len(value_huber_losses)
-        policy_encoder_grad_norm = self._weighted_tensor_mean(policy_encoder_component_norms)
-        value_encoder_grad_norm = self._weighted_tensor_mean(value_encoder_component_norms)
-        self.last_update_metrics = {
-            "ppo_approx_kl": sum(kls) / len(kls),
-            "ppo_clip_fraction": sum(clips) / len(clips),
-            "ppo_entropy": sum(entropies) / len(entropies),
-            "ppo_normalized_entropy": (
-                float(torch.stack(normalized_entropy_sums).sum()
-                      / torch.stack(normalized_entropy_counts).sum())
-                if normalized_entropy_sums else 0.0
-            ),
+        return {
+            "ppo_approx_kl": self._mean_minibatch_metric(minibatches, "approximate_kl"),
+            "ppo_clip_fraction": self._mean_minibatch_metric(minibatches, "clip_fraction"),
+            "ppo_entropy": self._mean_minibatch_metric(minibatches, "entropy"),
+            "ppo_normalized_entropy": (sum(minibatch["normalized_entropy_sum"] for minibatch in minibatches) / normalized_entropy_count if normalized_entropy_count else 0.0),
             "ppo_legal_actions_mean": sum(legal_action_counts) / len(legal_action_counts),
             "ppo_legal_actions_max": float(max(legal_action_counts)),
-            "ppo_forced_action_fraction": (
-                sum(count == 1 for count in legal_action_counts) / len(legal_action_counts)
-            ),
-            "ppo_policy_loss": sum(policy_losses) / len(policy_losses),
+            "ppo_forced_action_fraction": (sum(count == 1 for count in legal_action_counts) / len(legal_action_counts)),
+            "ppo_policy_loss": self._mean_minibatch_metric(minibatches, "policy_loss"),
             # Keep the historical key as raw MSE so PPO_045 charts remain
             # comparable with PPO_043/044; Huber is the optimized objective.
-            "ppo_value_loss": mean_value_mse,
-            "ppo_value_mse": mean_value_mse,
-            "ppo_value_huber_loss": mean_value_huber_loss,
-            "ppo_value_rmse": mean_value_mse ** 0.5,
-            "ppo_weighted_value_loss": sum(weighted_value_losses) / len(weighted_value_losses),
-            "ppo_entropy_bonus": sum(entropy_bonuses) / len(entropy_bonuses),
+            "ppo_value_loss": value_mse,
+            "ppo_value_mse": value_mse,
+            "ppo_value_huber_loss": self._mean_minibatch_metric(minibatches, "value_huber_loss"),
+            "ppo_value_rmse": value_mse ** 0.5,
+            "ppo_weighted_value_loss": self._mean_minibatch_metric(minibatches, "weighted_value_loss"),
+            "ppo_entropy_bonus": self._mean_minibatch_metric(minibatches, "entropy_bonus"),
             "ppo_explained_variance": float(explained),
             "ppo_return_mean": float(returns.mean()),
             "ppo_return_std": float(returns.std(unbiased=False)),
@@ -498,28 +437,81 @@ class PPO_Agent(BaseAgent):
             "ppo_old_value_std": float(old_values.std(unbiased=False)),
             "ppo_advantage_mean": float(raw_advantages.mean()),
             "ppo_advantage_std": float(raw_advantages.std(unbiased=False)),
-            "ppo_grad_norm": self._mean_tensor(total_grad_norms),
-            "ppo_grad_norm_max": float(torch.stack(total_grad_norms).max()),
-            "ppo_encoder_grad_norm": self._mean_tensor(encoder_grad_norms),
-            "ppo_policy_head_grad_norm": self._mean_tensor(policy_head_grad_norms),
-            "ppo_value_head_grad_norm": self._mean_tensor(value_head_grad_norms),
+            "ppo_grad_norm": self._mean_minibatch_metric(minibatches, "grad_norm"),
+            "ppo_grad_norm_max": max(minibatch["grad_norm"] for minibatch in minibatches),
+            "ppo_encoder_grad_norm": self._mean_minibatch_metric(minibatches, "encoder_grad_norm"),
+            "ppo_policy_head_grad_norm": self._mean_minibatch_metric(minibatches, "policy_head_grad_norm"),
+            "ppo_value_head_grad_norm": self._mean_minibatch_metric(minibatches, "value_head_grad_norm"),
             "ppo_policy_encoder_grad_norm": policy_encoder_grad_norm,
             "ppo_value_encoder_grad_norm": value_encoder_grad_norm,
-            "ppo_value_to_policy_encoder_grad_ratio": (
-                self._value_to_policy_encoder_grad_ratio(
-                    value_encoder_grad_norm, policy_encoder_grad_norm
-                )
-            ),
-            "ppo_gradient_clip_fraction": self._mean_tensor(clipped_gradients),
+            "ppo_value_to_policy_encoder_grad_ratio": (self._value_to_policy_encoder_grad_ratio(value_encoder_grad_norm, policy_encoder_grad_norm)),
+            "ppo_gradient_clip_fraction": self._mean_minibatch_metric(minibatches, "gradient_clipped"),
             "ppo_epochs_completed": float(completed_epochs),
             "ppo_early_stopped": float(early_stopped),
             "ppo_early_stop_kl": early_stop_kl,
             "ppo_early_stop_kl_max": early_stop_kl,
-            "ppo_optimizer_steps_per_update": float(self._optimizer_steps - optimizer_steps_before),
-            "ppo_samples_processed_per_update": float(self._samples_processed - samples_before),
+            "ppo_optimizer_steps_per_update": float(self.optimizer_steps - optimizer_steps_before),
+            "ppo_samples_processed_per_update": float(self.samples_processed - samples_before),
         }
+
+    def _prepare_rollout_update(self, transitions: Sequence[RolloutTransition]) -> dict[str, list | torch.Tensor]:
+        """Build the fixed rollout targets and cached inputs for one PPO update."""
+        cached_entries = [self._cache_transition_entry(transition) for transition in transitions]
+        advantages, returns = self._gae(transitions, self._next_values(transitions))
+        raw_advantages = advantages.clone()
+
+        return {
+            "cached_entries": cached_entries,
+            "legal_action_counts": [len(entry[0]) - 1 for entry in cached_entries],
+            "advantages": (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8),
+            "returns": returns,
+            "raw_advantages": raw_advantages,
+            "old_log_probs": torch.tensor([transition.old_log_prob for transition in transitions], dtype=torch.float32, device=self.device, ),
+            "old_values": torch.tensor([transition.old_value for transition in transitions], dtype=torch.float32, device=self.device, ),
+        }
+
+    def _run_update_epochs(self, transitions: Sequence[RolloutTransition], update: dict[str, list | torch.Tensor]) -> tuple[list[dict[str, float]], int, bool, float]:
+        """Run PPO epochs until completion or the KL guard stops the update."""
+        minibatches: list[dict[str, float]] = []
+        completed_epochs = 0
+        early_stopped = False
+        early_stop_kl = 0.0
+
+        for _ in range(PPO_EPOCHS):
+            order = torch.randperm(len(transitions), device=self.device)
+            for indices_tensor in order.split(PPO_MINIBATCH_SIZE):
+                minibatch, approximate_kl = self._run_minibatch(update["cached_entries"], transitions, indices_tensor.tolist(), update["old_log_probs"],
+                    update["advantages"], update["returns"], has_previous_step=bool(minibatches), )
+                if minibatch is None:
+                    early_stopped = True
+                    early_stop_kl = approximate_kl
+                    break
+                minibatches.append(minibatch)
+            if early_stopped:
+                break
+            completed_epochs += 1
+
+        return minibatches, completed_epochs, early_stopped, early_stop_kl
+
+    def learn(self, *, reached_max_steps: bool = False) -> list[float]:
+        """Run one complete PPO rollout update when enough turns are collected."""
+        if reached_max_steps:
+            self.rollout_buffer.mark_last_boundary()
+        if len(self.rollout_buffer) < self.rollout_length:
+            return []
+
+        transitions = self.rollout_buffer.all()
+        update = self._prepare_rollout_update(transitions)
+        samples_before = self.samples_processed
+        optimizer_steps_before = self.optimizer_steps
+        minibatches, completed_epochs, early_stopped, early_stop_kl = self._run_update_epochs(transitions, update)
+
+        self.train_steps += 1
+        self.last_update_metrics = self._summarize_update(minibatches, legal_action_counts=update["legal_action_counts"], returns=update["returns"],
+            old_values=update["old_values"], raw_advantages=update["raw_advantages"], completed_epochs=completed_epochs, early_stopped=early_stopped,
+            early_stop_kl=early_stop_kl, optimizer_steps_before=optimizer_steps_before, samples_before=samples_before,)
         self.rollout_buffer.clear()
-        return losses
+        return [minibatch["loss"] for minibatch in minibatches]
 
 
 __all__ = ["PPO_Agent"]

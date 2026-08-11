@@ -14,6 +14,75 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-11
+
+- **Configured fresh PPO_202 as the midpoint learning-rate experiment.** Set
+  PPO's default `PPO_LR` to `7.5e-5` and switched the PPO launcher to
+  `RUN_ID = 202` with `resume=False`, producing a new `PPO_202` W&B run and
+  checkpoint namespace. All PPO_200 settings and the shared DQN_105 reward
+  remain unchanged. Files: `risk/learning/train_constants.py`,
+  `risk/learning/trainer.py`, `Docs/PPO.md`, `Docs/Trainer.md`,
+  `Docs/ChangeLog.md`.
+
+## 2026-08-10
+
+- **Configured fresh PPO_201 to test lower PPO learning rate only.** Set the
+  PPO-only default `PPO_LR` to `5e-5` and switched the launcher to run id 201
+  with its existing fresh W&B configuration. PPO_201 retains PPO_200's shared
+  DQN_105 reward and all other PPO settings; it tests whether reduced KL
+  saturation permits more useful epochs per rollout. Files:
+  `risk/learning/train_constants.py`, `risk/learning/trainer.py`,
+  `Docs/PPO.md`, `Docs/Trainer.md`, `Docs/ChangeLog.md`.
+
+- **Clarified long-line formatting in both repository instruction files.**
+  Compact expressions may remain on one line; only genuinely long signatures
+  and calls should be split into two or three readable rows. Files:
+  `AGENTS.md`, `CLAUDE.md`, `Docs/ChangeLog.md`.
+
+- **Added editor-foldable regions to PPO minibatch diagnostics and metrics.**
+  Collapsing these blocks leaves the PPO loss/KL/optimizer path visible; no
+  training or logging behavior changed. Files: `risk/learning/ppo_agent.py`,
+  `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Removed PPO's unused Python random generator and unused typing import.**
+  The `seed` constructor parameter remains for caller compatibility; PPO
+  behavior is unchanged because it never used that generator. Files:
+  `risk/learning/ppo_agent.py`, `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Replaced PPO's three read-only progress properties with ordinary public
+  counters.** `train_steps`, `optimizer_steps`, and `samples_processed` are
+  now initialized and updated directly, while preserving their checkpoint and
+  metric behavior. Files: `risk/learning/ppo_agent.py`, `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added a one-sentence responsibility docstring to every PPO agent method.**
+  This is a readability-only change: PPO behavior, metrics, and update flow
+  are unchanged. Files: `risk/learning/ppo_agent.py`, `Docs/PPO.md`,
+  `Docs/Testing.md`, `Docs/ChangeLog.md`.
+
+- **Cleaned up leftover debris from the `PPO_Agent.learn()` readability
+  refactor, no behavior change.** Removed `_mean_tensor`/`_weighted_tensor_mean`,
+  two helpers left unused after the refactor moved their call sites into
+  `_summarize_update`'s `_mean_minibatch_metric`/`_sample_weighted_minibatch_metric`.
+  Added the type hints `_prepare_rollout_update`/`_run_update_epochs` were
+  missing relative to every other method in the file. Removed four redundant
+  `list(indices)` conversions in `_run_minibatch` by converting once (`idx =
+  list(indices)`) and reusing it, including in the two counters that still
+  read `len(indices)`. No metric, loss, or control-flow change. Files:
+  `risk/learning/ppo_agent.py`, `Docs/ChangeLog.md`. Validation: focused
+  `test_ppo.py` (11 passed) and full suite (390 passed, 1 skipped).
+
+- **Further shortened PPO's update coordinator without changing behavior or
+  the logging contract.** `PPO_Agent.learn()` now contains only the rollout
+  gate, one named preparation step, epoch execution, and final summary.
+  `_prepare_rollout_update(...)` owns fixed-target/cache construction and
+  `_run_update_epochs(...)` owns the KL-guarded loop, while the existing
+  minibatch and summary helpers retain the PPO math and metrics. KL early-stop
+  timing, loss equations, gradient clipping, counters, and metric names are
+  unchanged. Updated the PPO/testing documentation. Files:
+  `risk/learning/ppo_agent.py`, `Docs/PPO.md`, `Docs/Testing.md`,
+  `Docs/ChangeLog.md`. Validation: focused `test_ppo.py` passed.
+
 ## 2026-08-09
 
 - **Promoted PPO_200 from a completed local smoke run to a fresh W&B run.**

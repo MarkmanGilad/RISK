@@ -85,6 +85,13 @@ critic loss and raw MSE/RMSE diagnostics, and PPO_200's finite update-wide
 critic-to-actor encoder-gradient ratio. `test_trainer.py` covers common compute metrics
 and aggregation of every update in an episode, including `_max` fields.
 
+PPO refactors must retain `test_ppo.py`'s public loss-return shape, KL-stop
+counter behavior, diagnostic metric keys, and checkpoint behavior; these are
+the behavior contracts for keeping `learn()` as a coordinator while its
+preparation, epoch execution, and PPO math stay in readable private helpers.
+Short `PPO_Agent` docstrings document responsibilities only and do not change
+those contracts.
+
 ## Conventions worth mirroring
 
 - **New sentinel/no-op action** (like `SkipTradeAction`, `StopAttackAction`,

@@ -36,13 +36,14 @@ Dueling-comparable epsilon-greedy-Q behavior. `PQN_e0` is the matching
 Bellman-only control: the same epsilon-greedy behavior with a per-agent
 policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
-The current `main()` launcher starts a fresh W&B-backed `PPO_200` run: it builds
+The current `main()` launcher starts a fresh W&B-backed `PPO_202` run: it builds
 `PPO_Agent`, starts with no checkpoint (`resume=False`), writes under
-`Checkpoints/PPO_200`, and has no `wandb_run_id`, so W&B creates a new run. The
+`Checkpoints/PPO_202`, and has no `wandb_run_id`, so W&B creates a new run. The
 completed 250-episode local smoke checkpoint was preserved separately as
 `Checkpoints/PPO_200_smoke_ep000250`; it is not resumed or used to seed this
-experiment. The run uses the shared DQN_105 reward regime but PPO_200's
-rollout/value settings documented in `Docs/PPO.md`. The prior DQN_105 resume
+experiment. The run keeps PPO_200's shared DQN_105 reward and PPO settings,
+with only `PPO_LR=7.5e-5` instead of `1e-4` to balance PPO_200's faster
+learning against PPO_201's lower KL drift. The prior DQN_105 resume
 values (`RUN_ID = 105`, `resume=True`, W&B id `5b66yunb`) remain as comments in
 `main()` for later restoration.
 

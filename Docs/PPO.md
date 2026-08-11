@@ -246,12 +246,27 @@ def forward(self, state, phase, card_indices, group_index=None, value_mask=None)
   loss components plus raw value MSE/RMSE for cross-run comparison;
   return, old-value, advantage, and explained-variance statistics; pre-clip
   total/encoder/policy-head/value-head gradient norms;
-  one-minibatch actor-versus-critic gradient norms on the shared encoder;
+  sample-weighted actor-versus-critic gradient norms across all executed
+  minibatches on the shared encoder;
   completed epochs, early-stop diagnostics, and exact optimizer/sample counts.
   These metrics do not alter parameter updates. Combined/head norms reuse the
   normal backward pass; the actor-versus-critic encoder comparison performs
-  two diagnostic `autograd.grad` calls on only the first accepted minibatch of
-  each rollout update.
+  two diagnostic `autograd.grad` calls on every executed minibatch and
+  aggregates their norms by minibatch sample count.
+
+  For readability, `learn()` is only the small rollout-update coordinator. It
+  delegates fixed-target/cache preparation to `_prepare_rollout_update(...)`,
+  epoch/minibatch execution to `_run_update_epochs(...)`, detailed
+  forward/loss/backward/optimizer work to `_run_minibatch(...)`, and public
+  metric construction to `_summarize_update(...)`. The helper boundaries do
+  not change PPO's loss equations, KL-stop timing, optimizer ordering, or
+  metric names. Each `PPO_Agent` method also has a short docstring stating its
+  responsibility, so the update flow can be read without implementation detail
+  first. The constructor keeps its `seed` parameter for caller compatibility,
+  but PPO action sampling uses PyTorch's RNG and does not keep a separate
+  Python random generator. `_run_minibatch(...)` uses editor-foldable regions
+  for encoder-gradient diagnostics and the returned logging metrics, leaving
+  its PPO update path visible without changing its behavior.
   `Trainer` generically merges this optional mapping into
   the episode metrics it forwards to `TrainingLogger`, without inspecting the
   agent type. This makes PPO health visible in W&B while preserving the
@@ -397,7 +412,7 @@ Suggested v1 defaults to start discussion, not final values:
 | `PPO_VALUE_LOSS_COEF` | 0.5 | Standard shared-network value weight. |
 | `PPO_VALUE_HUBER_BETA` | 1.0 | Bounds large critic-error gradients; raw MSE and RMSE remain logged. |
 | `PPO_ENTROPY_COEF` | 0.01 | Enough to discourage early policy collapse. |
-| `PPO_LR` | 1e-4 | Reduced after PPO_043's KL early stop saturated and prevented most planned minibatches. |
+| `PPO_LR` | 7.5e-5 | PPO_202's midpoint between PPO_200's learning signal and PPO_201's reduced KL drift. |
 
 ---
 
@@ -417,8 +432,8 @@ a new `Temp/tests/test_ppo.py` per `Docs/Testing.md`'s convention:
 4. `set_train_mode(False)` makes `act()` deterministic (always the argmax
    action for a fixed state), `set_train_mode(True)` allows sampling to
    vary.
-5. `save_checkpoint`/`load_checkpoint` round-trips net/optimizer/
-   train_steps (no replay buffer to check, per "Checkpointing" above).
+5. `save_checkpoint`/`load_checkpoint` round-trips net/optimizer/public PPO
+   progress counters (no replay buffer to check, per "Checkpointing" above).
 6. The collection-time log-prob/value round-trip correctly:
    `act()` followed by `remember()` produces a rollout entry whose stored
    `old_log_prob` matches what `act()` computed, not a value recomputed
@@ -514,9 +529,10 @@ a new `Temp/tests/test_ppo.py` per `Docs/Testing.md`'s convention:
 ## Planned PPO restart: PPO_200
 
 **Status: PPO-specific configuration and diagnostics are implemented. The
-local smoke run passed through episode 250 (27 rollout updates, 426 optimizer
-steps, 109,056 processed samples), and the launcher is now configured for a
-fresh W&B-backed PPO_200 run.**
+PPO_200 local smoke run passed through episode 250 (27 rollout updates, 426
+optimizer steps, 109,056 processed samples); after PPO_200's KL-saturated
+production run and PPO_201's conservative-LR comparison, the launcher is now
+configured for fresh W&B-backed PPO_202.**
 
 **Confirmed (2026-08-09):** run id `PPO_200`, not `PPO_104`/`PPO_106`. It
 deliberately starts a fresh numbering block, separate from the shared
@@ -599,11 +615,12 @@ critic's shared-encoder influence.  The initial restart configuration is:
 | `PPO_ENTROPY_COEF` | `0.01` | Keep one initial entropy setting; react only to measured collapse. |
 | `GRAD_CLIP_MAX_NORM` | `10.0` | Keep the existing safety bound and avoid a second confounding change. |
 
-**Comment (current code state, checked 2026-08-09):** `train_constants.py`
-now matches the PPO_200 target: `PPO_ROLLOUT_LENGTH=1024`,
+**Comment (current code state):** PPO_202 retains PPO_200's
+`PPO_ROLLOUT_LENGTH=1024`,
 `PPO_MINIBATCH_SIZE=256`, and `PPO_VALUE_LOSS_COEF=0.1`. `PPO_CLIP_EPS`, `PPO_TARGET_KL`,
-`PPO_GAE_LAMBDA`, `PPO_VALUE_HUBER_BETA`, `PPO_ENTROPY_COEF`, `PPO_LR`, and
-`GRAD_CLIP_MAX_NORM` already match this table today and need no change.
+`PPO_GAE_LAMBDA`, `PPO_VALUE_HUBER_BETA`, `PPO_ENTROPY_COEF`, and
+`GRAD_CLIP_MAX_NORM` also remain unchanged. The sole PPO_202 difference is
+`PPO_LR=7.5e-5`, between PPO_200's `1e-4` and PPO_201's `5e-5`.
 `GRAD_CLIP_MAX_NORM` is also shared with `GNN_DQN_Agent`/`Dueling_DQN_Agent`/
 `PQN_Agent`/`ADQN_Agent`, so leaving it untouched is required, not just
 convenient, to avoid a cross-agent confound.
@@ -664,9 +681,10 @@ would alter DQN_105 and make a PPO regression ambiguous.
    particular values, but keep it so the code stays correct if either constant
    changes later.
 3. Select `build_learner_agent("PPO", ctx)` in `trainer.py`, set
-   `RUN_ID = 200`, and use `resume=False`. **Implemented:** after the local
-   smoke run passed, `main()` now builds PPO_200 with W&B enabled and no W&B
-   run id, creating a fresh cloud run rather than resuming local or cloud state.
+   `RUN_ID = 200`, and use `resume=False`. **Historical PPO_200 implementation:**
+   after the local smoke run passed, `main()` built PPO_200 with W&B enabled
+   and no W&B run id. The active launcher now uses the same fresh-start shape
+   for PPO_201 with `RUN_ID = 201`.
 
    **Comment:** this step also touches `Temp/tests/test_ppo.py`, which is not
    separately listed but is covered by step 6. Specifically,
@@ -754,11 +772,16 @@ normalize the entropy bonus by each decision's maximum categorical entropy;
 do not change entropy mid-run and call it the same experiment.
 
 If KL early stopping fires on most updates and completed epochs remain near or
-below one, the next isolated experiment should reduce PPO LR to `5e-5`.  Do not
-raise the KL target merely to force all epochs through.  If the critic remains
-dominant despite coefficient `0.1`, the next isolated value coefficient is
-`0.05`; separate actor/critic encoders or optimizers are later structural
-experiments, not part of PPO_200.
+below one, reduce PPO LR to `5e-5`; PPO_201 is this isolated test. It starts
+fresh with run id `201`, `resume=False`, and the same reward, rollout,
+minibatch, epochs, KL target, value coefficient, and entropy coefficient as
+PPO_200. The only training change is `PPO_LR: 1e-4 -> 5e-5`. Do not raise the
+KL target merely to force all epochs through. At 250K learner turns, compare
+PPO_201 with PPO_200 on completed epochs, KL early-stop fraction, and fixed
+evaluation: more completed epochs only count as an improvement if evaluation
+also improves. If the critic remains dominant despite coefficient `0.1`, the
+next isolated value coefficient is `0.05`; separate actor/critic encoders or
+optimizers are later structural experiments.
 
 ### Continue/stop criteria
 

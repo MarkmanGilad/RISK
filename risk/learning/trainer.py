@@ -218,8 +218,7 @@ class Trainer:
                 reward_total = result.reward
                 step_count += 1
                 agent_turns += 1
-                self._print_progress_line(n_episodes=n_episodes, step_count=step_count, agent_turns=agent_turns,
-                    seat=seat, current_state=result.state, topology=env.topology, )
+                self._print_progress_line(n_episodes=n_episodes, step_count=step_count, agent_turns=agent_turns, seat=seat, current_state=result.state, topology=env.topology, )
 
                 # Play until agent's turn again, the agent is eliminated, or the game ends.
                 while (step_count < MAX_STEPS_PER_EPISODE and not result.done and seat not in result.state.eliminated and env.current_state().current_player_index != seat ):
@@ -260,35 +259,16 @@ class Trainer:
             agent_progress = progress_metrics() if callable(progress_metrics) else {}
             optimizer_steps = self._agent_optimizer_steps()
             samples_processed = self._agent_samples_processed()
-            update_metrics = _aggregate_update_metrics(
-                update_metric_rows,
-                weight_key=getattr(self.agent, "update_metric_weight_key", None),
-                unweighted_fields=getattr(
-                    self.agent, "unweighted_update_metrics", frozenset()
-                ),
-            )
+            update_metrics = _aggregate_update_metrics(update_metric_rows, weight_key=getattr(self.agent, "update_metric_weight_key", None), 
+                                                       unweighted_fields=getattr(self.agent, "unweighted_update_metrics", frozenset()),)
             winner = env.winner()
             win = int(winner == seat)
             self._recent_wins.append(win)
             reinforce_action_count = reward_components.get("reinforce_action_count", 0.0)
-            reinforce_partial_action_count = reward_components.get(
-                "reinforce_partial_action_count", 0.0
-            )
-            reinforce_per_action = (
-                reward_components.get("reinforce", 0.0) / reinforce_action_count
-                if reinforce_action_count
-                else 0.0
-            )
-            reinforce_ready_per_action = (
-                reward_components.get("reinforce_ready", 0.0) / reinforce_action_count
-                if reinforce_action_count
-                else 0.0
-            )
-            reinforce_total_per_action = (
-                reward_components.get("reinforce_total", 0.0) / reinforce_action_count
-                if reinforce_action_count
-                else 0.0
-            )
+            reinforce_partial_action_count = reward_components.get("reinforce_partial_action_count", 0.0)
+            reinforce_per_action = (reward_components.get("reinforce", 0.0) / reinforce_action_count if reinforce_action_count else 0.0)
+            reinforce_ready_per_action = (reward_components.get("reinforce_ready", 0.0) / reinforce_action_count if reinforce_action_count else 0.0)
+            reinforce_total_per_action = (reward_components.get("reinforce_total", 0.0) / reinforce_action_count if reinforce_action_count else 0.0)
             metrics = {
                 "win": win,
                 f"win_rate_last_{ROLLING_WIN_RATE_WINDOW}": (sum(self._recent_wins) / len(self._recent_wins)),
@@ -450,9 +430,8 @@ def main() -> None:
 
     Run it with: python -m risk.learning.trainer
     """
-    # DQN_105 resume reference: RUN_ID = 105, resume=True,
-    # wandb_run_id="5b66yunb".
-    RUN_ID = 200
+
+    RUN_ID = 202
 
     ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
     agent = build_learner_agent("PPO", ctx)

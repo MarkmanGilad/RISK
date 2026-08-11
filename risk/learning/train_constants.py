@@ -46,7 +46,7 @@ PPO_GAE_LAMBDA: Final[float] = 0.95
 PPO_VALUE_LOSS_COEF: Final[float] = 0.1
 PPO_VALUE_HUBER_BETA: Final[float] = 1.0
 PPO_ENTROPY_COEF: Final[float] = 0.01
-PPO_LR: Final[float] = 1e-4
+PPO_LR: Final[float] = 7.5e-5
 # endregion
 
 # region PQN replay-based policy improvement

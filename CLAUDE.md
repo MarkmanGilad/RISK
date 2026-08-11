@@ -11,6 +11,7 @@
   for example `Temp/tests/test_dueling_dqn.py Temp/tests/test_agents.py`.
 
 - Prefer simple code over complicated code. Default to the smallest, most direct implementation that solves the problem in front of you.
+- Do not wrap compact expressions just to meet an 80-character limit. Keep them on one line when readable; split only truly long signatures or calls into two or three sensible rows.
 - Before writing new code, check whether an existing function/method already does what you need. Don't duplicate logic that exists elsewhere.
 - Don't use static methods unless there's no other option, or an instance method would be noticeably more complicated to use. Default to instance methods.
 - Don't create dataclasses unless you ask first.
