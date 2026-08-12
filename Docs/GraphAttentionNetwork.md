@@ -6,6 +6,13 @@ Geometric's `TransformerConv` exactly as this project configures them. The
 encoder has four graph-attention layers, each with one attention head and a
 hidden width of 64.
 
+## Visual summary
+
+The following poster summary shows the complete sparse graph-attention
+calculation and the dimensions used by the encoder.
+
+<img src="../Assets/encoder_matrix_summary.png" alt="Matrix summary of the sparse Risk graph-attention encoder" width="1200">
+
 ## Board graph input
 
 ```text
@@ -37,6 +44,8 @@ E[row] = [selected_attack, dice_count]
 
 `u` is the 35-value global state vector. It is appended after pooling, not
 used in territory-to-territory attention.
+
+<img src="../Assets/encoder_matrix_calculation_page1.png" alt="Encoder calculation page 1: graph inputs and learned projections" width="1200">
 
 ## What `H` means
 
@@ -142,6 +151,8 @@ neighbour_message = SegmentSum(weighted_messages, target_index)
 territory row. This sum is automatic: PyTorch Geometric's `propagate(...)`
 performs it with this layer's `aggr="add"` setting.
 
+<img src="../Assets/encoder_matrix_calculation_page2.png" alt="Encoder calculation page 2: sparse edge attention and aggregation" width="1200">
+
 ## The two skip paths
 
 Inside each `TransformerConv`, the root territory is transformed and added to
@@ -189,6 +200,8 @@ g = [mean(H_final) | max(H_final) | u]
 
 The phase-specific MLP head maps `g` to `Q(s, a)` for DQN or a policy logit
 for PPO.
+
+<img src="../Assets/encoder_matrix_calculation_page3.png" alt="Encoder calculation page 3: residual layers, pooling, and phase scoring" width="1200">
 
 ## Learned parameters in this encoder
 

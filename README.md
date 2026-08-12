@@ -1,9 +1,21 @@
-# Risk
+# Risk RL — Graph Attention Network Training Environment
 
-A from-scratch Python implementation of classic Risk. The project has a
-pygame-free rules engine, a pygame interface, heuristic opponents, and three
-supported graph-based reinforcement-learning agents: DQN, Dueling DQN, and
-PPO.
+[![Reinforcement Learning](https://img.shields.io/badge/Reinforcement%20Learning-Risk-blueviolet)](Docs/NetworkArchitectures.md)
+[![Graph Attention Network](https://img.shields.io/badge/Graph%20Attention-TransformerConv-0A7E8C)](Docs/GraphAttentionNetwork.md)
+[![PyTorch Geometric](https://img.shields.io/badge/PyTorch-Geometric-EE4C2C)](https://pytorch-geometric.readthedocs.io/)
+[![Algorithms](https://img.shields.io/badge/Algorithms-DQN%20%7C%20Dueling%20DQN%20%7C%20PPO-2E8B57)](Docs/NetworkArchitectures.md)
+
+Risk RL is a reinforcement-learning training environment for classic Risk,
+not only a playable board game. It trains graph-attention neural networks on
+the 42-territory Risk board: at every decision, the environment enumerates
+only legal moves, injects each candidate move into a graph of territories and
+borders, and scores the resulting state-action graph with a shared sparse
+Graph Attention Network (GATN). Self-play against heuristic opponents supplies
+rollouts, rewards, evaluation, checkpoints, and comparable training runs for
+DQN, Dueling DQN, and PPO.
+
+The repository also includes a pygame interface, a pygame-free rules engine,
+and human/heuristic/learned seats that all use the same legal-action interface.
 
 ## Quick start
 
@@ -19,6 +31,19 @@ Run the full test suite with the project virtual environment:
 ```
 
 ## Play
+
+Risk is played on a 42-territory world map. The goal is to eliminate every
+opponent and control the board. Territories change hands through dice combat:
+the attacker commits one to three dice, the defender rolls up to two, and the
+highest dice are compared pair by pair. The losing side removes one army for
+each comparison. Attacks continue until the attacker stops or conquers the
+defending territory.
+
+<img src="Assets/RiskMap/image.png" alt="Playable Risk board" width="760">
+
+The rules engine exposes only actions that are legal in the current state.
+This makes the same game flow usable from the pygame interface, heuristic
+opponents, headless simulations, and RL training.
 
 The setup screen supports 3–6 players. Each seat can be Human, Random,
 Raider, Sentinel, Empire, Killbot, or a saved learned policy. Learned seats
@@ -41,6 +66,8 @@ python -m risk.app.main [--width W] [--height H] [--seed N] [--players N]
 
 Run `python -m risk.app.main` without `--skip-menu` to open the setup screen.
 
+<img src="Assets/RiskMap/start%20UI.png" alt="Risk setup screen for choosing players" width="620">
+
 1. Use the Players `−` and `+` controls to choose 3–6 seats.
 2. For each seat, edit its name and cycle its color; names and colors must be
    unique before the game can start.
@@ -51,20 +78,37 @@ Run `python -m risk.app.main` without `--skip-menu` to open the setup screen.
    presets.
 5. Select **Start Game**.
 
+| Seat type | Behavior |
+|---|---|
+| Human | Chooses actions through the map and control panel. |
+| Random | Samples a legal action uniformly. |
+| Raider | Prioritizes aggressive expansion. |
+| Sentinel | Prioritizes border defense and safer attacks. |
+| Empire | Focuses on capturing and defending continents. |
+| Killbot | Uses continent strategy and weak-player elimination. |
+| Learned Agent | Loads a saved DQN, Dueling DQN, or PPO policy. |
+
 ## Game rules
 
-The game uses the classic 42-territory, 6-continent map. A turn consists of:
+The map has six continents. Owning every territory in a continent provides an
+extra reinforcement bonus. A turn progresses through these phases:
 
-1. Trade cards when required, then reinforce owned territories.
-2. Make zero or more attacks.
-3. Move armies into conquered territories when required.
-4. Fortify once or skip fortification.
+1. **Trade in** cards for bonus armies when required.
+2. **Reinforce** owned territories with new armies.
+3. **Attack** neighbouring enemy territories zero or more times.
+4. **Occupy** a territory immediately after conquering it.
+5. **Fortify** once by moving armies between connected owned territories, or
+   skip it to end the turn.
 
 Five or more cards require a trade at the start of a turn. An ordinary
 conquest that raises a hand from four to five cards does not interrupt the
 current turn; card transfers after eliminating an opponent can require trades
 before occupation resumes. See [Environment.md](Docs/Environment.md) for the
 implemented rule flow.
+
+For each reachable fortify source/destination pair, the learner sees a compact
+set of move amounts: one army, half the available armies, or the maximum.
+Human and other direct callers may still submit any legal amount.
 
 ## Architecture
 
@@ -92,6 +136,48 @@ agent(events, state) -> Action | None
 
 This lets the same environment run an interactive match, a heuristic-only
 simulation, or an RL training episode.
+
+## Risk as a graph-attention RL problem
+
+This project is not only a playable Risk game. It is an environment for
+training and comparing reinforcement-learning agents on Risk's large,
+state-dependent action space.
+
+The board is represented as a graph: the 42 territories are nodes and the 83
+board borders are stored as 166 directed edges. Node features describe each
+territory's continent, owner, armies, and current tactical state; edge features
+describe borders and an injected attack; global features describe turn, phase,
+cards, reinforcement budget, and player state.
+
+<img src="Assets/RiskMap/map_graph_nodes_edges.png" alt="Risk board represented as territory nodes and border edges" width="760">
+
+Risk has a huge nominal action space, but most moves are illegal at a given
+moment. Instead of using one fixed output for every imaginable move, the
+environment enumerates only legal actions. For each candidate, the project
+injects that move into a copy of the board graph: attacks mark the selected
+border, while reinforcement, occupy, and fortify moves change the affected
+territories' proposed-army-delta feature.
+
+<img src="Assets/RiskMap/partial_graph_attributes.png" alt="A candidate attack injected into the Risk graph" width="1000">
+
+One shared graph-attention neural network then scores the resulting
+state-action graph. Four residual `TransformerConv` layers pass messages only
+along Risk borders, allowing a territory to weigh its neighbouring territories
+differently. Mean and max pooling summarize the board, global state is added,
+and the current phase selects the appropriate scoring head.
+
+```text
+legal action -> action-injected board graph -> graph-attention encoder -> score
+```
+
+The same graph representation is used for all supported learners. DQN returns
+`Q(s, a)`; Dueling DQN separates state value from action advantage; PPO returns
+legal-action policy logits plus a state-value estimate. This keeps the board,
+legal-action generator, opponents, and encoder fixed while comparing learning
+objectives.
+
+For the complete input dimensions and attention calculation, see
+[GraphAttentionNetwork.md](Docs/GraphAttentionNetwork.md).
 
 ## Learning
 

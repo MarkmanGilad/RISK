@@ -16,6 +16,35 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-12
 
+- **Declared pytest as a test dependency.** `requirements.txt` now includes
+  `pytest`, matching the documented full-suite command. Files:
+  `requirements.txt`, `Docs/ChangeLog.md`.
+
+- **Reframed the README opening around the GATN training project.** The title,
+  RL/GATN badges, and opening description now foreground legal-action graph
+  injection, self-play training, and the DQN/Dueling-DQN/PPO comparison.
+  Files: `README.md`, `Docs/ChangeLog.md`.
+
+- **Added a concise graph-attention RL overview to the README.** It now
+  explains the board graph, legal-action injection, sparse GATN encoder, and
+  the controlled DQN/Dueling-DQN/PPO comparison, with graph and injection
+  visuals from the poster assets. Files: `README.md`, `Docs/ChangeLog.md`.
+
+- **Expanded the README game guide with poster-based explanation and UI
+  visuals.** It now explains Risk's objective, dice combat, turn phases,
+  player types, and legal-action flow, and embeds the playable-board and
+  player-selection images. Files: `README.md`, `Docs/ChangeLog.md`.
+
+- **Reduced the encoder-reference image widths.** The four embedded encoder
+  diagrams in `Docs/GraphAttentionNetwork.md` now render at 1,200 pixels wide
+  for a more compact reading layout. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added encoder calculation visuals to the graph-attention reference.**
+  `Docs/GraphAttentionNetwork.md` now embeds the three detailed encoder
+  calculation pages and the concise matrix summary used on the poster. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
 - **Split the poster headline callout into two lines.** `Docs/Poster.md`'s
   "That encoder is trained..." sentence now starts on its own blockquote
   paragraph instead of running on from the injection sentence. Files:

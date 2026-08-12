@@ -1,5 +1,6 @@
 pygame>=2.5
 svg.path>=6.3
+pytest>=8.0
 
 # Optional: remote training metrics (risk/learning/training_logger.py).
 # TrainingLogger degrades to a no-op without it — only needed if you want
