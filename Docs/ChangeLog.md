@@ -14,7 +14,105 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-13
+
+- **Logged a deferred correction for trade-in action representation; no learner
+  code changed.** Current trade-in scoring repeats the base graph and embeds
+  hand-slot positions rather than actual cards, so it cannot observe selected
+  card identities, territory matches, symbols, wilds, or retained cards. The
+  next-model plan is selected-card node injection, a real order-invariant hand
+  encoder, focused tests, input-versioning, and retraining of DQN, Dueling
+  DQN, and PPO. Current checkpoints and poster results remain unchanged.
+  Files: `Docs/ActionGraphBuilder.md`, `Docs/NetworkArchitectures.md`,
+  `Docs/ChangeLog.md`.
+
+- **Made the current trade-in observation explicit in its deferred plan.** The
+  plan now lists the only card-related inputs available today — next-set value,
+  per-player card counts, accumulated reinforcement budget, and positional
+  `(i, j, k)` slots — and contrasts them with the missing candidate-specific
+  card, territory-match, wild, and retained-hand information. Files:
+  `Docs/ActionGraphBuilder.md`, `Docs/ChangeLog.md`.
+
+- **Raised two small A0-poster captions to a readable size.** In
+  `Docs/Risk.pptx`, the GitHub QR caption and the fixed-checkpoint evaluation
+  caveat are now 18 pt (up from 12.75 pt and 13.5 pt); their positions and all
+  other poster content are unchanged. Files: `Docs/Risk.pptx`,
+  `Docs/ChangeLog.md`.
+
+- **Clarified the poster's GitHub QR label.** `Docs/Risk.pptx` retains the
+  top-right project-repository QR and now pairs it with `PROJECT REPOSITORY`
+  and GitHub's white lockup, without implying that the experiment results are
+  published on GitHub. Files: `Docs/Risk.pptx`,
+  `Assets/GitHub_Lockup_White.png`, `Docs/ChangeLog.md`.
+
 ## 2026-08-12
+
+- **Added a fixed DQN_103 checkpoint-evaluation panel to the print poster.**
+  `Docs/Risk.pptx` now uses the middle band for a sparse action-injection
+  explanation and the colorful top-five DQN_103 win-rate chart across 3–6
+  players. It states the 54-game, three-seed, rotated-seat, epsilon-0,
+  2,000-step protocol; reports `ep006700` as 46/54 wins (85.2%) with zero
+  timeouts; and labels the evidence as checkpoint-selection, not a
+  DQN/Dueling-DQN/PPO comparison. `Docs/Poster.md` mirrors the figure order,
+  method wording, and scope caveat. Files: `Docs/Risk.pptx`,
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Refocused the print poster on the scientific method and locked its
+  three-chart results geometry.** `Docs/Risk.pptx` removes the player/agent
+  selection UI and heuristic roster, reduces the board-to-graph card, and
+  enlarges the action-injection and shared GATN panels. Its results band now
+  has equal DQN, Dueling DQN, and PPO slots; the latter two visibly repeat
+  `Assets/DQN Win.png` only as labelled DQN-data placeholders until matched
+  curves exist. `Docs/Poster.md` mirrors the revised figure order and the
+  explicit placeholder disclosure. Files: `Docs/Risk.pptx`,
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Put the DQN win-rate chart into the print poster's shared results frame.**
+  Docs/Risk.pptx now replaces its repeated learner-description cards with
+  Assets/DQN Win.png, labelled truthfully as a temporary DQN-only placeholder
+  for the future DQN/Dueling DQN/PPO comparison. Docs/Poster.md uses the same
+  wording so the design brief and visible poster agree. Files: Docs/Risk.pptx,
+  Docs/Poster.md, Docs/ChangeLog.md.
+
+- **Reviewed the planned global post-epoch KL fix and closed several open
+  items.** `Docs/PPO.md`'s "Planned: global post-epoch KL stopping" section
+  (addressing `PPO_311`'s noisy per-minibatch KL check stopping ~75% of each
+  rollout's minibatches) was directionally sound; added: `_max`-suffixed
+  metrics don't need `unweighted_update_metrics` registration (confirmed by
+  reading `trainer.py`'s `_aggregate_update_metrics` — the `_max` branch
+  ignores weight entirely, matching the existing `ppo_early_stop_kl_max`
+  precedent, which the plan's blanket instruction would have contradicted); a
+  defined value for `ppo_kl_stop_epoch` when no early stop occurs; a
+  running-sum (not equal-weighted chunk-average) requirement for the global
+  KL, future-proofing against `PPO_ROLLOUT_LENGTH`/`PPO_MINIBATCH_SIZE` not
+  dividing evenly later; a pointer to reuse `_evaluate_indices`/
+  `_forward_grouped` instead of a new log-prob-only path; and a monitoring
+  note about epoch 1 now always running unconstrained. No code changed —
+  plan-only, per instruction not to implement yet. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added `Assets/DQN Win.png` to the poster and the pptx deck.**
+  `Docs/Poster.md`'s Figure 7 placeholder now shows the actual DQN rolling
+  win-rate chart (DQN_103, DQN_105, DQN_303), captioned as DQN's own
+  training progress pending the Dueling DQN/PPO comparison. `Docs/Risk.pptx`
+  is a fixed-layout, print-ready A0 single slide with no open space in its
+  Results band, so rather than disturb that layout the image was added as a
+  new second slide (title, context line, image, caption) — a supporting
+  slide, not part of the print poster itself. Installed `python-pptx` in
+  `C:\venvs\ai-rl` to make the edit (previously absent from that
+  environment). Files: `Docs/Poster.md`, `Docs/Risk.pptx`, `Docs/ChangeLog.md`.
+
+- **Planned global post-epoch PPO KL stopping.** `Docs/PPO.md` now scopes a
+  fresh-run follow-up for PPO_311's noisy minibatch KL stops: complete each
+  epoch, measure sample-weighted k3 KL across the cached rollout in safe
+  batches, and decide whether to begin the next epoch. It preserves the
+  16-step targets and requires no environment, trainer, or other-learner
+  changes. Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Created an A0 PowerPoint version of the project poster.** `Risk.pptx`
+  turns `Docs/Poster.md` into a one-slide landscape poster using the local
+  board, UI, action-injection, GATN, and encoder-summary visuals. Files:
+  `Risk.pptx`, `Docs/ChangeLog.md`.
 
 - **Simplified the README table of contents.** It now links only the main
   sections, without nested subsection entries. Files: `README.md`,

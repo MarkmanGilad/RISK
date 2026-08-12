@@ -48,30 +48,7 @@ legal action to this builder and let it decide whether injection is needed.
 | `OCCUPY` | `x[from, proposed_army_delta_col] -= n`, `x[to, proposed_army_delta_col] += n` (`from`/`to` from `state.pending_attack`); real army counts are unchanged. |
 | `FORTIFY` (real move) | `x[from, proposed_army_delta_col] -= n`, `x[to, proposed_army_delta_col] += n`; real army counts are unchanged. |
 | `FORTIFY` (skip, `count == 0`) | No perturbation — same as `StopAttackAction`. |
-| `TRADE_IN` | Returns an unmodified copy of the base graph. Its head reads card-hand embeddings, never the graph (`Action.md`), so there is nothing to inject. |
-
-> **Future development — inject `TRADE_IN` like the other stages.**
->
-> Trade-in is the one action that currently perturbs nothing, so the net
-> never sees *which* set is being cashed. A candidate `TradeInAction`
-> could be injected instead:
->
-> - **Non-wild cards:** set a per-node flag (a new `x` column) on each
->   card's territory. This grounds the +2 territory bonus
->   ([Action.md](Action.md)) in board space, right next to the node's
->   existing owner one-hot, so the GNN can weigh the bonus placements in
->   topological context.
-> - **Wild cards:** have no territory, so they can't sit on a node. Carry
->   them as a per-action `wilds_in_set` count written into `u` at build
->   time. Note this is a *new capability* — `ActionGraphBuilder` today
->   only perturbs `x`/`edge_attr` and never `u`; varying `u` per candidate
->   action would be the new step (the `num_legal_actions` scalar in
->   [NetworkArchitectures.md](NetworkArchitectures.md) lives in `u` but is
->   written *per-state* by `GraphAdapter`, not per-action here).
->
-> This complements, not replaces, the card-hand signal — node flags
-> capture the immediate territory-bonus differentiator; the residual-hand
-> ("which cards to keep") consideration still wants hand context.
+| `TRADE_IN` | Returns an unmodified copy of the base graph. Its current head receives only the selected **hand-slot positions**, not the identities of the cards in those slots. See the deferred correction plan below. |
 
 `edge_attr` is already present on every base graph (`GraphAdapter`,
 `Docs/GraphAdapter.md`, all-zero) — this class clones and overwrites it
@@ -87,6 +64,75 @@ is the same "zero `edge_attr` degrades gracefully" reasoning
 `topology.edge_index()` (`BoardTopology` sorts territories once at load
 time, so the mapping is stable for the whole game) — not searched per
 action.
+
+## Deferred plan: correct the `TRADE_IN` representation gap
+
+**Status: recorded for the next model family; do not change the current
+models or checkpoints for the poster/evaluation run.** This is a learner
+observation and action-representation limitation, not an error in the game
+rules.
+
+### Current limitation
+
+Every `TradeInAction` currently receives the same unmodified `x`, `edge_attr`,
+and `u`. `GraphAdapter` does not encode individual cards, their symbols,
+territory associations, or wild status. The current `TradeInHead` then embeds
+only hand-slot numbers such as `(0, 1, 2)`. A slot number is not a card
+identity: slot 0 means whichever card happens to be first in the hand.
+
+#### What the trade-in head sees today
+
+Every trade-in candidate receives the normal board graph — territory owners,
+army counts, continents, borders, current phase, and current player — plus the
+same state-level global attributes. The only card-related global attributes
+are:
+
+| Input | Available information |
+|---|---|
+| `u[1]` | The value of the next card set, for example 4 armies. It is the same for every legal trade-in candidate in this state. |
+| `u[2:8]` | The number of cards held by each player. |
+| `u[27]` | The reinforcement budget accumulated from any earlier trade-ins this turn. |
+| `card_indices = (i, j, k)` | The selected hand positions supplied separately to `TradeInHead`, such as `(0, 1, 2)`. These are positions only, not card identities. |
+
+It does **not** see which card occupies a slot; any card's symbol, territory,
+or wild status; whether a selected card territory is owned; the candidate's
+specific +2 territory bonuses; or the cards that would remain after trading.
+
+As a result, otherwise identical board states with different cards in the
+same selected slots are indistinguishable to the scorer. This hides two
+important decision signals: the immediate +2 bonus for a selected owned card
+territory, and the composition of the cards retained after the trade.
+
+### Next-version implementation plan
+
+1. Add an all-zero `trade_in_selected` node feature to the base graph. For a
+   `TradeInAction`, mark the territory node for every selected non-wild card;
+   leave it zero for `SkipTradeAction`. This gives the GNN the selected
+   territory in its existing board context without changing the real state.
+
+2. Replace the positional slot embedding in `TradeInHead` with a real,
+   order-invariant hand encoder. Each card representation must include the
+   card symbol, the corresponding territory-node embedding or a learned wild
+   token, and a selected-versus-retained flag. Pool those card representations
+   and concatenate them with the candidate graph embedding before scoring.
+
+3. Keep wild cards in the card encoder rather than adding a varying action
+   value to `u`: a wild has no territory node, but its wild token and selected
+   flag still make it visible to the trade-in head.
+
+4. Update DQN, Dueling DQN, and PPO together, including inference rows,
+   replay/rollout reconstruction, and target-network handling. Dueling's
+   clean value row remains state-only; only candidate advantage rows carry
+   selected-card information.
+
+5. Add focused tests for selected owned versus unowned territories, wild-card
+   sets, skip trade, base-graph immutability, mixed-action batching,
+   hand-order invariance, and inference/replay consistency for all learners.
+
+6. Version the model inputs and retrain all three learner families. The new
+   node feature and trade-in-head parameters make current checkpoints
+   incompatible. Preserve the present checkpoints and evaluation results as
+   the current-representation baseline.
 
 ## Design decision: separate `proposed_army_delta` column
 
@@ -114,8 +160,9 @@ Exercised against real `Environment` rollouts (`SelfPlay`-style loop,
   army-count value and write the expected signed amounts only to
   `proposed_army_delta` at the affected territory row(s).
 - `TradeInAction` returns an unmodified copy, as does `SkipTradeAction`;
-  trade-in selection is represented by the card-hand context rather than a
-  graph perturbation.
+  the current scorer varies only by hand-slot positions, not card identity or
+  a graph perturbation. The limitation and deferred correction are documented
+  above.
 - A full `ATTACK`-phase legal-action set (68 actions) built and
   `Batch.from_data_list`-ed together without shape errors:
   `DataBatch(x=[2856, 13], edge_index=[2, 11288], edge_attr=[11288, 2], u=[68, 34], ...)`.

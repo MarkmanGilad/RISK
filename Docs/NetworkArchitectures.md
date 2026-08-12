@@ -17,6 +17,20 @@ state + legal action -> injected graph row -> Encoder -> phase head
 `TradeInHead` handles card choices; `ScoringHead` handles reinforcement,
 attack, occupy, and fortify actions.
 
+### Deferred trade-in representation correction
+
+`TRADE_IN` is the deliberate exception to the current injected-action design:
+each candidate repeats the base graph, while `TradeInHead` receives only
+selected hand-slot positions. Those positions do not identify the actual
+cards, their symbols, their territory associations, wild status, or the cards
+retained after a trade. The current DQN, Dueling DQN, and PPO models therefore
+cannot score a trade-in candidate from its immediate card-territory bonus.
+
+The documented next-version plan is selected-card node injection plus a real,
+order-invariant card-hand encoder; see [ActionGraphBuilder.md](ActionGraphBuilder.md).
+It requires a model-input version change and fresh training, so it is
+intentionally deferred from the current checkpoint and poster run.
+
 ## DQN
 
 `GNN_DQN` scores each injected row directly as `Q(s, a)`. Its agent uses

@@ -99,7 +99,111 @@ $$
 The total loss is clipped policy loss, plus weighted Smooth-L1 critic loss
 against `G_t^(16)`, minus an entropy bonus. Gradients are clipped. After the
 first optimizer step, remaining minibatches are skipped when sampled k3
-approximate KL exceeds `0.02`; the crossing minibatch is not applied.
+approximate KL exceeds `0.02`; the crossing minibatch is not applied. This is
+`PPO_311`'s current behavior; see "Planned: global post-epoch KL stopping"
+below for why it stops updates too early and the fix under consideration.
+
+### Planned: global post-epoch KL stopping
+
+**Status: plan only; PPO_311 is unchanged.** PPO_311 shows that the 16-step
+targets learn, but its current minibatch-level KL check stops every late update
+after only a few of the 16 minibatches in one epoch. A single 64-transition
+minibatch is a noisy KL estimate because legal-action counts and advantages
+vary substantially. Its rejected batch can exceed `0.02` even while the mean
+KL of applied minibatches is near `0.003`; the current mean omits the rejected
+batch, so it cannot diagnose that mismatch by itself.
+
+The next isolated PPO experiment will retain `PPO_TARGET_KL = 0.02`, the
+16-step targets, learning rate, clipping, and gradient clipping. It will change
+only when KL decides whether another epoch may begin:
+
+1. Run all 16 shuffled 64-transition minibatches in the first epoch. Do not
+   use the normal target KL to abort a minibatch or a partial epoch.
+2. After every complete epoch, recompute the chosen-action log-probability for
+   the complete cached rollout under `torch.no_grad()`, in the same safe
+   64-transition batches. Compare it to the stored `old_log_prob` values and
+   calculate the sample-weighted global k3 estimate:
+
+   $$
+   \widehat{\mathrm{KL}} =
+   \frac{1}{N}\sum_{t=1}^{N}
+   \left(r_t - 1 - \log r_t\right)
+   $$
+
+3. If that full-rollout KL exceeds `PPO_TARGET_KL`, retain the completed epoch
+   and do not start the next one. Otherwise begin the next shuffled epoch, up
+   to `PPO_EPOCHS`.
+4. The full-rollout KL pass must reuse the rollout's cached graph entries and
+   stored action indices. It must not rebuild legal actions, evaluate successor
+   states, or create a 1,024-transition GPU batch.
+5. Preserve existing clipping and gradient clipping. Do not add a normal
+   minibatch-level target-KL stop to this experiment. If a later measurement
+   demonstrates a genuinely unsafe within-epoch jump, add a separate,
+   explicitly named emergency guard in a new isolated experiment rather than
+   silently turning the normal noisy check back on.
+
+This guarantees at least one full use of every on-policy sample per rollout,
+instead of PPO_311's late behavior of applying roughly four minibatches
+(about 25% of a rollout) before stopping. It still limits the policy change
+before later epochs.
+
+The implementation is limited to `ppo_agent.py`, its focused PPO tests, and
+this documentation. Do not modify `Trainer`, the environment, DQN, Dueling
+DQN, or other learners. Use a fresh PPO run and checkpoint namespace; do not
+alter PPO_311 while it is running.
+
+Focused tests must prove that a minibatch above `PPO_TARGET_KL` does not stop a
+first epoch, the global sample-weighted KL is computed across all cached
+transitions, a high global KL prevents epoch two, and a low global KL permits
+it. Keep `ppo_approx_kl` as the applied-minibatch diagnostic for chart
+continuity; add `ppo_post_epoch_kl`, `ppo_post_epoch_kl_max`, and a 1-based
+`ppo_kl_stop_epoch` for the new decision. `ppo_early_stopped` and
+`ppo_early_stop_kl` continue to report whether and why future epochs were
+skipped, but now refer to global post-epoch KL.
+
+**Comments before implementing (open items this section doesn't yet settle):**
+
+- **Register `ppo_post_epoch_kl` and `ppo_kl_stop_epoch` in
+  `unweighted_update_metrics` — but not `ppo_post_epoch_kl_max`.** Confirmed
+  by reading `trainer.py`'s `_aggregate_update_metrics`: a key ending in
+  `_max` takes the maximum unconditionally, before any weight is ever
+  applied, so `unweighted_update_metrics` membership is inert for it. This
+  matches the existing precedent — `ppo_early_stop_kl_max` is *not* in that
+  set today, on purpose. "Register all new rollout-level metrics" as
+  currently worded would put `ppo_post_epoch_kl_max` there too, diverging
+  from that precedent rather than following it; only the two non-`_max`
+  names actually need registration to avoid being weighted by
+  `ppo_optimizer_steps_per_update` like a per-minibatch loss.
+- **Define `ppo_kl_stop_epoch` for the no-early-stop case.** It's only
+  meaningful paired with `ppo_early_stopped=True`. When all `PPO_EPOCHS`
+  complete without the global KL ever exceeding the target, set it to
+  `PPO_EPOCHS` rather than leaving it `0`/unset — a `0` would misread as
+  "stopped after epoch 0" on a chart. `ppo_early_stopped=False` stays the
+  unambiguous "did it stop at all" signal either way.
+- **Compute the global KL as one running sum over all `N` cached transitions
+  divided by `N`, not an equal-weighted average of the 16 per-chunk means.**
+  The two coincide only because `PPO_ROLLOUT_LENGTH = 1024` divides evenly by
+  `PPO_MINIBATCH_SIZE = 64` today. If either constant changes later and the
+  last chunk becomes a different size, an equal-weighted chunk average would
+  silently misweight it — the same bug class already fixed once for
+  `ppo_value_to_policy_encoder_grad_ratio`'s minibatch weighting.
+- **Reuse `_evaluate_indices(...)`/`_forward_grouped(...)` for the
+  log-probability recompute** rather than adding a new log-prob-only path.
+  They already return both `values` and `log_probs` from one shared-encoder
+  forward pass per chunk; this check simply ignores the `values` it doesn't
+  need, instead of duplicating the forward-pass logic.
+- **Decide whether the post-epoch KL pass also runs after the final epoch.**
+  There's no further epoch left to gate at that point, so it would be purely
+  diagnostic. Either choice is defensible, but the plan doesn't pick one, so
+  an implementer could go either way without noticing there was a choice to
+  make — worth a one-line decision before coding, not after.
+- **Monitoring note for the first real run under this change:** epoch 1 now
+  always completes unconditionally, where the old per-minibatch gate could
+  previously interrupt it early. That's standard PPO practice (checking KL
+  between epochs, not within one), not a regression — but the run should
+  specifically watch whether an unconstrained first epoch ever produces an
+  unusually large KL or gradient-norm jump that the old check would have
+  caught mid-epoch.
 
 The agent reports ordinary PPO optimization diagnostics plus:
 

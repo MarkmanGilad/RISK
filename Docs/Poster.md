@@ -72,29 +72,6 @@ u: global features     [1 × 35]
 
 ---
 
-## A controlled environment supplies legal actions
-
-The environment owns Risk's rules and legal-action validation. At each
-decision it exposes the state and the valid actions for the current phase;
-the agent chooses one; the environment applies it, opponents respond, and
-returns the next state, reward, and terminal signal. Heuristic and learning
-agents share this same interface.
-
-<img src="../Assets/RiskMap/start%20UI.png" alt="Risk player-selection screen" width="620">
-
-**Figure 3.** The start screen selects human, heuristic, and learning agents
-through the same game interface.
-
-| Agent | What it emphasizes |
-|---|---|
-| Random | Uniformly samples a legal move. |
-| Raider | Aggressive expansion and marginal-odds attacks. |
-| Sentinel | Border defence and safer attacks. |
-| Empire | Capturing and protecting continents. |
-| Killbot | Continent strategy plus weak-player elimination. |
-
----
-
 ## Injecting a candidate action into the graph
 
 For an attack, the selected directed border receives an orange edge feature
@@ -105,7 +82,7 @@ candidate move**.
 
 <img src="../Assets/RiskMap/partial_graph_attributes.png" alt="Partial Risk graph with node, edge, global attributes, and an injected attack" width="1250">
 
-**Figure 4.** One legal attack changes the selected border before graph
+**Figure 3.** One legal attack changes the selected border before graph
 attention (orange = injected candidate action). Node features describe
 territories, edge features describe borders and attacks, and global features
 describe phase-level constraints.
@@ -113,6 +90,11 @@ describe phase-level constraints.
 1. **Rules enumerate legal candidate actions.**
 2. **Injection marks one candidate action in the graph.**
 3. **The GNN returns one score for that state–action graph.**
+
+**Central novelty.** A legal move is represented as a controlled perturbation
+of the board graph rather than as an index in a fixed action-output layer.
+One shared encoder can therefore score the current state and each candidate
+action together.
 
 ---
 
@@ -127,7 +109,7 @@ learning objective changes.
 
 <img src="../Assets/RiskMap/network_phase_heads_v2.png" alt="Shared Risk graph-attention encoder with five phase-specific heads" width="1250">
 
-**Figure 5.** A legal action becomes one graph row. The shared encoder is
+**Figure 4.** A legal action becomes one graph row. The shared encoder is
 followed by the relevant trade-in, reinforce, attack, occupy, or fortify
 head. DQN treats the scalar as `Q(s, a)`; a policy learner uses legal-action
 logits and a value estimate.
@@ -140,13 +122,27 @@ logits and a value estimate.
 
 ---
 
-## Where the injected edge enters the calculation
+## Sparse attention and fixed checkpoint-selection evaluation
 
-<img src="../Assets/encoder_matrix_summary.png" alt="Matrix summary of the sparse Risk graph-attention encoder" width="1550">
+Attention is computed only on 166 directed Risk borders. An attack changes one
+selected edge-feature row before the edge projection; reinforce, occupy, and
+fortify change only the proposed-army-delta values in affected node rows.
 
-**Figure 6.** Attention is computed only on 166 directed Risk borders. The
-selected attack changes one projected edge row, which changes attention and
-the neighbour message for that candidate graph.
+~~~text
+E [166 x 2] -> E_projected -> K_edge / V_edge -> segment softmax
+~~~
+
+**Figure 5.** The sparse attention calculation uses the injected candidate
+instead of a dense 42 x 42 all-territory attention matrix.
+
+<img src="../Checkpoints/DQN_103/evaluations/top5_checkpoint_win_rates_all_player_counts.png" alt="Top five DQN_103 checkpoint win rates by 3 to 6 total players" width="900">
+
+**Figure 6.** Top five DQN_103 checkpoints on the fixed
+checkpoint-selection suite, separated by the total number of players. Each
+checkpoint is tested in 54 games: three seeds, every learner seat, epsilon 0,
+and a 2,000-step game cap. The latest checkpoint, `ep006700`, wins 46 of 54
+games (85.2%) with zero timeouts. This is DQN-only checkpoint-selection
+evidence, not yet a DQN-versus-Dueling-DQN-versus-PPO comparison.
 
 ---
 
@@ -156,14 +152,16 @@ Same legal-action generator · Same injected graph representation
 Same heuristic-opponent roster · Randomized learner seat and player count
 Compared against cumulative learner turns · Held-out evaluation reported separately
 
-| Learner | Chart colour |
-|---|---|
-| DQN | blue |
-| Dueling DQN | purple |
-| PPO | teal |
+| DQN | Dueling DQN | PPO |
+|---|---|---|
+| Current DQN data | Temporary DQN-chart placeholder | Temporary DQN-chart placeholder |
+| <img src="../Assets/DQN%20Win.png" alt="DQN win-rate chart using DQN_103, DQN_105, and DQN_303" width="380"> | <img src="../Assets/DQN%20Win.png" alt="Temporary DQN chart placeholder for Dueling DQN" width="380"> | <img src="../Assets/DQN%20Win.png" alt="Temporary DQN chart placeholder for PPO" width="380"> |
 
-**Figure 7.** Rolling training win rate vs. cumulative learner turns — DQN ·
-Dueling DQN · PPO. *[reserved for the final training-curve chart]*
+**Figure 7.** Locked three-slot layout for the shared comparison. The DQN
+panel shows DQN_103, DQN_105, and DQN_303. The Dueling DQN and PPO panels
+intentionally repeat that same image only to lock the final poster geometry;
+they are **not** cross-method results. Replace the two temporary panels with
+matched curves plotted against cumulative learner turns.
 
 **Figure 8.** Balanced held-out evaluation win rate at matched training
 budgets, with uncertainty bars and the number of games stated. *[reserved
@@ -197,23 +195,23 @@ learner turns. *[reserved for a supporting-evidence chart]*
 
 ## Layout
 
-Visual-first upper half, full-width results band, compact footer.
+Visual-first upper half, full-width results band, compact footer. The board
+map is intentionally a compact context panel; action injection and the shared
+GATN architecture receive the larger panels. The repository's player/agent
+selection UI is intentionally omitted from the scientific poster.
 
 ~~~text
-┌──── Header: title + claim + game primer (Figure 1) ──────────────────────────────────────────────────┐
-├───────────────────────────────────────┬────────────────────────────────┬───────────────────────────┤
-│ Problem → idea → board-graph (Fig. 2)  │ Action injection (Figure 4)    │ Shared encoder (Figure 5) │
-├───────────────────────────────────────┴────────────────────────────────┴───────────────────────────┤
-│ Player-selection UI + opponent roster (Figure 3)   │ Sparse-attention technical inset (Figure 6)     │
-├──────────────────────────────────────── Results: Figures 7–9, full width ───────────────────────────┤
-├──────────────────────────────────── Footer: take-home · limitations · QR · citations ────────────────┤
-└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Header: title + claim + game primer (Figure 1)
+Top row: compact board graph (Figure 2) | large action injection (Figure 3) | large shared GATN + heads (Figure 4)
+Technical strip: sparse action injection | fixed DQN_103 checkpoint evidence (Figures 5–6)
+Results: locked DQN | Dueling DQN | PPO slots (Figures 7–9)
+Footer: take-home | limitations | QR | citations
 ~~~
 
 | Region | Share |
 |---|---:|
 | Header | 11% |
-| Problem + idea + method visuals | 41% |
-| UI + technical inset | 14% |
+| Board graph + injection + GATN visuals | 41% |
+| Sparse attention + fixed checkpoint evidence | 14% |
 | Results | 26% |
 | Footer | 8% |
