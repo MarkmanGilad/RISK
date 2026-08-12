@@ -1,4 +1,4 @@
-"""Interactive learned-policy setup and adapter coverage (Docs/PlayLearnedAgents.md)."""
+"""Interactive learned-policy setup and adapter coverage (README.md)."""
 from __future__ import annotations
 
 import json

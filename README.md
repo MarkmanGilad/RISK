@@ -78,6 +78,12 @@ Run `python -m risk.app.main` without `--skip-menu` to open the setup screen.
    presets.
 5. Select **Start Game**.
 
+The setup keeps learned-seat choices outside `GameSettings`: it builds the
+ordinary game first, then replaces only the selected `ai` placeholder seats
+with fresh, deterministic policy instances. These policies run in evaluation
+mode and never train, write checkpoints, or modify their saved weights during
+an interactive match.
+
 | Seat type | Behavior |
 |---|---|
 | Human | Chooses actions through the map and control panel. |
@@ -215,14 +221,6 @@ in that run's `best/` directory. The trainer samples 3–6-player self-play
 games against the configured heuristic opponents and periodically evaluates
 the learner on fixed seeded games.
 
-Useful references:
-
-- [NetworkArchitectures.md](Docs/NetworkArchitectures.md)
-- [Trainer.md](Docs/Trainer.md)
-- [DuelingDQN.md](Docs/DuelingDQN.md)
-- [PPO.md](Docs/PPO.md)
-- [Eval.md](Docs/Eval.md)
-
 ## Tests and documentation
 
 `Temp/tests/` mirrors the major subsystems. Shared fixtures live in
@@ -232,3 +230,50 @@ Useful references:
 The active reference documentation is in `Docs/`. Historical experiments and
 removed planning material are kept outside the active docs in
 `Temp/retired_algorithms/` and `Temp/retired_documents/`.
+
+### Documentation index
+
+The full active-document index is [Docs/Content.md](Docs/Content.md). The same
+reference map is included here for readers browsing the repository front page.
+
+#### Game and environment
+
+| Document | What it covers |
+|---|---|
+| [Action.md](Docs/Action.md) | Game actions, validation boundaries, serialization, and RL action encoding. |
+| [BoardTopology.md](Docs/BoardTopology.md) | Territories, borders, continents, and static board data. |
+| [Environment.md](Docs/Environment.md) | Rules-engine behavior, card trades, and fortify candidates. |
+| [Reward.md](Docs/Reward.md) | Learner reward calculation and component logging. |
+
+#### Agents and user interface
+
+| Document | What it covers |
+|---|---|
+| [HeuristicAgents.md](Docs/HeuristicAgents.md) | Random and heuristic opponents used for play and training. |
+
+#### Graph representation and GATN
+
+| Document | What it covers |
+|---|---|
+| [GraphAdapter.md](Docs/GraphAdapter.md) | State-to-graph node, edge, and global features. |
+| [ActionGraphBuilder.md](Docs/ActionGraphBuilder.md) | Legal-action injection into candidate graphs. |
+| [GraphAttentionNetwork.md](Docs/GraphAttentionNetwork.md) | Sparse `TransformerConv` encoder calculation, parameters, and visuals. |
+
+#### Reinforcement learning and evaluation
+
+| Document | What it covers |
+|---|---|
+| [NetworkArchitectures.md](Docs/NetworkArchitectures.md) | Shared representation and active learner architectures. |
+| [DuelingDQN.md](Docs/DuelingDQN.md) | Dueling DQN value/advantage architecture and replay updates. |
+| [PPO.md](Docs/PPO.md) | PPO rollout, targets, clipped optimization, and checkpoints. |
+| [Trainer.md](Docs/Trainer.md) | Self-play training orchestration, metrics, and checkpoints. |
+| [Eval.md](Docs/Eval.md) | Deterministic in-training evaluation and best-policy retention. |
+| [ChooseAgent.md](Docs/ChooseAgent.md) | Offline checkpoint evaluation and policy-versus-policy matches. |
+
+#### Project support
+
+| Document | What it covers |
+|---|---|
+| [Testing.md](Docs/Testing.md) | Test commands, test map, fixtures, and conventions. |
+| [Poster.md](Docs/Poster.md) | Poster-ready project narrative and visuals. |
+| [ChangeLog.md](Docs/ChangeLog.md) | Dated history of code and documentation changes. |

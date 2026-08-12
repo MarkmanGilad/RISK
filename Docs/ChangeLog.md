@@ -16,6 +16,27 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-12
 
+- **Added the full documentation index to the README.** The repository front
+  page now links every active reference document by topic, matching
+  `Docs/Content.md`. Files: `README.md`, `Docs/ChangeLog.md`.
+
+- **Made the README the active guide for interactive learned-agent play.**
+  Added its current policy-loading behavior to the player-selection section,
+  indexed `README.md` as the primary app-use document, and moved the completed
+  `PlayLearnedAgents.md` implementation plan to `Temp/retired_documents/plans/`.
+  Files: `README.md`, `Docs/Content.md`,
+  `Temp/retired_documents/plans/PlayLearnedAgents.md`,
+  `Temp/tests/test_learned_agent_play.py`, `Docs/ChangeLog.md`.
+
+- **Grouped the documentation index by topic.** `Docs/Content.md` now
+  separates game/environment, agents/UI, graph/GATN, RL/evaluation, and
+  project-support references. Files: `Docs/Content.md`, `Docs/ChangeLog.md`.
+
+- **Added an active-document index.** `Docs/Content.md` links every current
+  documentation file and summarizes its purpose, while separating retired
+  material under `Temp/` from the active reference set. Files:
+  `Docs/Content.md`, `Docs/ChangeLog.md`.
+
 - **Declared pytest as a test dependency.** `requirements.txt` now includes
   `pytest`, matching the documented full-suite command. Files:
   `requirements.txt`, `Docs/ChangeLog.md`.
