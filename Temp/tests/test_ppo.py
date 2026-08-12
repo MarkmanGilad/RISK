@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
+import risk.learning.ppo_agent as ppo_agent_module
 from risk.learning.ppo_agent import PPO_Agent
 from risk.learning.rollout_buffer import RolloutBuffer
 from risk.learning.train_constants import PPO_VALUE_LOSS_COEF
@@ -39,23 +40,122 @@ def test_ppo_net_returns_one_logit_per_action_and_one_value() -> None:
     assert values.shape == (1,)
 
 
-def test_gae_resets_at_cutoff_but_keeps_cutoff_bootstrap() -> None:
+def test_n_step_targets_use_stored_values_and_boundary_bootstraps(monkeypatch: pytest.MonkeyPatch) -> None:
     agent = _agent(seed=3)
     buffer = RolloutBuffer()
     state = agent.env.current_state().snapshot()
     action = agent.env.legal_actions(state)[0]
-    for reward in (1.0, 2.0, 3.0):
-        buffer.push(state, action, 0, 0.0, 0.0, reward, state.snapshot(), False)
+    for value, reward, done in zip((10.0, 20.0, 30.0, 40.0, 50.0), (1.0, 2.0, 3.0, 4.0, 5.0), (False, False, True, False, False)):
+        buffer.push(state, action, 0, 0.0, value, reward, state.snapshot(), done)
     transitions = list(buffer.all())
     transitions[1] = transitions[1]._replace(gae_boundary=True)
     agent.gamma = 1.0
+    monkeypatch.setattr(ppo_agent_module, "PPO_N_STEP", 3)
+    monkeypatch.setattr(agent, "_boundary_values", lambda _: torch.tensor([0.0, 20.0, 0.0, 0.0, 50.0]))
 
-    advantages, returns = agent._gae(transitions, torch.tensor([10.0, 20.0, 30.0]))
+    advantages, returns, horizons, bootstraps = agent._n_step_targets(transitions)
 
-    # The transition at the artificial episode cutoff includes V(s') = 20,
-    # but excludes the next reset game's advantage (33) from its GAE carry.
-    assert advantages.tolist() == pytest.approx([31.9, 22.0, 33.0])
-    assert torch.equal(advantages, returns)
+    assert returns.tolist() == pytest.approx([23.0, 22.0, 3.0, 59.0, 55.0])
+    assert advantages.tolist() == pytest.approx([13.0, 2.0, -27.0, 19.0, 5.0])
+    assert horizons.tolist() == pytest.approx([2.0, 1.0, 1.0, 2.0, 1.0])
+    assert bootstraps.tolist() == [True, True, False, True, True]
+
+
+def test_n_step_target_reuses_the_stored_successor_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(seed=30)
+    state = agent.env.current_state().snapshot()
+    action = agent.env.legal_actions(state)[0]
+    buffer = RolloutBuffer()
+    for value, reward in zip((10.0, 20.0, 30.0, 40.0, 50.0), (1.0, 2.0, 3.0, 4.0, 5.0)):
+        buffer.push(state, action, 0, 0.0, value, reward, state.snapshot(), False)
+    agent.gamma = 1.0
+    monkeypatch.setattr(ppo_agent_module, "PPO_N_STEP", 3)
+    monkeypatch.setattr(agent, "_boundary_values", lambda _: torch.tensor([0.0, 0.0, 0.0, 0.0, 99.0]))
+
+    _, targets, horizons, bootstraps = agent._n_step_targets(buffer.all())
+
+    assert targets.tolist() == pytest.approx([46.0, 59.0, 111.0, 108.0, 104.0])
+    assert horizons.tolist() == pytest.approx([3.0, 3.0, 3.0, 2.0, 1.0])
+    assert bootstraps.tolist() == [True, True, True, True, True]
+
+
+def test_n_step_uses_stored_value_when_terminal_is_exactly_at_successor(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(seed=301)
+    state = agent.env.current_state().snapshot()
+    action = agent.env.legal_actions(state)[0]
+    buffer = RolloutBuffer()
+    for value, reward, done in zip((10.0, 20.0, 30.0, 40.0), (1.0, 2.0, 3.0, 4.0), (False, False, False, True)):
+        buffer.push(state, action, 0, 0.0, value, reward, state.snapshot(), done)
+    agent.gamma = 1.0
+    monkeypatch.setattr(ppo_agent_module, "PPO_N_STEP", 3)
+    monkeypatch.setattr(agent, "_boundary_values", lambda _: torch.zeros(4))
+
+    _, targets, horizons, bootstraps = agent._n_step_targets(buffer.all())
+
+    assert targets[0].item() == pytest.approx(46.0)
+    assert horizons[0].item() == 3.0
+    assert bootstraps[0].item() is True
+    assert targets[1].item() == pytest.approx(9.0)
+    assert bootstraps[1].item() is False
+
+
+def test_boundary_values_build_clean_rows_without_legal_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(seed=31)
+    state = agent.env.current_state().snapshot()
+    action = agent.env.legal_actions(state)[0]
+    buffer = RolloutBuffer()
+    for _ in range(3):
+        buffer.push(state, action, 0, 0.0, 0.0, 0.0, state.snapshot(), False)
+    transitions = list(buffer.all())
+    transitions[1] = transitions[1]._replace(gae_boundary=True)
+    entries_seen = []
+
+    def fake_forward(entries):
+        entries_seen.extend(entries)
+        count = len(entries)
+        return torch.empty(0), torch.arange(1, count + 1, dtype=torch.float32), torch.empty(0, dtype=torch.long)
+
+    monkeypatch.setattr(agent.env, "legal_actions", lambda _: pytest.fail("boundary bootstrap must not enumerate actions"))
+    monkeypatch.setattr(agent, "_forward_grouped", fake_forward)
+
+    values = agent._boundary_values(transitions)
+
+    assert values.tolist() == pytest.approx([0.0, 1.0, 2.0])
+    assert len(entries_seen) == 2
+    for rows, phase, cards, value_mask in entries_seen:
+        assert len(rows) == 1
+        assert phase.shape == (1,)
+        assert cards.shape == (1, 3)
+        assert torch.equal(value_mask, torch.tensor([True]))
+
+
+def test_grouped_clean_value_rows_return_values_without_policy_logits() -> None:
+    agent = _agent(seed=32)
+    state = agent.env.current_state()
+    entries = [agent._clean_value_entry(state, agent.player_id), agent._clean_value_entry(state, agent.player_id)]
+
+    logits, values, action_groups = agent._forward_grouped(entries)
+
+    assert logits.shape == (0,)
+    assert values.shape == (2,)
+    assert action_groups.shape == (0,)
+
+
+def test_terminal_rollout_does_not_forward_bootstrap_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(seed=33)
+    state = agent.env.current_state().snapshot()
+    action = agent.env.legal_actions(state)[0]
+    buffer = RolloutBuffer()
+    buffer.push(state, action, 0, 0.0, 0.0, 7.0, state.snapshot(), True)
+    transitions = buffer.all()
+    monkeypatch.setattr(agent, "_forward_grouped", lambda _: pytest.fail("terminal rollout must not bootstrap"))
+
+    advantages, returns, horizons, bootstraps = agent._n_step_targets(transitions)
+
+    assert returns.tolist() == pytest.approx([7.0])
+    assert advantages.tolist() == pytest.approx([7.0])
+    assert horizons.tolist() == pytest.approx([1.0])
+    assert bootstraps.tolist() == [False]
 
 
 def test_act_then_remember_stores_plain_collection_metadata() -> None:
@@ -135,6 +235,8 @@ def test_kl_limit_stops_remaining_ppo_epochs() -> None:
     assert agent.last_update_metrics["ppo_policy_encoder_grad_norm"] >= 0.0
     assert agent.last_update_metrics["ppo_value_encoder_grad_norm"] >= 0.0
     assert agent.last_update_metrics["ppo_value_to_policy_encoder_grad_ratio"] >= 0.0
+    assert agent.last_update_metrics["ppo_target_horizon_mean"] == 1.5
+    assert agent.last_update_metrics["ppo_target_bootstrap_fraction"] == 1.0
     assert torch.isfinite(torch.tensor(
         agent.last_update_metrics["ppo_value_to_policy_encoder_grad_ratio"]
     ))

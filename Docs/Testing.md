@@ -77,8 +77,9 @@ test files alias these locally as `_settings()`/`_fresh_env()` with their
 own defaults.
 
 `test_ppo.py` covers the standalone PPO implementation: policy/value output
-shape, GAE cutoff boundaries, collection-time action metadata, rollout gating,
-cached action-index validation, grouped minibatches, checkpoint restoration,
+shape, 16-step targets that reuse stored successor values with clean-graph
+critic bootstraps only at cutoffs and rollout tails, collection-time action
+metadata, rollout gating, cached action-index validation, grouped minibatches, checkpoint restoration,
 rollout-progress metrics, and the non-negative k3 KL estimate used for PPO
 early stopping. It also verifies diagnostic optimizer/sample counters and
 their checkpoint round trip, plus the separation between optimized Huber

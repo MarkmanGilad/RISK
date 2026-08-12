@@ -36,10 +36,11 @@ Dueling-comparable epsilon-greedy-Q behavior. `PQN_e0` is the matching
 Bellman-only control: the same epsilon-greedy behavior with a per-agent
 policy-loss coefficient of zero (`Docs/PQN.md` §24.D).
 
-The current `main()` launcher starts a fresh W&B-backed `PPO_301` run: it builds
-`PPO_Agent`, starts with no checkpoint (`resume=False`), writes under
-`Checkpoints/PPO_301`, and has no `wandb_run_id`, so W&B creates a new run.
-This is the first PPO experiment using the corrected card-trade environment:
+The current `main()` launcher starts a fresh W&B-backed `DQN_303` run: it builds
+`GNN_DQN_Agent`, starts with no checkpoint (`resume=False`), writes under
+`Checkpoints/DQN_303`, and has no `wandb_run_id`, so W&B creates a new run.
+This DQN experiment uses the corrected card-trade environment and bounded
+fortify action candidates:
 ordinary five-card conquest draws defer trading to the next turn, while
 elimination card transfers still resolve their required trades and placement
 before occupation resumes. It must not resume a pre-change checkpoint because

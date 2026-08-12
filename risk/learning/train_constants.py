@@ -38,11 +38,11 @@ GRAD_CLIP_MAX_NORM: Final[float] = 10.0
 # region PPO rollout and gradient update
 
 PPO_ROLLOUT_LENGTH: Final[int] = 1024
+PPO_N_STEP: Final[int] = 16
 PPO_EPOCHS: Final[int] = 4
 PPO_MINIBATCH_SIZE: Final[int] = 64
 PPO_CLIP_EPS: Final[float] = 0.2
 PPO_TARGET_KL: Final[float] = 0.02
-PPO_GAE_LAMBDA: Final[float] = 0.95
 PPO_VALUE_LOSS_COEF: Final[float] = 0.1
 PPO_VALUE_HUBER_BETA: Final[float] = 1.0
 PPO_ENTROPY_COEF: Final[float] = 0.01
@@ -164,11 +164,11 @@ __all__ = [
     "LOSS_NAME",
     "GRAD_CLIP_MAX_NORM",
     "PPO_ROLLOUT_LENGTH",
+    "PPO_N_STEP",
     "PPO_EPOCHS",
     "PPO_MINIBATCH_SIZE",
     "PPO_CLIP_EPS",
     "PPO_TARGET_KL",
-    "PPO_GAE_LAMBDA",
     "PPO_VALUE_LOSS_COEF",
     "PPO_VALUE_HUBER_BETA",
     "PPO_ENTROPY_COEF",

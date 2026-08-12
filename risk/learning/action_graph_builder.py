@@ -11,11 +11,10 @@ instead of building one from scratch.
 - `AttackAction`s mark the attacked edge `[selected_attack, dice /
   MAX_ATTACK_DICE]`; every other edge (including the reverse direction)
   stays `[0, 0]`.
-- `ReinforcementAction`/`OccupyAction`/`FortifyAction` write directly into
-  `x`'s existing army-count column at the affected territory row(s) — the
-  simpler of the two options `Docs/NetworkArchitectures.md` leaves open (vs.
-  a parallel `proposed_delta` column); revisit if training shows the
-  network can't disentangle a proposed change from the real count.
+- `ReinforcementAction`/`OccupyAction`/`FortifyAction` write into `x`'s
+  separate proposed-army-delta column at the affected territory row(s),
+  leaving the real army-count column untouched — see
+  `Docs/GraphAttentionNetwork.md`'s "Non-attack action injection" section.
 - `StopAttackAction`/skip-`FortifyAction` get no perturbation at all — the
   result *is* the unmodified base graph (plus the same zero `edge_attr`
   every other action gets, so it still batches with them).

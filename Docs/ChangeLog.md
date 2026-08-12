@@ -14,7 +14,423 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-12
+
+- **Rebuilt the poster into a visual-first evidence story.** Docs/Poster.md
+  now uses the original high-resolution board, graph, UI, action-injection,
+  network, and encoder assets in a coherent A0 layout, with a full-width
+  three-chart results band reserved for matched DQN, Dueling DQN, and PPO
+  comparisons. The player-selector roster remains beside its UI image; dense
+  encoder mathematics is now a secondary inset. Files: Docs/Poster.md.
+
+- **Moved the heuristic-agent table beside the player-selection UI.** The
+  poster now explains Random, Raider, Sentinel, Empire, and Killbot immediately
+  after the start-screen image, where readers first encounter those options.
+  Files: `Docs/Poster.md`.
+
+- **Added a poster-ready encoder matrix summary.** `Docs/Poster.md` now embeds
+  the concise sparse-attention overview beneath the network pipeline, keeping
+  the exact action-injection idea visible without adding the full derivation to
+  the poster. Files: `Docs/Poster.md`, `Assets/encoder_matrix_summary.png`,
+  `Assets/RiskMap/encoder_matrix_summary.png`.
+
+- **Corrected PPO equation formatting.** `Docs/PPO.md` now uses consistently
+  rendered display-math delimiters and conventional subscripts, spacing, and
+  policy-conditioning notation for the n-step target and clipped PPO loss.
+  Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Implemented PPO's 16-step bootstrapped targets.** `PPO_Agent` now uses
+  stored `old_value[t + 16]` for ordinary continuations, performs clean
+  value-only forwards only at non-terminal boundaries and tails, and logs
+  target horizon/bootstrap diagnostics. `PPO_N_STEP = 16` is exported for W&B;
+  no environment, trainer, or other learner changed. Focused PPO/logger tests:
+  29 passed. Files: `risk/learning/ppo_agent.py`,
+  `risk/learning/train_constants.py`, `Temp/tests/test_ppo.py`,
+  `Docs/PPO.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`.
+
+- **Verified the 16-step PPO plan's newest details and closed a doc-sync
+  gap.** Confirmed `test_training_logger.py`'s config test iterates
+  `train_constants.__all__` generically (no hardcoded key list), so adding
+  `PPO_N_STEP` there needs no test edits, just a run — the plan's step 6 was
+  already correct on that point. Confirmed step 2's `t + n` boundary
+  reasoning (old_value reuse is valid regardless of what transition `t + n`
+  itself later does, since it values the *pre-action* state) is sound. Found
+  one real gap: `Docs/Testing.md`'s `test_ppo.py` description still describes
+  "complete-episode return targets," the Monte-Carlo design step 6 replaces;
+  `Docs/PPO.md` now calls for updating that description alongside the test
+  changes. No code changed — plan-only, per instruction not to implement yet.
+  Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Closed indexing and experiment-config gaps in the 16-step PPO plan.**
+  `Docs/PPO.md` now makes terminal/boundary handling exact at the `t + n`
+  edge, requires `PPO_N_STEP` to be exported so the existing logger records it
+  in W&B, and defines the bootstrap diagnostic structurally rather than by a
+  value's incidental numeric magnitude. The scoped tests now include the
+  existing logger configuration check as well as PPO coverage. No code changed.
+  Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Closed a metric-weighting gap in the 16-step PPO plan.** Its two new
+  diagnostics (`ppo_target_horizon_mean`, `ppo_target_bootstrap_fraction`)
+  are rollout-wide, once-per-update values, the same kind as
+  `ppo_return_mean`/`ppo_advantage_mean` — which are already registered in
+  `PPO_Agent.unweighted_update_metrics` so `Trainer` averages them equally
+  across rollout updates instead of weighting them like a per-minibatch loss.
+  The plan's step 5 named the two new diagnostics but not that requirement;
+  `Docs/PPO.md` now calls it out explicitly. Also pointed step 3 at reusing
+  the existing `_clean_value_entry(...)`/`_forward_grouped(...)` helpers for
+  boundary/tail evaluation instead of implying a new value-only path — they
+  already do exactly this. No code changed — plan-only, per instruction not
+  to implement yet. Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Clarified the 16-step PPO plan's time scale, old-policy bootstrap timing,
+  and diagnostics.** `Docs/PPO.md` now defines 16 as learner transitions,
+  requires deduplicated boundary/tail values to be evaluated under `no_grad`
+  before optimizer updates, and adds horizon/bootstrap observability so the
+  experiment's shortened targets can be measured. No code changed. Files:
+  `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Reviewed and closed gaps in the 16-step bootstrapped PPO plan.**
+  `Docs/PPO.md`'s new n-step plan (a response to `PPO_310` showing no
+  learning under full Monte-Carlo returns) was directionally sound but
+  missing: precedence when a transition is both `done=True` and
+  `gae_boundary=True` (same edge case already fixed for the Monte-Carlo
+  implementation — `done` must win), a test for its own "boundary value
+  shared across every earlier target" requirement, and a note not to resume
+  `PPO_310`'s checkpoint since its critic was trained against a different
+  regression target. Also clarified that this plan approximates the paper's
+  GAE architecturally but not as an estimator (one fixed cutoff vs. a
+  $\lambda$-weighted blend), and that a bigger fixed n is not the right
+  escalation if 16 doesn't work — real GAE is. No code changed — plan-only,
+  per instruction not to implement yet. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Changed the next PPO target experiment from GAE to configurable 16-step
+  bootstrapping.** `Docs/PPO.md` now specifies `PPO_N_STEP = 16`, precise
+  terminal/boundary/tail handling, and reuse of the stored value at `t + 16`;
+  it continues to forbid all-successor action-graph evaluation and leaves code
+  unchanged. Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Replaced PPO's accumulated design history with a current-state reference
+  and a paper-style GAE plan.** `Docs/PPO.md` now documents the implemented
+  Monte-Carlo return targets, their boundary bootstrap behaviour, and the
+  existing clipped PPO optimization without preserving superseded plans. It
+  adds a scoped follow-up plan to restore efficient GAE by reusing stored
+  successor values and evaluating only missing boundary/tail values; no code
+  changed. Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
 ## 2026-08-11
+
+- **Added a one-sentence-per-heuristic-agent table to the poster brief.**
+  `Docs/Poster.md`'s "Training opponents" section now lists Random, Raider,
+  Sentinel, Empire, and Killbot each in one sentence, sourced from
+  `risk/agents/random_agent.py` and `risk/agents/heuristic_agent.py`. Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Fixed a stale comment in `ActionGraphBuilder`.** Its module docstring
+  claimed non-attack actions (reinforce/occupy/fortify) write into `x`'s
+  army-count column; the actual code (and `Docs/GraphAttentionNetwork.md`)
+  writes into the separate proposed-army-delta column instead — verified
+  `GraphAttentionNetwork.md` against the running code (dimensions, PyG
+  `TransformerConv` internals, parameter counts) while answering a question
+  about its accuracy, and found the doc correct but this comment out of
+  date. Files: `risk/learning/action_graph_builder.py`, `Docs/ChangeLog.md`.
+
+- **Linked the sparse-attention notation to PyG's actual execution.** The
+  graph-attention guide now notes that `message(...)` computes the segment
+  softmax during `propagate(...)`, while `propagate(..., aggr="add")`
+  automatically performs the segment sum. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Adopted column-vector notation for sparse attention weights.** The
+  graph-attention guide now treats `alpha` as `[166 x 1]`, making the
+  weighted-message multiplication directly `alpha * V_edge`. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Defined `target_index` in the graph-attention input table.** The sparse
+  encoder guide now introduces `target_index = edge_index[1]` before its use
+  in the segment-softmax and segment-sum operations. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Rewrote the graph-attention guide to match the actual sparse encoder.**
+  `Docs/GraphAttentionNetwork.md` now describes `TransformerConv`'s 166-edge
+  gather, edge projection, segment softmax, segment aggregation, and internal
+  plus outer residual paths rather than a dense masked-attention analogy.
+  Files: `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Removed the orphaned `PPO_GAE_LAMBDA` constant.** It was PPO-only (no
+  other learner ever read it) and, since `ppo_agent.py`'s complete-episode
+  return-target fix, no longer imported or used at all — left in place it was
+  exactly the silent-inactive-knob risk `Docs/PPO.md` had flagged: a value
+  sitting at `0.95` that looked live but did nothing. User confirmed PPO-only
+  constants in the shared `train_constants.py` are fair game to change/delete
+  for this fix, superseding the earlier "shared constants are out of scope"
+  boundary. Updated `Docs/PPO.md`'s "Constants" table, the corrected
+  return-target plan's `PPO_GAE_LAMBDA` bullet, and the "Implementation
+  status" note to match; left the historical `PPO_200`/`PPO_301` config
+  tables untouched since those record what those runs actually used at the
+  time. Verified with the focused suite only (`Temp/tests/test_ppo.py`, 14
+  passed) per instruction not to run unnecessary tests. Files:
+  `risk/learning/train_constants.py`, `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Verified the implemented PPO return-target fix against the finalized plan
+  and fixed one real regression along the way.** Read `ppo_agent.py` fresh
+  against `Docs/PPO.md`'s corrected design: `_next_values`/`_gae` are gone,
+  replaced by `_return_targets`/`_boundary_values`/`_clean_value_entry`
+  exactly as planned, and all four new `test_ppo.py` cases (interior boundary,
+  implicit last-position boundary, clean-graph-only bootstrap, zero-boundary
+  no-forward) pass, confirming every bug found during plan review is actually
+  fixed. Along the way, briefly changed `_boundary_values` to read
+  `transition.next_state.perspective` instead of `self.player_id` for
+  consistency with `_cache_transition_entry`'s pattern — this broke
+  `test_boundary_values_build_clean_rows_without_legal_actions`, because
+  `State` has no real `perspective` field (it's only ever bolted on by
+  `remember()`, and this test pushes transitions directly into
+  `RolloutBuffer`, bypassing that). Reverted; `self.player_id` was correct
+  as originally implemented. Separately, briefly removed `PPO_GAE_LAMBDA`
+  from `train_constants.py` as an orphaned constant, then reverted that too
+  after finding it was a deliberate, already-documented scope decision (this
+  changelog's "Constrained the PPO return-target fix to PPO-owned code"
+  entry) to leave shared constants untouched — `risk/learning/ppo_agent.py`
+  and `Docs/PPO.md` are the only files this fix is allowed to touch. Full
+  suite: 414 passed, 1 skipped. Files: `risk/learning/ppo_agent.py` (net
+  no-op), `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Implemented PPO's boundary-only return targets.** `PPO_Agent` now builds
+  full episode returns backward, evaluates clean critic graphs only for forced
+  cutoffs and an unfinished rollout tail, and no longer expands every
+  next-state legal-action set. Focused tests cover terminal, cutoff, tail, and
+  value-only batching behavior. The scoped change leaves the environment,
+  trainer, shared constants, and other learners untouched. Files:
+  `risk/learning/ppo_agent.py`, `Temp/tests/test_ppo.py`, `Docs/PPO.md`,
+  `Docs/Testing.md`, `Docs/ChangeLog.md`. Verified: focused PPO suite 14
+  passed; full suite 414 passed, 1 skipped.
+
+- **Constrained the PPO return-target fix to PPO-owned code.** `Docs/PPO.md`
+  now limits implementation to `ppo_agent.py` and its focused tests; it
+  explicitly excludes the environment, trainer, shared constants, graph/action
+  code, and all other learners. The legacy GAE constant remains untouched in
+  the shared module and is no longer an active PPO return-target setting. The
+  older rollout and PPO_200 plans are marked historical so their old shared
+  file references cannot be mistaken for current authorization. Files:
+  `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Closed a zero-boundary edge case in the PPO GAE bug-fix plan before coding
+  it.** A rollout can legitimately have no forced cutoffs and happen to end
+  its last transition on a real terminal, needing no bootstrap anywhere;
+  calling the planned value-only batched forward with an empty boundary list
+  in that case would hit `PPO_Net.forward`'s `not value_mask.any()` guard
+  (`ppo_net.py:43`) and raise `ValueError`. `Docs/PPO.md` now calls for
+  skipping the value-only forward entirely when the collected boundary list is
+  empty, plus a test for that exact scenario. No code changed — plan-only, per
+  request to check the plan again before implementing. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Closed an implementability gap in the PPO GAE bug-fix plan's clean-graph
+  boundary evaluation, before coding it.** `Docs/PPO.md` required boundary
+  bootstraps to use clean base graphs with no injected action rows, but the
+  existing `_decision_rows(...)` helper it would naturally reuse breaks on an
+  empty action list — its clean-row `phase` value is borrowed from the first
+  legal action's encoding, which doesn't exist when there are no actions,
+  producing a 0-length `phase` tensor against a 1-length `rows` list. Verified
+  `PPO_Net.forward` itself already tolerates an all-clean, no-action batch
+  without changes (its per-phase-head loop no-ops when the action mask is
+  empty), so the plan now calls for a small dedicated clean-row builder
+  instead of reusing `_decision_rows` with `actions=[]`. No code changed —
+  plan-only, per request to check the plan again before implementing. Files:
+  `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Aligned PPO's headline conclusion with its boundary rules.** The main
+  return-target summary in `Docs/PPO.md` now names every non-terminal boundary
+  (interior forced cutoffs and a final rollout tail), rather than only the
+  final tail, and its test plan now proves the clean-graph value-only network
+  path returns values without policy logits. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Tightened the PPO return-target plan's remaining critic details.**
+  `Docs/PPO.md` now requires bootstrap evaluation to use clean state graphs
+  only (no legal-action expansion), bounds that batch by actual boundaries,
+  renames the planned GAE helper to avoid misleading terminology, and removes
+  the risk of `PPO_GAE_LAMBDA` becoming a silent inactive setting. Files:
+  `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Removed a "seed G=0" ambiguity from the PPO GAE bug-fix plan before
+  coding it.** `Docs/PPO.md`'s corrected `_gae(...)` steps said to "seed `G =
+  0`" for a terminal transition, which read as if the terminal transition's
+  own return becomes zero — wrong, since it would drop that transition's own
+  reward (including the dominant `+300/-300` terminal reward) from its return
+  and value target. Reworded so `G[i] = r[i] + gamma * bootstrap[i]` always
+  includes the transition's own reward, and only the `bootstrap[i]`
+  continuation term (0 / fresh `V(next_state)` / carried `G[i+1]`) is chosen
+  by the done/boundary/contiguous priority. No code changed — plan-only, per
+  request to check the plan again before implementing. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Clarified the critic's role under complete-episode PPO returns.**
+  `Docs/PPO.md` now distinguishes the required current-state critic forwards
+  used to learn `V(state) -> G` from the redundant next-state bootstrap
+  forwards that the corrected return design removes. Also repaired the
+  boundary-marker contract sentence. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Closed a last-position gap in the PPO GAE bug-fix plan before coding it.**
+  `Docs/PPO.md`'s corrected `_gae(...)` plan bootstrapped only on
+  `gae_boundary=True`, but that flag is only ever set by a
+  `MAX_STEPS_PER_EPISODE` cutoff (`mark_last_boundary()`); an ordinary
+  mid-game rollout fill (the common case) leaves the final transition
+  unflagged, which would have made the corrected `_gae` silently skip the one
+  bootstrap that position needs. The plan now also treats "last transition in
+  the passed-in sequence" as an implicit boundary, gives `done` explicit
+  priority over `gae_boundary` when both land on the same transition, and adds
+  a test case for the unflagged-last-transition scenario. No code changed yet
+  — this is a plan correction ahead of implementation. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Made the PPO GAE bug-fix plan complete and closed the 100-turn
+  loophole.** `Docs/PPO.md`'s "Superseding conclusion" section named the right
+  fix (backward episode returns, one bootstrap per boundary) but left it as
+  prose with an ambiguous "final unfinished boundary state" phrase that read
+  as if a rollout has at most one boundary; it now spells out that any number
+  of interior `MAX_STEPS_PER_EPISODE` cutoffs each need their own bootstrap,
+  notes `PPO_GAE_LAMBDA` goes inert under this design, and adds concrete
+  implementation/test/run steps (none of this is in `ppo_agent.py` yet — it
+  still forwards a value for every non-terminal transition today). Also added
+  a comment to the "100 learner turns" proposal clarifying it is not a
+  substitute fix: under the current code it would only shrink the redundant
+  forward-pass count instead of removing it, and it reverses PPO_200's own
+  rollout-diversity rationale. Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Proposed a short PPO rollout experiment.** `Docs/PPO.md` now records the
+  100-learner-turn hybrid-return design: real returns for completed games and
+  one bootstrap only for the unfinished tail, plus the signal-quality risks
+  and measurements needed to compare it fairly with the 1,024-turn cadence.
+  Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Corrected the PPO return/bootstrapping design.** `Docs/PPO.md` now uses
+  actual discounted returns for completed games and a single value bootstrap
+  only for an unfinished rollout tail; it supersedes the mistaken plan to
+  evaluate every transition's next state. Files: `Docs/PPO.md`,
+  `Docs/ChangeLog.md`.
+
+- **Documented the PPO full-rollout bootstrap OOM and remediation plan.**
+  Recorded that `_next_values(...)`, not the 64-sample optimizer minibatch,
+  forwards every non-terminal next-state action graph in one expanded CUDA
+  batch, and added a chunked-evaluation, regression-test, and GPU-smoke plan.
+  Files: `Docs/PPO.md`, `Docs/ChangeLog.md`.
+
+- **Reorganized the graph-attention guide after the node-only score matrix.**
+  The guide now presents border masking immediately after `S_node`, keeps one
+  compact edge-injection projection, and removes the duplicate sparse
+  gather/calculation walkthrough. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Corrected the edge-attention matrix shapes in the graph-attention guide.**
+  The guide now separates the dense node-only score matrix from the real
+  sparse `TransformerConv` path, which gathers 166 edge-aligned rows before
+  adding the `[166 x 64]` projected-edge matrix. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Kept the edge-injection section entirely in matrix form.** Removed the
+  per-territory score/message notation and retained the `E W_E` projection and
+  its role in the attention calculation. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added the edge-feature projection calculation to the attention guide.**
+  The guide now shows `E [166 x 2]` projected by `W_E` to one 64-value
+  embedding per directed border and explains its use in the actual
+  `TransformerConv` score and message calculations. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Highlighted attack injection in the attention-score explanation.** The
+  graph-attention guide now identifies the edge-feature term as the selected
+  attack's action injection and explains why it makes attention
+  candidate-action-specific. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Resolved the attention-width symbols in the graph-attention guide.** The
+  query/key/value section now defines `d_hidden`, `d_att`, and `d_value` as 64
+  and shows the corresponding concrete matrix dimensions. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Removed the misleading generic `W_O` notation from the encoder guide.**
+  The message-update section now describes the actual `TransformerConv` path:
+  64-wide value messages, edge projection, internal `W_skip`, and the
+  encoder's outer residual. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Kept bias notation out of the graph-attention walkthrough.** The guide's
+  equations now show only the weight-matrix operations; exact bias parameters
+  remain listed only in the final learned-parameter table. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Defined `W_skip` next to the encoder update.** The graph-attention guide
+  now shows its 64-wide root projection and distinguishes the internal
+  `TransformerConv` skip path from the encoder's outer residual connection.
+  Files: `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Simplified the encoder-parameter table's weight notation.** The guide now
+  lists only weight symbols (`W_in`, `W_Q`, and so on) and gives each learned
+  bias its own table column. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Named the encoder's raw-feature mapping in the graph-attention guide.**
+  The guide now defines `W_in`/`b_in` in the first matrix equation and uses
+  those symbols, rather than an unnamed input-projection label, in the learned
+  parameter table. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added exact encoder parameter shapes to the graph-attention guide.** The
+  guide now distinguishes calculated `V` from learned weights and records the
+  input, query, key, value, edge, and skip projections used by each of the four
+  64-wide `TransformerConv` layers. Files: `Docs/GraphAttentionNetwork.md`,
+  `Docs/ChangeLog.md`.
+
+- **Recorded the encoder's configured hidden width in the matrix guide.** The
+  guide now states `d_hidden = 64` and resolves the input, residual, pooling,
+  and final graph-embedding dimensions accordingly. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Added a standalone graph-attention matrix guide.** The new guide defines
+  `H`, border masking, the output projection `W_O`, action injection, pooling,
+  and the dimensions of each matrix operation for the Risk encoder. Files:
+  `Docs/GraphAttentionNetwork.md`, `Docs/ChangeLog.md`.
+
+- **Added the shared GNN and five-head architecture visual to the poster
+  pipeline.** `Docs/Poster.md` now embeds a compact, Markdown-rendered version
+  of the graph-input, shared-encoder, and phase-specific MLP-head diagram.
+  Files: `Docs/Poster.md`, `Assets/RiskMap/network_phase_heads_poster.png`,
+  `Docs/ChangeLog.md`.
+
+- **Made the new poster images render reliably in Markdown preview.** Replaced
+  the two HTML image elements with normal Markdown image links to 560 px-wide,
+  space-free preview PNGs. Files: `Docs/Poster.md`,
+  `Assets/RiskMap/start_ui_poster.png`,
+  `Assets/RiskMap/partial_graph_attributes_poster.png`, `Docs/ChangeLog.md`.
+
+- **Added the agent-selection UI and action-injected feature diagram to the
+  poster brief.** `Docs/Poster.md` now includes the start screen's player
+  roster and the compact node/edge/global attribute visual, both constrained
+  to the existing 560 px display width. Files: `Docs/Poster.md`,
+  `Assets/RiskMap/start UI.png`, `Assets/RiskMap/partial_graph_attributes.png`,
+  `Docs/ChangeLog.md`.
+
+- **Added the completed graph-map figure and constrained embedded image sizes.**
+  `Docs/Poster.md` now uses the generated 42-node/83-edge map for Figure 2
+  and renders both poster images at 560 px wide, preserving a compact,
+  readable Markdown brief. Files: `Docs/Poster.md`,
+  `Assets/RiskMap/map_graph_nodes_edges.png`, `Docs/ChangeLog.md`.
+
+- **Embedded the poster's two supplied board assets.** `Docs/Poster.md` now
+  displays the populated playable-board screenshot for Figure 1 and the
+  neutral map as the source for the graph-overlay Figure 2, so the design
+  brief is directly usable during poster assembly. Files: `Docs/Poster.md`,
+  `Docs/ChangeLog.md`.
+
+- **Configured the launcher for fresh `DQN_303`.**
+  `risk/learning/trainer.py` now creates a non-resuming DQN run under
+  `Checkpoints/DQN_303`, ready to be started manually against the corrected
+  card-trade and fortify action environment. `Docs/Trainer.md` records the
+  active launcher. Files: `risk/learning/trainer.py`, `Docs/Trainer.md`,
+  `Docs/ChangeLog.md`.
 
 - **Reduced PPO's GPU minibatch size for `PPO_301`.**
   Set `PPO_MINIBATCH_SIZE` to `64` while retaining the 1,024-turn rollout and

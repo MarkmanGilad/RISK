@@ -23,9 +23,9 @@ from risk.learning.train_constants import (
     PPO_CLIP_EPS,
     PPO_ENTROPY_COEF,
     PPO_EPOCHS,
-    PPO_GAE_LAMBDA,
     PPO_LR,
     PPO_MINIBATCH_SIZE,
+    PPO_N_STEP,
     PPO_ROLLOUT_LENGTH,
     PPO_TARGET_KL,
     PPO_VALUE_HUBER_BETA,
@@ -49,6 +49,8 @@ class PPO_Agent(BaseAgent):
             "ppo_old_value_std",
             "ppo_advantage_mean",
             "ppo_advantage_std",
+            "ppo_target_horizon_mean",
+            "ppo_target_bootstrap_fraction",
             "ppo_policy_encoder_grad_norm",
             "ppo_value_encoder_grad_norm",
             "ppo_value_to_policy_encoder_grad_ratio",
@@ -67,6 +69,8 @@ class PPO_Agent(BaseAgent):
         """Initialize PPO state, network, optimizer, and environment adapters."""
         super().__init__(player_id)
         self.env, self.device, self.gamma = env, resolve_device(device), float(gamma)
+        if PPO_N_STEP < 1:
+            raise ValueError("PPO_N_STEP must be at least 1")
         self.rollout_length = int(rollout_length)
         self.target_kl = float(target_kl)
         self.epsilon = 0.0  # Evaluator compatibility; PPO never consults it.
@@ -232,19 +236,20 @@ class PPO_Agent(BaseAgent):
         action_group_index = groups[~value_mask]
         return logits, values, action_group_index
 
-    def _next_values(self, transitions: Sequence[RolloutTransition]) -> torch.Tensor:
-        """Evaluate bootstrap values for every non-terminal next state."""
+    def _clean_value_entry(self, state: State, perspective: int) -> tuple[list[Data], torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build one clean graph row for a value-only bootstrap evaluation."""
+        base = self.adapter(state, perspective=perspective)
+        return [base], torch.zeros(1, dtype=torch.long), torch.zeros((1, 3), dtype=torch.long), torch.tensor([True], dtype=torch.bool)
+
+    def _boundary_values(self, transitions: Sequence[RolloutTransition]) -> torch.Tensor:
+        """Evaluate only non-terminal cutoff and rollout-tail bootstrap states."""
         values = torch.zeros(len(transitions), dtype=torch.float32, device=self.device)
         entries = []
         positions = []
         for i, transition in enumerate(transitions):
-            if transition.done:
+            if transition.done or (not transition.gae_boundary and i != len(transitions) - 1):
                 continue
-            legal = self.env.legal_actions(transition.next_state)
-            if not legal:
-                raise RuntimeError("non-terminal PPO next_state has no legal actions")
-            rows, phase, cards, _, value_mask = self._decision_rows(transition.next_state, legal, transition.next_state.perspective)
-            entries.append((rows, phase, cards, value_mask))
+            entries.append(self._clean_value_entry(transition.next_state, self.player_id))
             positions.append(i)
         if entries:
             with torch.no_grad():
@@ -253,19 +258,37 @@ class PPO_Agent(BaseAgent):
                 values[position] = group_values[group_id]
         return values
 
-    def _gae(self, transitions: Sequence[RolloutTransition], next_values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute generalized advantages and value targets for a rollout."""
+    def _n_step_targets(self, transitions: Sequence[RolloutTransition]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute fixed-horizon targets using stored values and boundary bootstraps."""
         rewards = torch.tensor([t.reward for t in transitions], dtype=torch.float32, device=self.device)
         old_values = torch.tensor([t.old_value for t in transitions], dtype=torch.float32, device=self.device)
-        advantages = torch.zeros_like(rewards)
-        carry = torch.tensor(0.0, device=self.device)
-        for i in range(len(transitions) - 1, -1, -1):
-            transition = transitions[i]
-            bootstrap = 0.0 if transition.done else next_values[i]
-            delta = rewards[i] + self.gamma * bootstrap - old_values[i]
-            carry = delta + (0.0 if transition.done or transition.gae_boundary else self.gamma * PPO_GAE_LAMBDA) * carry
-            advantages[i] = carry
-        return advantages, advantages + old_values
+        targets = torch.zeros_like(rewards)
+        horizons = torch.zeros_like(rewards)
+        uses_bootstrap = torch.zeros(len(transitions), dtype=torch.bool, device=self.device)
+        boundary_values = self._boundary_values(transitions)
+        for start in range(len(transitions)):
+            discount = 1.0
+            for offset in range(PPO_N_STEP):
+                index = start + offset
+                if index >= len(transitions):
+                    break
+                transition = transitions[index]
+                targets[start] += discount * rewards[index]
+                horizon = offset + 1
+                horizons[start] = horizon
+                discount *= self.gamma
+
+                if transition.done:
+                    break
+                if transition.gae_boundary or index == len(transitions) - 1:
+                    targets[start] += discount * boundary_values[index]
+                    uses_bootstrap[start] = True
+                    break
+                if horizon == PPO_N_STEP:
+                    targets[start] += discount * old_values[index + 1]
+                    uses_bootstrap[start] = True
+                    break
+        return targets - old_values, targets, horizons, uses_bootstrap
 
     def _cache_transition_entry(self, transition: RolloutTransition) -> tuple[list[Data], torch.Tensor, torch.Tensor, torch.Tensor]:
         """Build one transition's graph rows once, up front, so `learn()`'s
@@ -406,7 +429,7 @@ class PPO_Agent(BaseAgent):
 
     def _summarize_update(self, minibatches: Sequence[dict[str, float]], *, legal_action_counts: Sequence[int], returns: torch.Tensor,
             old_values: torch.Tensor, raw_advantages: torch.Tensor, completed_epochs: int, early_stopped: bool, early_stop_kl: float, optimizer_steps_before: int,
-            samples_before: int, ) -> dict[str, float]:
+            samples_before: int, target_horizons: torch.Tensor, target_bootstraps: torch.Tensor, ) -> dict[str, float]:
         """Preserve the public PPO metric schema while hiding collection detail."""
         value_mse = self._mean_minibatch_metric(minibatches, "value_mse")
         policy_encoder_grad_norm = self._sample_weighted_minibatch_metric(minibatches, "policy_encoder_grad_norm")
@@ -437,6 +460,8 @@ class PPO_Agent(BaseAgent):
             "ppo_old_value_std": float(old_values.std(unbiased=False)),
             "ppo_advantage_mean": float(raw_advantages.mean()),
             "ppo_advantage_std": float(raw_advantages.std(unbiased=False)),
+            "ppo_target_horizon_mean": float(target_horizons.mean()),
+            "ppo_target_bootstrap_fraction": float(target_bootstraps.float().mean()),
             "ppo_grad_norm": self._mean_minibatch_metric(minibatches, "grad_norm"),
             "ppo_grad_norm_max": max(minibatch["grad_norm"] for minibatch in minibatches),
             "ppo_encoder_grad_norm": self._mean_minibatch_metric(minibatches, "encoder_grad_norm"),
@@ -456,8 +481,8 @@ class PPO_Agent(BaseAgent):
 
     def _prepare_rollout_update(self, transitions: Sequence[RolloutTransition]) -> dict[str, list | torch.Tensor]:
         """Build the fixed rollout targets and cached inputs for one PPO update."""
+        advantages, returns, target_horizons, target_bootstraps = self._n_step_targets(transitions)
         cached_entries = [self._cache_transition_entry(transition) for transition in transitions]
-        advantages, returns = self._gae(transitions, self._next_values(transitions))
         raw_advantages = advantages.clone()
 
         return {
@@ -466,6 +491,8 @@ class PPO_Agent(BaseAgent):
             "advantages": (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8),
             "returns": returns,
             "raw_advantages": raw_advantages,
+            "target_horizons": target_horizons,
+            "target_bootstraps": target_bootstraps,
             "old_log_probs": torch.tensor([transition.old_log_prob for transition in transitions], dtype=torch.float32, device=self.device, ),
             "old_values": torch.tensor([transition.old_value for transition in transitions], dtype=torch.float32, device=self.device, ),
         }
@@ -509,7 +536,8 @@ class PPO_Agent(BaseAgent):
         self.train_steps += 1
         self.last_update_metrics = self._summarize_update(minibatches, legal_action_counts=update["legal_action_counts"], returns=update["returns"],
             old_values=update["old_values"], raw_advantages=update["raw_advantages"], completed_epochs=completed_epochs, early_stopped=early_stopped,
-            early_stop_kl=early_stop_kl, optimizer_steps_before=optimizer_steps_before, samples_before=samples_before,)
+            early_stop_kl=early_stop_kl, optimizer_steps_before=optimizer_steps_before, samples_before=samples_before,
+            target_horizons=update["target_horizons"], target_bootstraps=update["target_bootstraps"],)
         self.rollout_buffer.clear()
         return [minibatch["loss"] for minibatch in minibatches]
 

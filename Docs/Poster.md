@@ -1,522 +1,345 @@
-# Poster design brief — GNN reinforcement learning for Risk
+# Poster design brief — Risk graph-attention reinforcement learning
 
-This document is the writing and layout plan for an **A0 landscape** scientific
-poster. It is not the final poster artwork. It keeps the technical claims,
-draft text, figure placeholders, and evidence standards in one place so the
-later design pass can focus on visual clarity.
+This is the production brief for an **A0 landscape** scientific poster. It is
+not final artwork. It gives the poster one clear story, uses every prepared
+visual, and deliberately reserves space for the DQN, PPO, and Dueling DQN
+result plots.
 
-## Poster identity
+## The one idea a reader should remember
 
-**Course:** Practical Deep Learning for Science
+> **Instead of predicting from one enormous fixed action space, the system
+> injects each legal Risk move into the board graph and scores that
+> state–action graph with one shared graph-attention encoder.**
 
-**Author:** Gilad Markman
+## Poster header
 
-**Year:** 2026
+**Title**
 
-**Lecturer:** Prof. Eilam Gross
+> **Learning to Play Risk with Action-Injected Graph Neural Networks**
 
-**Teaching assistants:** Dmitrii Kobylianskii, Alon Levi, and Etienne Dreyer
+**Subtitle**
 
-**Working title:**
+> A shared graph-attention encoder scores legal moves across trade-in,
+> reinforce, attack, occupy, and fortify phases.
 
-> **Learning to Play Risk with Graph Neural Networks and Reinforcement Learning**
+Gilad Markman · Practical Deep Learning for Science · 2026
 
-**One-sentence message:**
-
-> We represent the Risk board as a graph and evaluate each currently legal
-> move by injecting that candidate move into a graph before a graph-attention
-> network scores it through a head specialized for that action phase.
-
-**Supporting line for the header/subtitle:**
-
-> A shared graph-attention encoder learns strategic board context; separate
-> heads score trade-in, reinforcement, attack, occupy, and fortify decisions.
-
-**Audience:** course staff and students who understand basic deep learning,
-but may not know Risk, graph neural networks, or reinforcement learning.
-
-**Recommended layout:** A0 landscape, three columns, read left to right. Use a
-large central pipeline figure as the visual anchor; do not make the poster a
-wall of text.
-
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Title · Gilad Markman · Practical Deep Learning for Science (2026)          │
-├───────────────────────┬───────────────────────────┬─────────────────────────┤
-│ 1. Problem            │ 2. Method (largest area)  │ 3. Experiments/results  │
-│ 2. Why graphs          │ 3. Action injection       │ 4. What we learned       │
-│ [game-board image]    │ [map + graph overlay]      │ [W&B charts]             │
-│                        │ [network pipeline]         │ [comparison table]       │
-├───────────────────────┴───────────────────────────┴─────────────────────────┤
-│ Take-home message · limitations · QR/repository link · acknowledgements     │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-Use one accent color for the proposed action/injection throughout the poster
-(for example orange), one for the state graph (blue/grey), and one for results
-(green). Keep all other board territory colours subdued so the proposed action
-is visually dominant.
+Keep the header visually simple. The figures should carry the technical story.
 
 ---
 
-## 1. Left column — problem and graph representation
+## A0 landscape layout
 
-### Heading
+Use a visual-first upper half, a full-width results band, and a compact footer.
+The results band must stay large enough for two or three final plots.
 
-## Risk is a graph decision problem with a changing legal action set
+~~~text
+┌──────────────────────────────── Header: title + one-sentence claim ────────────────────────────────┐
+├───────────────────────┬────────────────────────────────────┬───────────────────────────────────────┤
+│ 1. Risk as a graph    │ 2. Main idea: inject a legal action │ 3. Shared GNN + phase-specific heads  │
+│ board screenshot      │ action-injected graph               │ network architecture figure             │
+│ board-to-graph map    │                                    │                                       │
+├───────────────────────┴────────────────────────────────────┴───────────────────────────────────────┤
+│ Player-selection UI + short opponent roster     │ Technical inset: sparse attention matrix summary    │
+├──────────────────────────────────────── Results: full-width comparison at matched data budget ─────┤
+│ Largest: DQN / Dueling DQN / PPO win-rate curve │ held-out evaluation │ optional behaviour/diagnostic │
+├──────────────────────────────────── Footer: conclusion · limits · QR · citations ──────────────────┤
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+~~~
 
-### How the game works
+| Region | Share | Job |
+|---|---:|---|
+| Header | 9% | Establish question and novelty. |
+| Game + method visuals | 43% | Explain the representation before the results. |
+| UI + technical inset | 14% | Add context without breaking the main reading path. |
+| Results | 26% | Final algorithm comparison. |
+| Footer | 8% | Conclusion, limits, QR, citations. |
 
-**Draft text (about 85 words):**
+Use blue/grey for the base board and **orange only for injected candidate
+actions**. Use consistent learner colours on every result chart:
 
-Risk is a turn-based strategy game played on a world map of connected
-territories. Each territory belongs to one player and contains an army count.
-On a turn, a player places reinforcement armies, attacks adjacent enemy
-territories, moves armies into conquered territory, and may fortify between
-connected territories they own. In an attack, the attacker rolls up to three
-dice and the defender up to two; sorted dice are compared pairwise and each
-lost comparison removes one army. When the defender reaches zero armies, the
-attacker occupies that territory. Controlling every territory in a continent
-grants extra reinforcement armies on later turns. The objective is to eliminate
-every opponent and control the board.
+| Learner | Chart colour |
+|---|---|
+| DQN | blue |
+| Dueling DQN | purple |
+| PPO | teal |
 
-**Suggested visual:** a compact five-step strip directly under Figure A:
+Do not reuse orange for an algorithm curve.
 
-```text
-Reinforce → Attack neighbours with dice → Occupy conquered territory → Fortify
-```
+---
 
-Use one sentence below the strip: “Winning dice comparisons remove armies;
-reaching zero defenders conquers a territory. Continents earn future
-reinforcement armies.” This connects the rules directly to the features and
-reward-shaping panels without requiring the reader to know Risk.
+## 1. Risk is a graph of legal choices
 
-### Foundation: the game as an RL environment
+### Reader-facing copy
 
-**Draft text (about 80 words):**
+Risk is a connected world map whose state changes every turn: territory
+ownership, armies, continents, cards, reinforcement budget, and phase. The
+game rules enumerate the moves that are legal now. The learner therefore
+chooses among executable actions instead of scoring a fixed list dominated by
+illegal moves.
 
-Risk was implemented as a reproducible reinforcement-learning environment,
-not only as a game interface. At every decision, the environment exposes the
-current state and the exact set of legal actions for the active phase. An agent
-selects one legal action; the environment applies the rules, advances the game,
-returns the next state and reward, and signals a terminal win or loss. This
-environment–agent separation lets the same validated game rules train and
-evaluate a random baseline, heuristic agents, DQN, Dueling DQN, and PPO
-agents. The game also includes heuristic opponents with aggressive, defensive,
-continent-focused, and weak-player-elimination strategies, giving the learner
-varied opponents through that same interface.
+### Figures 1 and 2 — board to graph
 
-**Suggested visual:** a small four-step loop placed above Figure A:
+Place these together at the top of the left column. They should read as one
+transformation: *playable board → graph representation*.
 
-```text
-Environment: state + legal actions → Agent: choose action → Environment: rules
-and opponents → next state + reward + done
-```
+<img src="../Assets/RiskMap/image.png" alt="Risk game board" width="760">
 
-**Caption:**
+> **Figure 1.** The playable Risk board. A decision depends on local armies,
+> ownership, continents, and adjacent territories.
 
-> **Figure 0.** The RL loop. The environment owns Risk rules and legal-action
-> validation; heuristic and learning agents share the same decision interface.
+<img src="../Assets/RiskMap/map_graph_nodes_edges.png" alt="Risk board with territory nodes and border edges" width="760">
 
-This section should make clear that the project did not assume an existing
-Risk/Gym environment. Do not spend poster space on every game rule; the key
-claim is the clean, testable interface needed to compare learning agents.
+> **Figure 2.** The same board as a graph: 42 territory nodes and 83
+> undirected borders, stored as 166 directed edges for message passing.
 
-### Draft text (about 70 words)
+Use this compact callout beside the map instead of a large feature table:
 
-Risk combines a fixed geographical board with a changing multi-player state.
-Territories are connected by borders; ownership, armies, cards, turn phase,
-and reinforcement budget change after every move. The number and meaning of
-available actions also change by phase and state. A standard neural network
-with one fixed output for every possible move would be wasteful and would score
-many illegal actions. We instead enumerate only legal actions and score each
-one in its board context.
+~~~text
+X: node features       [42 × 15]
+E: edge features       [166 × 2]
+u: global features     [1 × 35]
+~~~
 
-### Figure A — game board
+The topology stays fixed; feature values change with the board state and the
+candidate action.
 
-**Reserve:** upper half of left column, approximately 25% of total poster
-area.
+---
 
-**Asset:** `Assets/RiskMap/map_grey_new.jpg`.
+## 2. A controlled environment supplies legal actions
 
-**What to add later:** a small legend explaining ownership colours and army
-counts. This figure should introduce the game, not attempt to explain every
-network feature.
+### Reader-facing copy
 
-**Caption:**
+The environment owns Risk rules and legal-action validation. At each decision,
+it exposes the state and valid actions for the current phase; the agent chooses
+one; the environment applies the move, opponents respond, and it returns the
+next state, reward, and terminal signal. Heuristic and learning agents all use
+this same interface.
 
-> **Figure 1.** The Risk board contains 42 territories connected by borders.
-> A decision depends on both a territory's local state and its neighbours.
+### Figure 3 — player-selection UI and opponent roster
 
-### Figure B — board becomes a graph
+Use this as a small contextual inset below the board/map pair. It establishes
+that the project contains a playable environment, not only a model.
 
-Build this on top of a copy of `map_grey_new.jpg`, preferably immediately
-beside or below Figure A:
+<img src="../Assets/RiskMap/start%20UI.png" alt="Risk player-selection screen" width="620">
 
-- place one visible node at the centre of each territory;
-- draw a thin edge for each border; arrows are unnecessary here because the
-  map would become cluttered;
-- colour one owned territory, one opponent territory, and one proposed-action
-  pair as examples;
-- add a small callout, not a full tensor dump.
+> **Figure 3.** The start screen selects human, heuristic, and learning agents
+> through the same game interface.
 
-**Caption:**
+Place the roster immediately beside or below the UI:
 
-> **Figure 2.** The board is encoded as a graph: territories are nodes and
-> borders are edges. The same topology is reused while the node, edge, and
-> global state features change each turn.
+| Agent | What it emphasizes |
+|---|---|
+| Random | Uniformly samples a legal move. |
+| Raider | Aggressive expansion and marginal-odds attacks. |
+| Sentinel | Border defence and safer attacks. |
+| Empire | Capturing and protecting continents. |
+| Killbot | Continent strategy plus weak-player elimination. |
 
-### Compact feature callout next to Figure B
+---
 
-Use a small three-row table or labelled boxes:
+## 3. The central idea: inject the candidate action into the graph
 
-| Graph part | Examples of information | Why it matters |
+### Reader-facing copy
+
+Risk has a variable, combinatorial action space. An attack chooses a source, a
+neighbouring target, and dice; reinforcement, occupy, and fortify also choose
+territories and army amounts. The rules create only legal candidates, then the
+network scores every candidate in its board context.
+
+For an attack, the selected directed border receives an orange edge feature
+such as <code>[attack = 1, dice = 2/3]</code>. For reinforce, occupy, and
+fortify, affected territory rows receive a proposed army-change feature. Skip
+actions use an unmodified graph copy. The network therefore sees **the board
+plus the specific candidate move**.
+
+### Figure 4 — action-injected graph (hero method visual)
+
+Make this the largest figure in the upper-middle column. Do not shrink it
+below roughly one quarter of the poster width; its node, edge, and global
+feature examples must remain readable.
+
+<img src="../Assets/RiskMap/partial_graph_attributes.png" alt="Partial Risk graph with node, edge, global attributes, and an injected attack" width="1250">
+
+> **Figure 4.** One legal attack changes the selected border before graph
+> attention. Node features describe territories, edge features describe
+> borders and attacks, and global features describe phase-level constraints.
+
+If labels are needed beside the image, use only these three:
+
+1. **Rules enumerate legal candidate actions.**
+2. **Injection marks one candidate action in the graph.**
+3. **The GNN returns one score for that state–action graph.**
+
+---
+
+## 4. One shared graph encoder, five action-phase heads
+
+### Reader-facing copy
+
+Every legal candidate enters the same graph-attention encoder. Four residual
+<code>TransformerConv</code> layers exchange information along Risk borders,
+so a territory can weigh different neighbours differently. Mean and max pooling
+summarize territory embeddings, global state is appended, and the current phase
+chooses one small MLP head. The representation is shared while the learning
+objective changes.
+
+### Figure 5 — network architecture
+
+Place this directly to the right of Figure 4. It is the second-largest method
+visual.
+
+<img src="../Assets/RiskMap/network_phase_heads_v2.png" alt="Shared Risk graph-attention encoder with five phase-specific heads" width="1250">
+
+> **Figure 5.** A legal action becomes one graph row. The shared encoder is
+> followed by the relevant trade-in, reinforce, attack, occupy, or fortify
+> head. DQN treats the scalar as <code>Q(s, a)</code>; a policy learner uses
+> legal action logits and a value estimate.
+
+Keep this comparison small, near the lower part of the network figure:
+
+| Learner | Legal-action output | Training signal |
 |---|---|---|
-| Territory node | continent, relative owner, armies, unfinished attack target, proposed army change | local strength and local action effect |
-| Border edge | adjacency; selected attack and dice count when applicable | which territories can interact |
-| Global state | phase, current player, cards, reinforcement budget, eliminated players, continent values | game-wide constraints and turn context |
-
-**Technical footnote, optional:** The current implementation uses 42 nodes,
-166 directed edges, 15 node features, 2 edge features, and 35 global features.
-This is useful as a small reproducibility detail, not as the main message.
+| DQN | <code>Q(s, a)</code> | replayed Double-DQN targets |
+| Dueling DQN | state value + relative advantage | replayed Double-DQN targets |
+| PPO | policy logit and state value | on-policy clipped updates |
 
 ---
 
-## 2. Centre column — method (make this the largest column)
+## 5. Technical inset: sparse graph attention
 
-### Heading
+This figure is deliberately secondary. Put it beneath Figures 4–5, spanning
+the middle/right of the poster. It answers “where does the injected edge enter
+the calculation?” without forcing every reader through a long derivation.
 
-## Action injection turns “state + move” into a graph the GNN can understand
+<img src="../Assets/encoder_matrix_summary.png" alt="Matrix summary of the sparse Risk graph-attention encoder" width="1550">
 
-### The action-space problem
+> **Figure 6.** Attention is computed only on 166 directed Risk borders. The
+> selected attack changes one projected edge row, which changes attention and
+> the neighbour message for that candidate graph.
 
-**Draft text (about 75 words):**
-
-The action space is combinatorial. An attack chooses a source territory, a
-neighbouring target, and a dice count; reinforcement and fortification choose
-territories and army amounts. Most combinations are illegal in a given state.
-Rather than predict over a huge fixed action vector and then mask invalid
-outputs, the game rules enumerate the legal candidates. The network scores
-only these candidates, so every score corresponds to an executable action.
-
-### Discretising quantitative actions without losing strategic choice
-
-**Draft text (about 85 words):**
-
-Some legal moves also require choosing an integer number of armies. Enumerating
-every possible reinforcement amount would make the action set grow with the
-reinforcement budget. We therefore offer three representative reinforcement
-amounts for each owned territory: **one army**, **half of the remaining
-budget**, or **the whole remaining budget**. Reinforcement is multi-step, so
-the agent can still construct a finer split through successive decisions. This
-keeps the candidate set proportional to the number of territories rather than
-to the potentially large army count, while preserving small, medium, and
-committed strategic choices.
-
-**Suggested visual:** add three small branches beneath a reinforced territory
-in Figure C: `+1`, `+½ budget`, and `+all budget`. Label the benefit:
-“bounded legal action set; multi-step placement retains flexibility.”
-
-**Accuracy note for the final poster:** fortification uses the same bounded
-`1 / half / maximum` candidate principle as reinforcement. For each reachable
-owned source–destination pair, the legal actions include those deduplicated
-transfer amounts plus skip. The environment still accepts any smaller valid
-fortification amount when explicitly submitted.
-
-### Figure C — action injection (the main figure)
-
-**Reserve:** centre of the poster, roughly 30% of total poster area.
-
-Create a three-panel figure using the graph-overlay map:
-
-```text
-Current state graph        Candidate action              Injected action graph
-[grey/blue territories]   attack A → B, 3 dice           [same graph + orange A→B]
-                                                            selected edge = 1
-                                                            dice feature = 3 / max dice
-```
-
-For a reinforcement, occupy, or fortify example, show an orange `+k`/`−k` on
-the affected nodes instead. Do not try to show all action types in the main
-figure; an attack example is the clearest. Add a small side note:
-
-> Other phase actions inject proposed army changes into the affected territory
-> nodes. Skip/stop actions remain an unmodified graph copy.
-
-**Caption:**
-
-> **Figure 3.** Action injection. For each legal candidate, we clone the base
-> state graph and mark the proposed action. Message passing can therefore
-> evaluate the *consequence-relevant context* of a specific move, not only the
-> board and the move separately.
-
-### Network pipeline
-
-Place directly beneath Figure C. Prefer this short visual rather than a
-layer-by-layer implementation diagram:
-
-```text
-Legal actions from rules
-          ↓
-One injected graph per legal action
-          ↓
-Shared graph-attention encoder
-          ↓
-Mean + max graph pooling  ⊕  global state features
-          ↓
-Phase-specific scoring head
-          ↓
-Q(s,a) for DQN   or   policy logit + V(s) for PPO
-```
-
-### Why graph attention?
-
-**Draft text (about 90 words):**
-
-Risk interactions are relational: the importance of a territory depends on
-which neighbouring territories are friendly, hostile, weak, or part of a
-continent. We use residual `TransformerConv` layers, a graph-attention
-operator. Attention lets the model learn different weights for different
-neighbours instead of treating every border identically. Edge features also
-allow the selected attack edge and its dice count to influence message
-passing. Four residual graph-attention layers produce territory embeddings;
-mean and max pooling summarize the board before a phase-specific head produces
-one scalar score.
-
-**Be precise:** call it *graph attention* or `TransformerConv`; do not call it
-a plain GCN. Do not claim attention makes the model interpretable unless you
-include a real attention analysis.
-
-### Small algorithm box
-
-Keep this short:
-
-| Learner | Network score | Learning signal |
-|---|---|---|
-| DQN | `Q(s, a)` | replayed transitions and Double-DQN targets |
-| Dueling DQN | `V(s) + A(s,a) − mean(A)` | replayed transitions and Double-DQN targets |
-| PPO | policy logit for each legal action + `V(s)` | on-policy rollouts and clipped policy updates |
-
-**Draft text:**
-
-The representation is held constant across learners. This isolates the effect
-of the reinforcement-learning objective and value decomposition: DQN learns
-action values from replay; Dueling DQN separates state value from relative
-action advantage; PPO optimizes a legal-action policy from fresh rollouts.
+Do not duplicate its matrix labels in body text; the image is the explanation.
 
 ---
 
-## 3. Right column — experiments and evidence
+## 6. Results: compare learners at a matched data budget
 
-### Heading
+Make this a full-width band. Do not replace it with prose before the final
+charts exist: the reader should answer “does this representation learn to
+play?” at a glance.
 
-## Early experiments: injected-action DQN is currently the stronger baseline
+### Experimental protocol strip
 
-Use cautious wording. The current evidence supports DQN_105 as the strongest
-completed baseline; PPO_200 showed meaningful learning signals but has not
-demonstrated DQN parity in win rate. PPO_201 tested a lower learning rate and
-was weaker. PPO_202 is a fresh midpoint learning-rate experiment and should
-be labelled **running** until enough data is collected. A new Dueling DQN run
-is planned: earlier behaviour was promising, but it must be reported as
-preliminary until the new controlled run is complete.
+Place this directly above the charts:
 
-### Experiment protocol box
+~~~text
+Same legal-action generator  •  Same injected graph representation
+Same heuristic-opponent roster  •  Randomized learner seat and player count
+Compare against cumulative learner turns  •  Report held-out evaluation separately
+~~~
 
-**Draft text (about 65 words):**
+The main x-axis must be **cumulative learner turns** (or another explicitly
+reported measure of processed environment data). Do not headline raw optimizer
+steps: PPO and DQN-family methods consume different batch sizes and data
+schedules.
 
-Agents train through self-play against a changing roster of heuristic
-opponents, with randomized learner seat and player count. All learners use the
-same board encoding and legal-action generation. We log game outcomes, dense
-behavioural measures, optimizer diagnostics, and deterministic evaluation.
-Because policy optimization methods consume data differently, comparisons must
-state their x-axis: learner turns or processed samples for sample efficiency;
-optimizer steps only for update-count efficiency.
+### Result Figure A — main comparison (required, largest)
 
-### Training opponents — why not only random play?
+Reserve about half of the results band:
 
-**Draft text (about 80 words):**
+~~~text
+Rolling training win rate vs cumulative learner turns
+Curves: DQN · Dueling DQN · PPO
+~~~
 
-The learner does not train only against random agents. Each non-learner seat is
-filled from a roster of fixed, rule-based opponents with different strategic
-styles: aggressive expansion (**Raider**), defensive border protection
-(**Sentinel**), continent control (**Empire**), and a stronger Killbot-inspired
-opponent that combines continent strategy with weak-player elimination. These
-opponents create varied tactical situations and prevent the learner from
-overfitting to one predictable policy. Learner seat and number of players are
-randomized, while the graph representation keeps a consistent “me versus
-others” perspective.
+> **Figure 7.** Rolling training win rate under the shared graph and opponent
+> protocol. The horizontal axis represents interaction data, not optimizer
+> updates.
 
-**Suggested visual:** four small labelled icons or simple strategy arrows,
-not four separate board screenshots. Place this beside the experiment protocol
-box.
+### Result Figure B — held-out evaluation (required)
 
-### Reward shaping — making long-horizon learning practical
+Reserve about one quarter of the results band:
 
-**Draft text (about 105 words):**
+~~~text
+Balanced held-out evaluation win rate at matched training budgets
+DQN · Dueling DQN · PPO, with uncertainty bars and number of games stated
+~~~
 
-Winning or losing Risk is a delayed, sparse signal. We therefore use terminal
-rewards of **+300** for a win and **−300** for a loss, together with bounded
-dense reward shaping. Shaping rewards strategically useful intermediate
-behaviour: favourable army ratios and exchanges in attacks, conquering
-territories, completing continents, eliminating opponents, reinforcing exposed
-frontiers, moving armies forward after conquest, and fortifying toward borders.
-At turn boundaries it also measures changes in territory share, army share, and
-continent control after opponents respond. The per-action shaping signal is
-clipped and scaled by 0.3, so it guides exploration without replacing the game
-outcome. Win rate remains the primary success measure.
+> **Figure 8.** Held-out evaluation separates noisy learning-time outcomes
+> from the final policy comparison. State the number of evaluation games and
+> show uncertainty intervals.
 
-**Suggested visual:** a small horizontal reward timeline:
+### Result Figure C — optional supporting evidence
 
-```text
-reinforce frontier → favourable attack → conquest → occupy/fortify → win/loss
-      dense reward        dense reward       dense reward             ±300
-```
+Use the final quarter only if it tells a different story:
 
-**Important interpretation note:** do not place `reward_per_agent_turn` alone
-as a headline result. Dense reward can improve before win rate, and it can also
-reflect active local play that does not convert into a game win.
+~~~text
+Territories conquered or agent-turn survival vs learner turns
+~~~
 
-### Figure D — main W&B result
+This can show strategic improvement before it becomes wins. If it is not
+useful, enlarge Figures 7–8 or add a compact evaluation table. Do not headline
+shaped reward alone; it is an exploration signal, not the final objective.
 
-**Reserve:** largest chart in right column.
+### Results wording rule
 
-**Use:** rolling training win rate for DQN_105 and PPO_200, plotted against
-**cumulative learner turns** or **cumulative samples processed**.
+Do not make a winner claim until held-out evaluation is complete.
 
-**Do not use raw optimizer steps as the main fairness chart.** PPO uses a
-256-sample minibatch while DQN uses a 64-sample batch, so a raw update count
-does not mean equal data exposure. A small supplementary chart may show raw
-optimizer steps if it is explicitly labelled with both batch sizes.
-
-**Caption template:**
-
-> **Figure 4.** Rolling training win rate versus [chosen fair x-axis]. DQN_105
-> is the current performance baseline. PPO_200 learns more slowly but shows
-> improving mid-game behaviour; results are preliminary because rolling
-> training wins are noisy and evaluation currently uses a small game set.
-
-When the new Dueling DQN run has a matched comparison window, add it as a third
-curve rather than making a separate incomparable chart. Until then, include a
-small labelled box: “Dueling DQN: next controlled experiment; preliminary
-behaviour promising.”
-
-### Figure E — behavioural learning signals
-
-Use two aligned W&B plots, each with DQN_103/105 and PPO_200/201 only if the
-reward regimes are clearly labelled. Prefer PPO_200 vs PPO_201 for a controlled
-hyperparameter comparison.
-
-- `territories_conquered`
-- `agent_turns_survived`
-
-**Caption template:**
-
-> **Figure 5.** Dense behavioural measures reveal partial progress that win
-> rate alone misses: an agent can conquer more territories or survive longer
-> without yet converting those advantages into full-game wins.
-
-### Figure F — PPO diagnostic inset (optional)
-
-Use a compact panel containing:
-
-- approximate KL divergence;
-- PPO epochs completed per rollout or KL early-stop fraction;
-- normalized entropy.
-
-**Caption:**
-
-> **Figure 6.** PPO diagnostics distinguish learning progress from an unstable
-> policy update. PPO_200 showed frequent KL early stopping at `1e-4`; PPO_201
-> reduced drift at `5e-5` but learned more conservatively. PPO_202 tests the
-> midpoint `7.5e-5` setting.
-
-### Results summary table
-
-Avoid unverified final numbers. Fill this table only after choosing a fixed
-comparison window and a larger evaluation suite.
-
-| Question | Current evidence | Poster wording |
-|---|---|---|
-| Does graph/action injection train? | Yes; DQN_105 learns a strong policy. | “The representation supports successful value-based RL.” |
-| Does the dueling value/advantage split help? | Earlier signs were promising; a new controlled run is planned. | “Dueling DQN is the next experiment.” |
-| Is PPO competitive? | PPO_200 shows useful behavioural improvement but lower win rate. | “Promising but not yet competitive with the DQN baseline.” |
-| Is `5e-5` better than `1e-4` for PPO? | It reduces KL drift but was weaker in observed gameplay metrics. | “Lower KL alone did not improve the observed learning outcome.” |
+| Evidence | Safe poster wording |
+|---|---|
+| Stronger training curve only | “Shows faster learning under this training protocol.” |
+| Higher held-out win rate with uncertainty | “Achieved the strongest measured evaluation performance.” |
+| Better behaviour but lower win rate | “Shows partial strategic improvement, but has not yet converted it into wins.” |
 
 ---
 
-## Footer — conclusion, limitations, and next steps
+## Footer
 
-### Take-home message (large type)
+### Take-home message — large type
 
-> **Injecting each legal action into the board graph avoids a fixed enormous
-> action output and lets graph attention score moves in their local strategic
-> context.**
+> **Action injection converts a changing legal-action set into a graph scoring
+> problem: the GNN evaluates the board and the proposed move together.**
 
-### Limitations and next steps (short bullets)
+### Limitations
 
-- Training games and evaluation games are stochastic; rolling win rate is
-  noisy.
-- The present evaluation set is too small for a final claim of algorithm
-  superiority; use at least 100 balanced held-out games for promotion claims.
-- Action injection evaluates one GNN graph per legal candidate, which is more
-  expressive but computationally costly.
-- Continue PPO_202 as a controlled learning-rate test; then compare methods at
-  matched learner turns and processed samples.
-- Run Dueling DQN again with the same reward and opponent protocol, then add it
-  to the matched-budget comparison rather than relying on the earlier run.
-- Investigate action-set size, per-phase performance, and policy failure modes
-  in games where the agent gains territory but does not win.
+- Risk outcomes are stochastic, so show held-out evaluation and uncertainty,
+  not only a smoothed training curve.
+- One injected graph per legal candidate is expressive but computationally more
+  costly than a single fixed action-output layer.
+- Compare DQN, Dueling DQN, and PPO only at matched training budgets and under
+  the same opponent protocol.
 
-### Footer placeholders
+### Footer items
 
-- Gilad Markman;
-- Practical Deep Learning for Science (2026);
-- Lecturer: Prof. Eilam Gross;
-- Teaching assistants: Dmitrii Kobylianskii, Alon Levi, and Etienne Dreyer;
-- GitHub/repository QR code;
-- course team acknowledgement;
-- one short reproducibility line: “Code: Python, PyTorch, PyTorch Geometric,
-  Weights & Biases.”
+- Repository QR code and experiment-tracking QR/link.
+- Course and author line.
+- Compact citations for DQN/Double DQN, Dueling DQN, PPO, GAT, and
+  PyTorch-Geometric <code>TransformerConv</code>.
 
 ---
 
-## Visual production checklist
+## Production rules
 
-1. Build Figure B from `Assets/RiskMap/map_grey_new.jpg`; retain the map's
-   geography but make the overlaid graph readable at A0 viewing distance.
-2. Reuse the same map crop and colours in Figure C so the reader immediately
-   recognizes that action injection modifies the same graph.
-3. Export W&B charts as vector PDF/SVG when possible; otherwise use a
-   high-resolution PNG. Remove W&B interface chrome before placing them.
-4. Use one consistent legend for DQN/PPO colours across every result figure.
-5. Put units and the comparison axis directly on each chart.
-6. Keep body text around 28–32 pt, section headings around 44–56 pt, and the
-   title around 90–110 pt; verify readability from roughly 1–1.5 metres.
-7. Before finalizing, check every numerical claim against the selected W&B
-   comparison window and distinguish training metrics from held-out evaluation.
-8. Check that the reward panel says both *why shaping is needed* and *why it is
-   not the final objective*; the poster should not imply that a high shaped
-   reward proves strong play.
-9. Keep the environment–agent loop visible: it establishes that legal-action
-   generation and rule validation come from the environment, not from an
-   unconstrained network output.
-10. Show the reinforcement `1 / half / all` choice as an action-space
-    discretisation. Fortify uses the same `1 / middle / maximum` scheme as of
-    the `Docs/EnvironmentActionPlan.md` bucketed-fortify change
-    (`Environment._legal_fortify`) — describe both consistently rather than
-    singling reinforcement out, and re-check this note if either
-    generator's discretisation changes again.
-11. Keep the “How the game works” panel concise: objective, territories,
-    turn phases, cards, and continent bonuses are sufficient context.
+1. Use the original high-resolution assets listed below, **not** the
+   <code>*_poster.png</code> preview copies.
+2. Keep Figure 4 as the hero method figure. Figures 5–6 follow it; they should
+   not compete with it.
+3. Export final W&B plots as SVG/PDF when possible, otherwise a
+   high-resolution PNG without W&B interface chrome.
+4. Use the same DQN, Dueling DQN, and PPO colours in every plot and legend.
+5. Put axes, evaluation-game count, and uncertainty directly on each chart.
+6. Use body text around 28–32 pt, captions at least 22 pt, headings 44–56 pt,
+   and title 90–110 pt. Check readability at 1–1.5 m.
+7. Before printing, replace every result placeholder with a reproducible,
+   selected comparison window. Do not retain unsupported preliminary claims.
 
-## Sources to cite on the poster
+### Asset register
 
-Keep citations compact, in a small footer block:
-
-1. Schulman et al., *Proximal Policy Optimization Algorithms* (2017).
-2. Veličković et al., *Graph Attention Networks* (2018).
-3. Shi et al., *Masked Label Prediction: Unified Message Passing Model for
-   Semi-Supervised Classification* / TransformerConv reference as appropriate
-   to the PyTorch Geometric implementation used. Verify the exact preferred
-   citation before print.
-4. The project repository and experiment tracking run links/QR code.
+| Asset | Poster role |
+|---|---|
+| <code>Assets/RiskMap/image.png</code> | Game board introduction |
+| <code>Assets/RiskMap/map_graph_nodes_edges.png</code> | Board-to-graph transformation |
+| <code>Assets/RiskMap/start UI.png</code> | Player-selection and agent-interface context |
+| <code>Assets/RiskMap/partial_graph_attributes.png</code> | Main action-injection explanation |
+| <code>Assets/RiskMap/network_phase_heads_v2.png</code> | Shared encoder and five heads |
+| <code>Assets/encoder_matrix_summary.png</code> | Secondary sparse-attention technical inset |
