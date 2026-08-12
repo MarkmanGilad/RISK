@@ -41,8 +41,8 @@ already has both pieces this plan needs:
 - **`AgentMatchEvaluator`** — **already supports learner-vs-learner.** It
   takes 3-6 participants, each either `"heuristic"` (built-in bot) or
   `"checkpoint"` (any saved policy: any run, any `agent_kind` string
-  `build_learner_agent` understands — `DQN`, `Dueling_DQN`, `PPO`, `PQN`,
-  `PQN_e`, `PQN_e0`, `ADQN`, ...). Every seed plays one cyclic seat rotation
+  `build_learner_agent` understands — `DQN`, `Dueling_DQN`, and `PPO`). Every
+  seed plays one cyclic seat rotation
   per participant. Nothing here needs to be added — a DQN checkpoint, a
   Dueling-DQN checkpoint, and a PPO checkpoint can already sit in the same
   match today via `main()`'s commented-out example block.
@@ -62,8 +62,6 @@ Runs available today, by `agent_kind` (from directory naming and
 - `DQN`: `DQN_060`, `DQN_102`, `DQN_103`, `DQN_104`, `DQN_105`
 - `Dueling_DQN`: `Dueling_DQN_040`, `Dueling_DQN_100`, `Dueling_DQN_101`
 - `PPO`: `PPO_041`..`PPO_045`
-- `PQN` / `PQN_e`: `PQN_046`, `PQN_e_047`
-- `ADQN`: `ADQN_050`..`ADQN_052`
 - Legacy `run_013`, `run_014`, `run_020`..`run_023`, `run_030`: predate the
   `<agent_kind>_<run_id>` naming convention. **Unknown agent_kind — do not
   assume compatibility.** Before including any of these, confirm which

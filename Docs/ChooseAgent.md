@@ -1,4 +1,4 @@
-# Agent evaluation plan
+# Agent evaluation
 
 Status: implemented in risk/learning/choose_agent.py. It adds new classes
 only; Trainer, Evaluator, agent classes, checkpoint formats, and the training

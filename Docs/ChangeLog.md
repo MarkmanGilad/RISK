@@ -16,6 +16,100 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-12
 
+- **Split the poster headline callout into two lines.** `Docs/Poster.md`'s
+  "That encoder is trained..." sentence now starts on its own blockquote
+  paragraph instead of running on from the injection sentence. Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Added the RL training angle to the poster's headline callout.**
+  `Docs/Poster.md`'s main claim covered only the graph/injection
+  representation; it now adds a second sentence stating the encoder is
+  trained through reinforcement learning, compared across DQN, Dueling DQN,
+  and PPO — the user flagged this as a very important part missing from the
+  headline. Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Reverted the poster's headline callout, tuned rather than rewritten.**
+  The full plain-language rewrite (previous entry) dropped "injects," which
+  the user wanted kept. `Docs/Poster.md` now restores the original
+  "injects each legal Risk move into the board graph..." wording, with only
+  its opening clause tuned ("predicting from one enormous fixed action
+  space" → "scoring from one enormous fixed list of moves") rather than
+  reworded end to end. Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Simplified the poster's headline callout for a first-time reader.**
+  `Docs/Poster.md`'s main claim previously used jargon ("fixed action space,"
+  "state–action graph," "graph-attention encoder") a reader hasn't been
+  introduced to yet; it now says the same thing in plain terms — the network
+  looks at the map with one legal move drawn on it and scores just that
+  option, repeated per legal move with the same shared network. Files:
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Made the poster's opening sentence more general.** `Docs/Poster.md`'s
+  subtitle now reads "A graph-attention reinforcement-learning approach to
+  Risk, compared across DQN, Dueling DQN, and PPO" instead of leading with
+  phase-level implementation detail (trade-in/reinforce/attack/occupy/
+  fortify), combining the user's two suggested directions — a general
+  framing plus naming the three compared learners. Files: `Docs/Poster.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added practical player-selection and training instructions to the README.**
+  It now gives the setup-screen steps for choosing human, heuristic, and
+  learned seats, plus the exact trainer settings to edit before launching a
+  DQN, Dueling DQN, or PPO run. Files: `README.md`, `Docs/ChangeLog.md`.
+
+- **Rewrote the README as a current project guide.** Removed stale future-RL
+  and historical-roadmap language; documented the current game architecture,
+  supported learner set, trainer/checkpoint workflow, verified test command,
+  and active reference documents. Files: `README.md`, `Docs/ChangeLog.md`.
+
+- **Rewrote `Docs/Poster.md` as poster content instead of a production
+  brief.** Stripped all instructional/meta commentary (placement directions,
+  "reader-facing copy" labels, production rules, asset register, results
+  wording-rule table) and left only the words and images that would actually
+  appear on the poster, plus the layout diagram/region-share table (kept per
+  explicit exception). Added a new "problem" panel (huge, mostly-illegal
+  action space; a flat vector losing the board's relational structure) ahead
+  of the graph/injection "idea" panel, since the prior version never stated
+  the problem before its solution. All 6 image assets are still referenced
+  (none dropped); Figures 7–9 remain reserved, caption-only placeholders for
+  the not-yet-available training-result charts. Files: `Docs/Poster.md`,
+  `Docs/ChangeLog.md`.
+
+- **Replaced completed planning documents with current-code references.**
+  `Docs/Environment.md` now documents the implemented card-trade and fortify
+  behavior; `Docs/Reward.md` now documents only the live reward pipeline.
+  Moved the completed environment checklist and unimplemented model-selection
+  proposal to `Temp/retired_documents/plans/`. Files: `Docs/Environment.md`,
+  `Docs/Reward.md`, `Temp/retired_documents/plans/`, `Docs/ChangeLog.md`.
+
+- **Moved the board-screenshot Figure 1 into the poster's game-background
+  primer.** `Docs/Poster.md` now places Figure 1 (the colored playable-board
+  screenshot) in the header, next to the new Risk rules primer, instead of
+  alongside Figure 2 in section 1. Updated section 1's heading/text (now just
+  Figure 2, the board-to-graph transformation), the layout ASCII diagram,
+  the header/game-visuals region shares (9%→11%, 43%→41%), and the asset
+  register to match. Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Retired ADQN/PQN and archived the related experiment records.** The live
+  learner factory now accepts only DQN, Dueling DQN, and PPO; removed ADQN/PQN
+  constants, logger wiring, and active test coverage. Their code, tests, and
+  documents now live under `Temp/retired_algorithms/`; stale conflicted docs
+  moved to `Temp/retired_documents/conflicts/`. Rewrote the active learning,
+  architecture, trainer, evaluation, test, and README references to match the
+  supported implementation. Files: `risk/learning/trainer.py`,
+  `risk/learning/train_constants.py`, `risk/learning/training_logger.py`,
+  `Temp/tests/test_trainer.py`, `Temp/tests/test_training_logger.py`,
+  `Docs/DuelingDQN.md`, `Docs/Eval.md`, `Docs/NetworkArchitectures.md`,
+  `Docs/Testing.md`, `Docs/Trainer.md`, `README.md`,
+  `Temp/retired_algorithms/`.
+
+- **Added a Risk rules primer to the poster brief.** `Docs/Poster.md` now
+  opens with a short "Game background" section (goal, dice-combat mechanics,
+  and the five turn phases in one sentence) for readers unfamiliar with Risk,
+  placed before "The one idea a reader should remember" with a note that it
+  belongs near the header/Figure 1 as a caption, not a full poster section.
+  Files: `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
 - **Rebuilt the poster into a visual-first evidence story.** Docs/Poster.md
   now uses the original high-resolution board, graph, UI, action-injection,
   network, and encoder assets in a coherent A0 layout, with a full-width

@@ -1,4 +1,4 @@
-# Interactive learned-agent play plan
+# Interactive learned-agent play
 
 ## Goal
 
@@ -15,8 +15,8 @@ The initial learned-policy choices are intentionally limited to:
 | Dueling DQN | `Dueling_DQN` |
 | PPO | `PPO` |
 
-Do not expose PQN, ADQN, VQN, or later agents until their inclusion is an
-explicit extension of this plan.
+The supported learned-seat kinds are deliberately limited to DQN, Dueling DQN,
+and PPO.
 
 ## Scope boundary
 

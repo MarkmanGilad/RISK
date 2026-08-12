@@ -49,21 +49,6 @@ PPO_ENTROPY_COEF: Final[float] = 0.01
 PPO_LR: Final[float] = 7.5e-5
 # endregion
 
-# region PQN replay-based policy improvement
-
-PQN_POLICY_LOSS_COEF: Final[float] = 0.1  # Initial policy-loss weight; Docs/PQN.md §24.C
-# endregion
-
-# region ADQN centered-advantage improvement
-
-ADQN_ADVANTAGE_LOSS_COEF: Final[float] = 0.25
-ADQN_MAX_ADVANTAGE_LOSS_FRACTION: Final[float] = 0.25
-ADQN_LOSS_BALANCE_EPSILON: Final[float] = 1e-8
-ADQN_ADVANTAGE_WEIGHT_SCALE: Final[float] = 5.0
-ADQN_ADVANTAGE_WEIGHT_SATURATION: Final[float] = 0.95
-ADQN_GRAD_DIAGNOSTIC_EVERY: Final[int] = 100
-# endregion
-
 # region Exploration
 
 EPSILON_START: Final[float] = 1.0
@@ -173,13 +158,6 @@ __all__ = [
     "PPO_VALUE_HUBER_BETA",
     "PPO_ENTROPY_COEF",
     "PPO_LR",
-    "PQN_POLICY_LOSS_COEF",
-    "ADQN_ADVANTAGE_LOSS_COEF",
-    "ADQN_MAX_ADVANTAGE_LOSS_FRACTION",
-    "ADQN_LOSS_BALANCE_EPSILON",
-    "ADQN_ADVANTAGE_WEIGHT_SCALE",
-    "ADQN_ADVANTAGE_WEIGHT_SATURATION",
-    "ADQN_GRAD_DIAGNOSTIC_EVERY",
     "EPSILON_START",
     "EPSILON_END",
     "EPSILON_DECAY_EPISODES",

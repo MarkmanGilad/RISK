@@ -56,12 +56,10 @@ from risk.app.setup import SetupStage
 from risk.agents.heuristic_agent import EmpireAgent, KillbotAgent, RaiderAgent, SentinelAgent
 from risk.agents.random_agent import RandomAgent
 from risk.game.actions import FortifyAction
-from risk.learning.adqn_agent import ADQN_Agent
 from risk.learning.dueling_dqn_agent import Dueling_DQN_Agent
 from risk.learning.evaluator import Evaluator
 from risk.learning.gnn_dqn_agent import GNN_DQN_Agent
 from risk.learning.ppo_agent import PPO_Agent
-from risk.learning.pqn_agent import PQN_Agent
 from risk.learning.train_constants import (
     BATCH_SIZE,
     CHECKPOINT_DIR,
@@ -404,25 +402,6 @@ def build_learner_agent(agent_kind: str, ctx):
         return Dueling_DQN_Agent(player_id=0, env=ctx.env, train_mode=True)
     if agent_kind == "PPO":
         return PPO_Agent(player_id=0, env=ctx.env, train_mode=True)
-    if agent_kind == "PQN":
-        return PQN_Agent(player_id=0, env=ctx.env, train_mode=True)
-    if agent_kind == "PQN_e":
-        return PQN_Agent(
-            player_id=0,
-            env=ctx.env,
-            train_mode=True,
-            action_selection="epsilon_greedy_q",
-        )
-    if agent_kind == "PQN_e0":
-        return PQN_Agent(
-            player_id=0,
-            env=ctx.env,
-            train_mode=True,
-            action_selection="epsilon_greedy_q",
-            policy_loss_coef=0.0,
-        )
-    if agent_kind == "ADQN":
-        return ADQN_Agent(player_id=0, env=ctx.env, train_mode=True)
     raise ValueError(f"Unknown learner agent kind {agent_kind!r}")
 
 def main() -> None:

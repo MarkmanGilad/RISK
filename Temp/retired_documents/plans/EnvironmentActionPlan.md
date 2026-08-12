@@ -1,10 +1,10 @@
-# Environment action-space plan
+# Environment action-space
 
 This document records **future shared environment/action-space experiments**.
 It is intentionally separate from algorithm-specific PPO/DQN plans. Any
 change here alters the legal candidates seen by every learning agent.
 
-## Planned: defer ordinary five-card trade-ins until the next turn
+## Ordinary five-card trade-ins defer until the next turn
 
 **Status:** implemented in `risk/game/environment.py` (2026-08-11). This
 section is kept as the design record; see `Docs/ChangeLog.md` for the exact
@@ -77,7 +77,7 @@ conquest-card draw.
    documentation that currently describes a normal first-conquest draw as an
    immediate mid-attack forced trade-in.
 
-## Planned: bucketed fortify amounts
+## Bucketed fortify amounts
 
 **Status:** implemented 2026-08-11; fresh training run required.
 

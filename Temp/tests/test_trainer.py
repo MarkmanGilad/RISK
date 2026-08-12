@@ -86,42 +86,27 @@ def _trainer(agent: BaseAgent, tmp_path: Path, run_id: int = 1) -> Trainer:
     return t
 
 
-def test_build_learner_agent_selects_the_pqn_variants(monkeypatch) -> None:
-    built: list[dict] = []
+def test_build_learner_agent_supports_only_active_learners(monkeypatch) -> None:
+    built: list[str] = []
 
-    class _PQN:
+    class _Agent:
         def __init__(self, **kwargs) -> None:
-            built.append(kwargs)
+            built.append(kwargs.pop("label"))
 
-    monkeypatch.setattr(trainer_module, "PQN_Agent", _PQN)
+    def _builder(label: str):
+        return lambda **kwargs: _Agent(label=label, **kwargs)
+
+    monkeypatch.setattr(trainer_module, "GNN_DQN_Agent", _builder("DQN"))
+    monkeypatch.setattr(trainer_module, "Dueling_DQN_Agent", _builder("Dueling_DQN"))
+    monkeypatch.setattr(trainer_module, "PPO_Agent", _builder("PPO"))
     ctx = SimpleNamespace(env=object())
 
-    trainer_module.build_learner_agent("PQN", ctx)
-    trainer_module.build_learner_agent("PQN_e", ctx)
-    trainer_module.build_learner_agent("PQN_e0", ctx)
+    for label in ("DQN", "Dueling_DQN", "PPO"):
+        trainer_module.build_learner_agent(label, ctx)
 
-    assert built[0]["train_mode"] is True
-    assert "action_selection" not in built[0]
-    assert built[1]["action_selection"] == "epsilon_greedy_q"
-    assert "policy_loss_coef" not in built[1]
-    assert built[2]["action_selection"] == "epsilon_greedy_q"
-    assert built[2]["policy_loss_coef"] == 0.0
-
-
-def test_build_learner_agent_selects_adqn(monkeypatch) -> None:
-    built: list[dict] = []
-
-    class _ADQN:
-        def __init__(self, **kwargs) -> None:
-            built.append(kwargs)
-
-    monkeypatch.setattr(trainer_module, "ADQN_Agent", _ADQN)
-    ctx = SimpleNamespace(env=object())
-
-    agent = trainer_module.build_learner_agent("ADQN", ctx)
-
-    assert isinstance(agent, _ADQN)
-    assert built == [{"player_id": 0, "env": ctx.env, "train_mode": True}]
+    assert built == ["DQN", "Dueling_DQN", "PPO"]
+    with pytest.raises(ValueError, match="Unknown learner"):
+        trainer_module.build_learner_agent("retired_learner", ctx)
 
 
 def test_trainer_marks_only_the_final_learn_call_as_reached_max_steps(tmp_path: Path, monkeypatch) -> None:
