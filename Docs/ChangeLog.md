@@ -16,6 +16,19 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-12
 
+- **Simplified the README table of contents.** It now links only the main
+  sections, without nested subsection entries. Files: `README.md`,
+  `Docs/ChangeLog.md`.
+
+- **Added a README table of contents.** The front page now links its game,
+  GATN/RL, training, and documentation sections from the introduction. Files:
+  `README.md`, `Docs/ChangeLog.md`.
+
+- **Linked contributor instructions to the documentation index.** `AGENTS.md`
+  and `CLAUDE.md` now direct future sessions to `Docs/Content.md` before
+  locating subsystem documentation. Files: `AGENTS.md`, `CLAUDE.md`,
+  `Docs/ChangeLog.md`.
+
 - **Added the full documentation index to the README.** The repository front
   page now links every active reference document by topic, matching
   `Docs/Content.md`. Files: `README.md`, `Docs/ChangeLog.md`.

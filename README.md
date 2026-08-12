@@ -17,6 +17,16 @@ DQN, Dueling DQN, and PPO.
 The repository also includes a pygame interface, a pygame-free rules engine,
 and human/heuristic/learned seats that all use the same legal-action interface.
 
+## Contents
+
+1. [Quick start](#quick-start)
+2. [Play](#play)
+3. [Game rules](#game-rules)
+4. [Architecture](#architecture)
+5. [Risk as a graph-attention RL problem](#risk-as-a-graph-attention-rl-problem)
+6. [Learning](#learning)
+7. [Tests and documentation](#tests-and-documentation)
+
 ## Quick start
 
 ```powershell
