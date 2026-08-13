@@ -17,7 +17,7 @@ that require pygame use `SDL_VIDEODRIVER=dummy`.
 | `test_actions.py`, `test_environment.py`, `test_reward.py` | game rules, legal actions, and reward accounting |
 | `test_agents.py`, `test_human_input.py`, `test_game_loop.py`, `test_ui.py` | agents, interactive controls, application loop, and rendering |
 | `test_graph_representation.py` | graph adaptation and action injection |
-| `test_dueling_dqn.py`, `test_ppo.py` | the supported Dueling DQN and PPO learners |
+| `test_dueling_dqn.py`, `test_ppo.py` | the supported Dueling DQN and PPO learners, including PPO's post-epoch KL gate |
 | `test_trainer.py`, `test_training_logger.py`, `test_evaluator.py` | learner factory, self-play orchestration, logging, checkpoints, and evaluation |
 | `test_choose_agent.py`, `test_learned_agent_play.py` | saved-policy evaluation and interactive policy loading |
 | `test_self_play.py` | headless multi-agent game completion |

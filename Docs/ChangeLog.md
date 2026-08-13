@@ -16,6 +16,20 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-13
 
+- **Raised the default training-episode count from 10,000 to 100,000.**
+  `TRAIN_EPISODES` in `risk/learning/train_constants.py` now defaults
+  `python -m risk.learning.trainer` to a 100,000-episode run; no other
+  constant or code path references the old literal, and no test hardcodes
+  the value. Files: `risk/learning/train_constants.py`, `Docs/ChangeLog.md`.
+
+- **Implemented PPO's global post-epoch KL gate for fresh `PPO_312`.** PPO now
+  completes an epoch before measuring sample-weighted k3 KL across its cached
+  rollout in safe minibatches, blocking only a later epoch when that global
+  value exceeds the target. Added post-epoch KL and stop-epoch metrics, focused
+  coverage, and the fresh launcher. Files: `risk/learning/ppo_agent.py`,
+  `risk/learning/trainer.py`, `Temp/tests/test_ppo.py`, `Docs/PPO.md`,
+  `Docs/Trainer.md`, `Docs/Testing.md`, `Docs/ChangeLog.md`.
+
 - **Logged a deferred correction for trade-in action representation; no learner
   code changed.** Current trade-in scoring repeats the base graph and embeds
   hand-slot positions rather than actual cards, so it cannot observe selected

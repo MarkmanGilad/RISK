@@ -57,6 +57,8 @@ class PPO_Agent(BaseAgent):
             "ppo_epochs_completed",
             "ppo_early_stopped",
             "ppo_early_stop_kl",
+            "ppo_post_epoch_kl",
+            "ppo_kl_stop_epoch",
             "ppo_optimizer_steps_per_update",
             "ppo_samples_processed_per_update",
         }
@@ -356,15 +358,13 @@ class PPO_Agent(BaseAgent):
 
     def _run_minibatch(self, cached_entries: Sequence[tuple[list[Data], torch.Tensor, torch.Tensor, torch.Tensor]],
             transitions: Sequence[RolloutTransition], indices: Sequence[int], old_log_probs: torch.Tensor,
-            advantages: torch.Tensor, returns: torch.Tensor, *, has_previous_step: bool, ) -> tuple[dict[str, float] | None, float]:
-        """Run one PPO optimizer step, or report its pre-step KL early stop."""
+            advantages: torch.Tensor, returns: torch.Tensor, ) -> dict[str, float]:
+        """Run one PPO optimizer step without a noisy minibatch KL gate."""
         idx = list(indices)
         log_probs, values, entropy, max_entropy = self._evaluate_indices(cached_entries, transitions, idx)
         log_ratio = log_probs - old_log_probs[idx]
         ratio = log_ratio.exp()
         approximate_kl = float(self._k3_approx_kl(ratio, log_ratio).detach())
-        if has_previous_step and approximate_kl > self.target_kl:
-            return None, approximate_kl
 
         surrogate = torch.minimum(ratio * advantages[idx], ratio.clamp(1 - PPO_CLIP_EPS, 1 + PPO_CLIP_EPS) * advantages[idx], )
         value_mse = torch.nn.functional.mse_loss(values, returns[idx])
@@ -415,8 +415,22 @@ class PPO_Agent(BaseAgent):
             "value_encoder_grad_norm": float(value_encoder_grad_norm),
             "gradient_clipped": float(total_grad_norm > GRAD_CLIP_MAX_NORM),
             "sample_count": float(len(idx)),
-        }, approximate_kl
+        }
         # endregion
+
+    def _post_epoch_kl(self, cached_entries: Sequence[tuple[list[Data], torch.Tensor, torch.Tensor, torch.Tensor]],
+            transitions: Sequence[RolloutTransition], old_log_probs: torch.Tensor) -> float:
+        """Measure sample-weighted k3 KL across the cached rollout after one epoch."""
+        kl_sum = 0.0
+        sample_count = 0
+        with torch.no_grad():
+            for start in range(0, len(transitions), PPO_MINIBATCH_SIZE):
+                indices = list(range(start, min(start + PPO_MINIBATCH_SIZE, len(transitions))))
+                log_probs, _, _, _ = self._evaluate_indices(cached_entries, transitions, indices)
+                log_ratio = log_probs - old_log_probs[indices]
+                kl_sum += float((log_ratio.exp() - 1 - log_ratio).sum())
+                sample_count += len(indices)
+        return kl_sum / sample_count
 
     def _mean_minibatch_metric(self, minibatches: Sequence[dict[str, float]], name: str) -> float:
         """Return the unweighted mean for one recorded minibatch metric."""
@@ -429,7 +443,8 @@ class PPO_Agent(BaseAgent):
 
     def _summarize_update(self, minibatches: Sequence[dict[str, float]], *, legal_action_counts: Sequence[int], returns: torch.Tensor,
             old_values: torch.Tensor, raw_advantages: torch.Tensor, completed_epochs: int, early_stopped: bool, early_stop_kl: float, optimizer_steps_before: int,
-            samples_before: int, target_horizons: torch.Tensor, target_bootstraps: torch.Tensor, ) -> dict[str, float]:
+            samples_before: int, target_horizons: torch.Tensor, target_bootstraps: torch.Tensor, post_epoch_kls: Sequence[float],
+            kl_stop_epoch: int, ) -> dict[str, float]:
         """Preserve the public PPO metric schema while hiding collection detail."""
         value_mse = self._mean_minibatch_metric(minibatches, "value_mse")
         policy_encoder_grad_norm = self._sample_weighted_minibatch_metric(minibatches, "policy_encoder_grad_norm")
@@ -475,6 +490,9 @@ class PPO_Agent(BaseAgent):
             "ppo_early_stopped": float(early_stopped),
             "ppo_early_stop_kl": early_stop_kl,
             "ppo_early_stop_kl_max": early_stop_kl,
+            "ppo_post_epoch_kl": post_epoch_kls[-1],
+            "ppo_post_epoch_kl_max": max(post_epoch_kls),
+            "ppo_kl_stop_epoch": float(kl_stop_epoch),
             "ppo_optimizer_steps_per_update": float(self.optimizer_steps - optimizer_steps_before),
             "ppo_samples_processed_per_update": float(self.samples_processed - samples_before),
         }
@@ -497,28 +515,30 @@ class PPO_Agent(BaseAgent):
             "old_values": torch.tensor([transition.old_value for transition in transitions], dtype=torch.float32, device=self.device, ),
         }
 
-    def _run_update_epochs(self, transitions: Sequence[RolloutTransition], update: dict[str, list | torch.Tensor]) -> tuple[list[dict[str, float]], int, bool, float]:
-        """Run PPO epochs until completion or the KL guard stops the update."""
+    def _run_update_epochs(self, transitions: Sequence[RolloutTransition], update: dict[str, list | torch.Tensor]) -> tuple[list[dict[str, float]], int, bool, float, list[float], int]:
+        """Run complete PPO epochs, gating only the next epoch with global KL."""
         minibatches: list[dict[str, float]] = []
         completed_epochs = 0
         early_stopped = False
         early_stop_kl = 0.0
+        post_epoch_kls: list[float] = []
+        kl_stop_epoch = PPO_EPOCHS
 
-        for _ in range(PPO_EPOCHS):
+        for epoch in range(PPO_EPOCHS):
             order = torch.randperm(len(transitions), device=self.device)
             for indices_tensor in order.split(PPO_MINIBATCH_SIZE):
-                minibatch, approximate_kl = self._run_minibatch(update["cached_entries"], transitions, indices_tensor.tolist(), update["old_log_probs"],
-                    update["advantages"], update["returns"], has_previous_step=bool(minibatches), )
-                if minibatch is None:
-                    early_stopped = True
-                    early_stop_kl = approximate_kl
-                    break
-                minibatches.append(minibatch)
-            if early_stopped:
-                break
+                minibatches.append(self._run_minibatch(update["cached_entries"], transitions, indices_tensor.tolist(), update["old_log_probs"],
+                    update["advantages"], update["returns"], ))
             completed_epochs += 1
+            post_epoch_kl = self._post_epoch_kl(update["cached_entries"], transitions, update["old_log_probs"])
+            post_epoch_kls.append(post_epoch_kl)
+            if post_epoch_kl > self.target_kl and epoch + 1 < PPO_EPOCHS:
+                early_stopped = True
+                early_stop_kl = post_epoch_kl
+                kl_stop_epoch = epoch + 1
+                break
 
-        return minibatches, completed_epochs, early_stopped, early_stop_kl
+        return minibatches, completed_epochs, early_stopped, early_stop_kl, post_epoch_kls, kl_stop_epoch
 
     def learn(self, *, reached_max_steps: bool = False) -> list[float]:
         """Run one complete PPO rollout update when enough turns are collected."""
@@ -531,13 +551,14 @@ class PPO_Agent(BaseAgent):
         update = self._prepare_rollout_update(transitions)
         samples_before = self.samples_processed
         optimizer_steps_before = self.optimizer_steps
-        minibatches, completed_epochs, early_stopped, early_stop_kl = self._run_update_epochs(transitions, update)
+        minibatches, completed_epochs, early_stopped, early_stop_kl, post_epoch_kls, kl_stop_epoch = self._run_update_epochs(transitions, update)
 
         self.train_steps += 1
         self.last_update_metrics = self._summarize_update(minibatches, legal_action_counts=update["legal_action_counts"], returns=update["returns"],
             old_values=update["old_values"], raw_advantages=update["raw_advantages"], completed_epochs=completed_epochs, early_stopped=early_stopped,
             early_stop_kl=early_stop_kl, optimizer_steps_before=optimizer_steps_before, samples_before=samples_before,
-            target_horizons=update["target_horizons"], target_bootstraps=update["target_bootstraps"],)
+            target_horizons=update["target_horizons"], target_bootstraps=update["target_bootstraps"], post_epoch_kls=post_epoch_kls,
+            kl_stop_epoch=kl_stop_epoch,)
         self.rollout_buffer.clear()
         return [minibatch["loss"] for minibatch in minibatches]
 

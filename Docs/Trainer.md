@@ -31,15 +31,12 @@ trainer.logger.finish()
 `build_learner_agent` accepts only `"DQN"`, `"Dueling_DQN"`, and `"PPO"`.
 An unknown label raises `ValueError` immediately.
 
-The current `main()` launcher starts a fresh W&B-backed `DQN_303` run: it builds
-`GNN_DQN_Agent`, starts with no checkpoint (`resume=False`), writes under
-`Checkpoints/DQN_303`, and has no `wandb_run_id`, so W&B creates a new run.
-This DQN experiment uses the corrected card-trade environment and bounded
-fortify action candidates:
-ordinary five-card conquest draws defer trading to the next turn, while
-elimination card transfers still resolve their required trades and placement
-before occupation resumes. It must not resume a pre-change checkpoint because
-the environment sequence and `TradeInHead` card-slot capacity changed.
+The current `main()` launcher starts a fresh W&B-backed `PPO_312` run: it builds
+`PPO_Agent`, starts with no checkpoint (`resume=False`), writes under
+`Checkpoints/PPO_312`, and has no `wandb_run_id`, so W&B creates a new run.
+This isolated PPO experiment uses a sample-weighted full-rollout KL decision
+between epochs instead of PPO_311's noisy minibatch-level KL gate. It must not
+resume a PPO_311 checkpoint because the optimizer update schedule changes.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and `PPO_Agent`

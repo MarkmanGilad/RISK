@@ -215,6 +215,8 @@ def test_kl_limit_stops_remaining_ppo_epochs() -> None:
     assert agent.last_update_metrics["ppo_early_stopped"] == 1.0
     assert agent.last_update_metrics["ppo_epochs_completed"] == 1.0
     assert agent.last_update_metrics["ppo_early_stop_kl"] > agent.target_kl
+    assert agent.last_update_metrics["ppo_post_epoch_kl"] > agent.target_kl
+    assert agent.last_update_metrics["ppo_kl_stop_epoch"] == 1.0
     assert agent.last_update_metrics["ppo_optimizer_steps_per_update"] == 1.0
     assert agent.last_update_metrics["ppo_samples_processed_per_update"] == 2.0
     assert agent.optimizer_steps == 1
@@ -240,6 +242,73 @@ def test_kl_limit_stops_remaining_ppo_epochs() -> None:
     assert torch.isfinite(torch.tensor(
         agent.last_update_metrics["ppo_value_to_policy_encoder_grad_ratio"]
     ))
+
+
+def test_post_epoch_kl_is_sample_weighted_across_cached_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(seed=53)
+    log_ratios = torch.tensor([0.0, 1.0, 2.0])
+    calls: list[list[int]] = []
+
+    def fake_evaluate(_, __, indices):
+        calls.append(list(indices))
+        selected = log_ratios[indices]
+        count = len(indices)
+        return selected, torch.zeros(count), torch.zeros(count), torch.zeros(count)
+
+    monkeypatch.setattr(ppo_agent_module, "PPO_MINIBATCH_SIZE", 2)
+    monkeypatch.setattr(agent, "_evaluate_indices", fake_evaluate)
+
+    kl = agent._post_epoch_kl([None] * 3, [None] * 3, torch.zeros(3))
+
+    expected = float((log_ratios.exp() - 1 - log_ratios).sum() / 3)
+    assert kl == pytest.approx(expected)
+    assert calls == [[0, 1], [2]]
+
+
+def test_high_post_epoch_kl_completes_epoch_one_before_stopping(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(seed=54)
+    calls: list[list[int]] = []
+
+    def fake_minibatch(_, __, indices, ___, ____, _____):
+        calls.append(list(indices))
+        return {"loss": 0.0, "approximate_kl": 0.03}
+
+    monkeypatch.setattr(ppo_agent_module, "PPO_MINIBATCH_SIZE", 2)
+    monkeypatch.setattr(agent, "_run_minibatch", fake_minibatch)
+    monkeypatch.setattr(agent, "_post_epoch_kl", lambda *_: 0.03)
+    update = {"cached_entries": [], "old_log_probs": torch.zeros(4), "advantages": torch.zeros(4), "returns": torch.zeros(4)}
+
+    _, completed, early_stopped, stop_kl, post_epoch_kls, stop_epoch = agent._run_update_epochs([None] * 4, update)
+
+    assert len(calls) == 2
+    assert completed == 1
+    assert early_stopped is True
+    assert stop_kl == 0.03
+    assert post_epoch_kls == [0.03]
+    assert stop_epoch == 1
+
+
+def test_low_post_epoch_kl_permits_all_epochs(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _agent(seed=55)
+    calls: list[list[int]] = []
+
+    def fake_minibatch(_, __, indices, ___, ____, _____):
+        calls.append(list(indices))
+        return {"loss": 0.0}
+
+    monkeypatch.setattr(ppo_agent_module, "PPO_MINIBATCH_SIZE", 2)
+    monkeypatch.setattr(agent, "_run_minibatch", fake_minibatch)
+    monkeypatch.setattr(agent, "_post_epoch_kl", lambda *_: 0.01)
+    update = {"cached_entries": [], "old_log_probs": torch.zeros(4), "advantages": torch.zeros(4), "returns": torch.zeros(4)}
+
+    _, completed, early_stopped, stop_kl, post_epoch_kls, stop_epoch = agent._run_update_epochs([None] * 4, update)
+
+    assert len(calls) == 2 * ppo_agent_module.PPO_EPOCHS
+    assert completed == ppo_agent_module.PPO_EPOCHS
+    assert early_stopped is False
+    assert stop_kl == 0.0
+    assert post_epoch_kls == [0.01] * ppo_agent_module.PPO_EPOCHS
+    assert stop_epoch == ppo_agent_module.PPO_EPOCHS
 
 
 def test_value_to_policy_encoder_gradient_ratio_has_a_finite_floor() -> None:

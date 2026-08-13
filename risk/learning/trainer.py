@@ -410,7 +410,7 @@ def main() -> None:
     Run it with: python -m risk.learning.trainer
     """
 
-    RUN_ID = 311
+    RUN_ID = 312
 
     ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
     agent = build_learner_agent("PPO", ctx)

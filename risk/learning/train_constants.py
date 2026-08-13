@@ -59,7 +59,7 @@ EPSILON_DECAY_EPISODES: Final[int] = 100  # episode at which epsilon reaches EPS
 # region Run control
 
 # Default episode count when running `python -m risk.learning.trainer`.
-TRAIN_EPISODES: Final[int] = 10000
+TRAIN_EPISODES: Final[int] = 100_000
 
 # Print one progress line every N episodes.
 PROGRESS_EVERY: Final[int] = 10
