@@ -3,7 +3,9 @@
 A graph-attention reinforcement-learning approach to Risk, compared across
 DQN, Dueling DQN, and PPO.
 
-Gilad Markman · Practical Deep Learning for Science · 2026
+Practical Deep Learning for Science · Prof. Eilam Gross · Gilad Markman · 2026
+
+The print-poster header also carries the supplied Weizmann Institute of Science logo.
 
 > **Instead of scoring from one enormous fixed list of moves, the system
 > injects each legal Risk move into the board graph and scores that
@@ -122,7 +124,7 @@ logits and a value estimate.
 
 ---
 
-## Sparse attention and fixed checkpoint-selection evaluation
+## Sparse attention and reward shaping
 
 Attention is computed only on 166 directed Risk borders. An attack changes one
 selected edge-feature row before the edge projection; reinforce, occupy, and
@@ -135,40 +137,48 @@ E [166 x 2] -> E_projected -> K_edge / V_edge -> segment softmax
 **Figure 5.** The sparse attention calculation uses the injected candidate
 instead of a dense 42 x 42 all-territory attention matrix.
 
-<img src="../Checkpoints/DQN_103/evaluations/top5_checkpoint_win_rates_all_player_counts.png" alt="Top five DQN_103 checkpoint win rates by 3 to 6 total players" width="900">
+### Reward shaping behind DQN_103
 
-**Figure 6.** Top five DQN_103 checkpoints on the fixed
-checkpoint-selection suite, separated by the total number of players. Each
-checkpoint is tested in 54 games: three seeds, every learner seat, epsilon 0,
-and a 2,000-step game cap. The latest checkpoint, `ep006700`, wins 46 of 54
-games (85.2%) with zero timeouts. This is DQN-only checkpoint-selection
-evidence, not yet a DQN-versus-Dueling-DQN-versus-PPO comparison.
+Risk delivers the win/loss signal only after a long, stochastic game, so
+DQN_103 paired the terminal objective with bounded, phase-aware local rewards.
+This panel intentionally documents the **historical DQN_103 reward regime**:
+terminal win/loss was `+100 / -100` and dense shaping used scale `0.1`, not
+the current retuned values.
+
+| Signal | DQN_103 raw reward | Purpose |
+|---|---|---|
+| Terminal | win `+100`; loss `-100` | Win the game |
+| Reinforce | frontier and readiness rewards; interior `-0.8` | Build usable attacks |
+| Attack | army ratio, dice, conquest `+1.2`, continent / elimination `+4` | Favor profitable battles |
+| Position + board | frontier-aware occupy / fortify; territory, army, and continent deltas after opponents move | Push and protect gains |
+
+The raw dense total from trade, reinforce, attack, occupy, and fortify is
+clipped to `[-10,+10]` per learner action and multiplied by `0.1`. Terminal
+reward is neither clipped nor scaled. The board-progress term is measured only
+after all opponents have acted, so it rewards retaining gains through a round.
 
 ---
 
-## Results: comparing learners at a matched data budget
+## Results: training + held-out evaluation
 
 Same legal-action generator · Same injected graph representation
 Same heuristic-opponent roster · Randomized learner seat and player count
 Compared against cumulative learner turns · Held-out evaluation reported separately
 
-| DQN | Dueling DQN | PPO |
+| DQN | Learner comparison | DQN_103 evaluation |
 |---|---|---|
-| Current DQN data | Temporary DQN-chart placeholder | Temporary DQN-chart placeholder |
-| <img src="../Assets/DQN%20Win.png" alt="DQN win-rate chart using DQN_103, DQN_105, and DQN_303" width="380"> | <img src="../Assets/DQN%20Win.png" alt="Temporary DQN chart placeholder for Dueling DQN" width="380"> | <img src="../Assets/DQN%20Win.png" alt="Temporary DQN chart placeholder for PPO" width="380"> |
+| Current DQN data | Reserved for matched DQN vs. Dueling DQN vs. PPO chart | Top five checkpoints across 3–6 players |
+| <img src="../Assets/DQN%20Win.png" alt="Current DQN chart" width="380"> | <img src="../Assets/DQN%20Win.png" alt="Temporary graphic for the planned learner-comparison chart" width="380"> | <img src="../Checkpoints/DQN_103/evaluations/top5_checkpoint_win_rates_all_player_counts.png" alt="Top five DQN_103 checkpoint win rates by 3 to 6 total players" width="380"> |
 
-**Figure 7.** Locked three-slot layout for the shared comparison. The DQN
-panel shows DQN_103, DQN_105, and DQN_303. The Dueling DQN and PPO panels
-intentionally repeat that same image only to lock the final poster geometry;
-they are **not** cross-method results. Replace the two temporary panels with
-matched curves plotted against cumulative learner turns.
+**Figure 6.** Top five DQN_103 checkpoints on the fixed
+checkpoint-selection suite, separated by total player count. Each checkpoint
+is tested in 54 games: three seeds, every learner seat, epsilon 0, and a
+2,000-step game cap. The latest checkpoint, `ep006700`, wins 46 of 54 games
+(85.2%) with zero timeouts. This is DQN-only checkpoint-selection evidence.
 
-**Figure 8.** Balanced held-out evaluation win rate at matched training
-budgets, with uncertainty bars and the number of games stated. *[reserved
-for the final evaluation chart]*
-
-**Figure 9 (optional).** Territories conquered or agent-turn survival vs.
-learner turns. *[reserved for a supporting-evidence chart]*
+**Figure 7.** The middle results card is reserved for a matched DQN,
+Dueling-DQN, and PPO comparison. Until that chart is available, its existing
+graphic is a clearly labelled layout placeholder rather than a result.
 
 ---
 
@@ -188,7 +198,7 @@ learner turns. *[reserved for a supporting-evidence chart]*
 **Footer**
 
 - Repository QR code · experiment-tracking QR/link
-- Course and author line
+- Course, lecturer, author, and year line · Weizmann Institute of Science logo
 - Citations: DQN/Double DQN, Dueling DQN, PPO, GAT, PyTorch-Geometric `TransformerConv`
 
 ---
@@ -201,10 +211,10 @@ GATN architecture receive the larger panels. The repository's player/agent
 selection UI is intentionally omitted from the scientific poster.
 
 ~~~text
-Header: title + claim + game primer (Figure 1)
+Header: title, course/lecturer attribution, Weizmann branding + claim + game primer (Figure 1)
 Top row: compact board graph (Figure 2) | large action injection (Figure 3) | large shared GATN + heads (Figure 4)
-Technical strip: sparse action injection | fixed DQN_103 checkpoint evidence (Figures 5–6)
-Results: locked DQN | Dueling DQN | PPO slots (Figures 7–9)
+Technical strip: sparse action injection | DQN_103 historical reward shaping (Figure 5 + table)
+Results: DQN learning | DQN vs. Dueling DQN vs. PPO comparison | DQN_103 evaluation (Figures 6–7)
 Footer: take-home | limitations | QR | citations
 ~~~
 
@@ -212,6 +222,6 @@ Footer: take-home | limitations | QR | citations
 |---|---:|
 | Header | 11% |
 | Board graph + injection + GATN visuals | 41% |
-| Sparse attention + fixed checkpoint evidence | 14% |
+| Sparse attention + reward shaping | 14% |
 | Results | 26% |
 | Footer | 8% |

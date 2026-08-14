@@ -21,9 +21,9 @@ the agent against a temporary sizing environment, then passes it into
 
 ```python
 ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-agent = build_learner_agent("PPO", ctx)
+agent = build_learner_agent("Dueling_DQN", ctx)
 
-trainer = Trainer(RUN_ID, agent=agent)
+trainer = Trainer(RUN_ID, agent=agent, resume=False)
 trainer.train(n_episodes=TRAIN_EPISODES)
 trainer.logger.finish()
 ```
@@ -31,12 +31,9 @@ trainer.logger.finish()
 `build_learner_agent` accepts only `"DQN"`, `"Dueling_DQN"`, and `"PPO"`.
 An unknown label raises `ValueError` immediately.
 
-The current `main()` launcher starts a fresh W&B-backed `PPO_312` run: it builds
-`PPO_Agent`, starts with no checkpoint (`resume=False`), writes under
-`Checkpoints/PPO_312`, and has no `wandb_run_id`, so W&B creates a new run.
-This isolated PPO experiment uses a sample-weighted full-rollout KL decision
-between epochs instead of PPO_311's noisy minibatch-level KL gate. It must not
-resume a PPO_311 checkpoint because the optimizer update schedule changes.
+The current `main()` launcher is configured for a fresh `Dueling_DQN_304` run.
+It builds `Dueling_DQN_Agent`, starts without restoring a checkpoint, and creates
+a new W&B history and checkpoint directory under `Checkpoints/Dueling_DQN_304`.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and `PPO_Agent`

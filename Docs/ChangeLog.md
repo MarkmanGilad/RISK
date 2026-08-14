@@ -14,7 +14,172 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-14
+
+- **Restored Reward.md's per-phase reward table, deleted in `529fb4c`.**
+  That commit trimmed Reward.md from 526 to 28 lines and dropped the
+  "Current constants" and per-action reward tables along with a large amount
+  of superseded experiment history (DQN_104/105 investigation notes, an
+  unimplemented favorable-attack-stop proposal). Restored only the two
+  tables — verified line-by-line against the live `REWARD_*` constants and
+  `reward.py` first, not copy-pasted as-is: the old table's end-of-turn row
+  had gone stale even before the trim (`REWARD_TERRITORY_DELTA` documented
+  as `1.00`, actually `20.00`; `REWARD_TERRITORY_HOLD` documented as `0.05`,
+  actually `0.00`), and the `StopAttackAction` row needed updating to the
+  current unfinished-attack-target tiering. The historical/planning sections
+  were intentionally left out as superseded; ask if those should come back
+  too. A follow-up line-by-line check against `reward.py` found one further
+  error in the restored prose (not the tables): the logged `attack` W&B
+  component excludes both `eliminate` and `unfinished_attack`, not just
+  `eliminate` as first written — corrected. Files: Docs/Reward.md,
+  Docs/ChangeLog.md.
+
+- **Reworked the poster around reward shaping and held-out DQN_103 evidence.**
+  The right-center technical panel now documents the historical DQN_103
+  reward regime that produced the reported checkpoint result (terminal
+  `+100/-100`, dense scale `0.1`); the DQN_103 3–6-player evaluation moved
+  to the third bottom card. The middle card is now explicitly reserved for the
+  planned DQN-versus-Dueling-DQN-versus-PPO comparison rather than labelled as
+  a Dueling-only result. Files: Docs/Risk.pptx, Docs/Poster.md,
+  Docs/ChangeLog.md.
+
+- **Restored the policy head as DPQN's sole post-warm-up actor.** The plan no
+  longer alternates DQN-controlled and policy-controlled collection. After the
+  warm-up gate, the policy head samples every learner action and its 32-action
+  frozen blocks feed both replay and one-use actor memory; DQN remains the
+  off-policy learner and evaluation uses policy argmax. Files: Docs/DPQN.md,
+  Docs/ChangeLog.md.
+
+- **Made DPQN DQN-primary after the actor gate.** The proposed cadence now
+  alternates 32 epsilon-greedy DQN-controlled learner transitions with a
+  frozen 32-transition policy block. Every policy-block transition enters both
+  replay and one-use actor memory; the 32 delayed replay updates preserve the
+  standalone DQN's 64 replay samples per fresh transition. Checkpoints are
+  evaluated in separate whole-game Q-only and policy-only modes, never by
+  switching heads during a game. Files: Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Merged a second, duplicate "related work" pass into the existing
+  literature/novelty section.** Two overlapping related-work write-ups ended
+  up in DPQN.md (this session added one citing Reactor/PGQL/Q-Prop/AWR/
+  Expected Sarsa; a "Related literature and novelty" section citing
+  Actor-Advisor/PGQL/BDPI/ACER/Mean Actor-Critic/Discrete SAC was already
+  present, apparently from a parallel edit — Docs/DPQN.md is untracked, so
+  there is no git history to confirm provenance). Kept the table-based
+  section and folded in the non-redundant points: added a Reactor row (the
+  closest existing precedent for one trunk feeding both a policy and a Q
+  head, which qualifies rather than fully supports the "shared encoder"
+  novelty bullet), tied the Mean Actor-Critic row to the classical Expected
+  Sarsa identity behind DPQN's $b_t$ baseline, and noted AWR/AWAC's
+  exponentiated-advantage weighting as an alternative to DPQN's raw-advantage
+  REINFORCE next to the Q-Prop row. Files: Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Added DPQN related work and scoped its novelty claim.** The design now
+  cites the closest policy-gradient/Q-learning, replay-actor, and
+  discrete-entropy precedents, identifies Actor-Advisor as the strongest
+  structural baseline, and distinguishes DPQN's new project-specific
+  configuration from a new general RL algorithm family. Files: Docs/DPQN.md,
+  Docs/ChangeLog.md.
+
+- **Set DPQN's actor-loss warm-up gate to the existing epsilon schedule.**
+  The actor now enables at `episode > EPSILON_DECAY_EPISODES` (epsilon at
+  `EPSILON_END`, i.e. after episode 100) instead of an unspecified placeholder
+  threshold, reusing the already-tuned decay schedule rather than new warm-up
+  constants. The doc now also calls for logging `cumulative_optimizer_steps`/
+  `cumulative_learner_turns` at gate-open time, since episode count is a
+  schedule rather than a direct Q-maturity measurement and episode length
+  varies with the randomly sampled player count/opponent mix. Files:
+  Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Switched DPQN's DQN replay batch to 64, matching standalone DQN.** The
+  cadence changed from 16 updates of batch 128 to 32 updates of batch 64 per
+  32-transition collection block (1 joint + 31 DQN-only), so DPQN now reuses
+  the exact batch size and per-transition update frequency already validated
+  by the live DQN/Dueling DQN agents (`BATCH_SIZE = 64`,
+  `TRAIN_STEPS_PER_CALL = 1`) instead of an untested batch size, while
+  preserving the same 64-samples-per-transition replay exposure. Replay and
+  actor-loss eligibility thresholds, the target-sync counter step, and the
+  device-memory open item were updated to match. Files: Docs/DPQN.md,
+  Docs/ChangeLog.md.
+
+- **Added reviewer notes to DPQN.md.** Second-pass review confirms the
+  warm-up gate and detached expected-Q baseline resolved the two open
+  correctness concerns from the first pass, and flags one implementation-time
+  follow-up: the "device memory" open item should also cover the 32-state
+  legal-action group forward, not just the 128-transition DQN replay batch.
+  Files: Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Specified DPQN's post-warm-up action selector.** Training switches from
+  epsilon-greedy DQN behavior to masked policy-head sampling when the actor
+  gate opens; evaluation takes the policy argmax, and DQN remains off-policy
+  on the resulting replay transitions. Files: Docs/DPQN.md,
+  Docs/ChangeLog.md.
+
+- **Strengthened the DPQN actor signal and warm-up plan.** DPQN now uses a
+  detached policy-expected Q baseline rather than raw returns, and defers all
+  actor/entropy updates until dedicated replay-size and DQN-update warm-up
+  thresholds are met; DQN can train alone using its established behavior
+  first. Files: Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Added DPQN Q-policy alignment diagnostics to the plan.** The design now
+  logs detached policy-expected versus greedy-Q values, regret, sampled-action
+  regret, argmax agreement, rank correlation, and entropy before considering
+  any later Q-to-policy distillation loss. Files: Docs/DPQN.md,
+  Docs/ChangeLog.md.
+
+- **Set DPQN's policy bootstrap horizon to four learner transitions.** This
+  balances real short-horizon rewards with the stable DQN continuation while
+  retaining the 32-transition collection block and 16 replay updates. Files:
+  Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Added actor-only entropy regularization to the DPQN plan.** The policy
+  objective now rewards entropy across each state's legal action distribution
+  with its own coefficient, while the DQN target and Q-loss semantics remain
+  unchanged. Files: Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Defined DPQN v1's training cadence.** The plan now collects 32 frozen
+  policy actions, uses 8-step returns, takes one joint actor/DQN update, then
+  15 DQN-only updates of replay batch 128; this retains DQN's 64 replay-sample
+  presentations per new learner transition. Files: Docs/DPQN.md,
+  Docs/ChangeLog.md.
+
+- **Restored DPQN's compact bootstrap shorthand.** The n-step policy return
+  again uses B for the final DQN continuation, with its Double-DQN definition
+  directly below the equation. Files: Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Simplified DPQN's displayed DQN target notation.** The equation now
+  defines the terminal continuation as zero and states the terminal
+  reward-only case in prose, while the implementation continues to use its
+  done mask internally. Files: Docs/DPQN.md, Docs/ChangeLog.md.
+
+- **Simplified DPQN v1 to standard DQN plus an actor head.** The proposal now
+  removes Dueling's clean-state/value/advantage machinery and starts with a
+  detached bootstrapped return rather than a learned baseline, isolating the
+  DQN-plus-policy experiment; Dueling DPQN is deferred as a later comparison.
+  Files: Docs/DPQN.md, Docs/Content.md, Docs/ChangeLog.md.
+
+- **Documented the proposed DPQN hybrid learner.** The design preserves the
+  working Double-DQN replay objective while adding a one-use recent-policy
+  memory and detached, bootstrapped Q-guided policy loss through a shared graph
+  encoder; it explicitly remains unimplemented pending the listed design
+  choices. Files: Docs/DPQN.md, Docs/Content.md, Docs/ChangeLog.md.
+
 ## 2026-08-13
+
+- **Configured a fresh Dueling DDQN comparison run.** The trainer launcher now
+  builds `Dueling_DQN_Agent` for `Dueling_DQN_304`, without resuming the
+  interrupted DQN_303 checkpoint or its W&B history. Training was not started.
+  Files: `risk/learning/trainer.py`, `Docs/Trainer.md`, `Docs/ChangeLog.md`.
+
+- **Added course, lecturer, and institutional branding to the A0 poster.**
+  The poster header now identifies *Practical Deep Learning for Science*,
+  Prof. Eilam Gross, Gilad Markman, and 2026, and includes the supplied
+  Weizmann Institute of Science logo. Files: `Docs/Risk.pptx`,
+  `Docs/Poster.md`, `Docs/ChangeLog.md`.
+
+- **Configured the trainer to resume interrupted `DQN_303`.** The launcher now
+  restores the newest local DQN checkpoint and resumes the original W&B history
+  (`rujxk3x7`) after the Windows Update restart stopped its process. Files:
+  `risk/learning/trainer.py`, `Docs/Trainer.md`, `Docs/ChangeLog.md`.
 
 - **Raised the default training-episode count from 10,000 to 100,000.**
   `TRAIN_EPISODES` in `risk/learning/train_constants.py` now defaults
