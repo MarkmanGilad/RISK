@@ -7,9 +7,8 @@ Practical Deep Learning for Science · Prof. Eilam Gross · Gilad Markman · 202
 
 The print-poster header also carries the supplied Weizmann Institute of Science logo.
 
-> **Instead of scoring from one enormous fixed list of moves, the system
-> injects each legal Risk move into the board graph and scores that
-> state–action graph with one shared graph-attention encoder.**
+> **Each legal Risk move is injected into the board graph. One shared
+> graph-attention encoder scores the resulting state–action graph.**
 >
 > **That encoder is trained through reinforcement learning — compared across
 > DQN, Dueling DQN, and PPO — so only the learning objective changes between
@@ -126,18 +125,23 @@ logits and a value estimate.
 
 ## Sparse attention and reward shaping
 
-Attention is computed only on 166 directed Risk borders. An attack changes one
-selected edge-feature row before the edge projection; reinforce, occupy, and
-fortify change only the proposed-army-delta values in affected node rows.
+### 4. How GATN attention uses the injected action
+
+GATN attends only across neighbouring territories: `Q` represents the
+receiving territory, `K` determines a neighbour's relevance, and `V` is the
+message that neighbour sends. The panel reduces the calculation to:
 
 ~~~text
-E [166 x 2] -> E_projected -> K_edge / V_edge -> segment softmax
+Q × K → α (attention weight)
+α × V → weighted neighbour message
 ~~~
 
-**Figure 5.** The sparse attention calculation uses the injected candidate
-instead of a dense 42 x 42 all-territory attention matrix.
+Messages are summed by receiving territory and passed to the next GATN layer;
+no all-territory attention matrix is formed. The injected action changes `K`
+and `V` on its selected border, changing that border's attention weight and
+message.
 
-### Reward shaping behind DQN_103
+### 5. Reward shaping behind DQN_103
 
 Risk delivers the win/loss signal only after a long, stochastic game, so
 DQN_103 paired the terminal objective with bounded, phase-aware local rewards.
@@ -145,17 +149,24 @@ This panel intentionally documents the **historical DQN_103 reward regime**:
 terminal win/loss was `+100 / -100` and dense shaping used scale `0.1`, not
 the current retuned values.
 
-| Signal | DQN_103 raw reward | Purpose |
+| Phase | Key DQN_103 signal | What it teaches |
 |---|---|---|
-| Terminal | win `+100`; loss `-100` | Win the game |
-| Reinforce | frontier and readiness rewards; interior `-0.8` | Build usable attacks |
-| Attack | army ratio, dice, conquest `+1.2`, continent / elimination `+4` | Favor profitable battles |
-| Position + board | frontier-aware occupy / fortify; territory, army, and continent deltas after opponents move | Push and protect gains |
+| Terminal | +100 win / -100 loss (unscaled) | Winning remains the objective. |
+| Trade-in | ±0.30 optional trade; +0.60 owned-territory card | Wait unless the trade creates value. |
+| Reinforce | Enemy-border placement + strength vs. weakest neighbour; -0.8 safe interior | Build a border that can attack. |
+| Attack | Good odds + army exchange; +1.2 conquest; +4 continent; elimination bonus | Use strong odds and profitable battles. |
+| Occupy + fortify | Move armies into a capture / toward an enemy border; penalize weakening it | Keep force where opponents can attack. |
+| Board progress | 20 Δ territory + 0.1 Δ army + 2.5 Δ continent; loss penalty | Reward gains that survive the full round. |
 
-The raw dense total from trade, reinforce, attack, occupy, and fortify is
-clipped to `[-10,+10]` per learner action and multiplied by `0.1`. Terminal
-reward is neither clipped nor scaled. The board-progress term is measured only
-after all opponents have acted, so it rewards retaining gains through a round.
+In the historical run:
+
+    reward = terminal
+           + 0.1 × clip[-10,+10](trade + reinforce + attack + occupy + fortify)
+           + 0.1 × board_progress_after_opponents
+
+The terminal term is neither clipped nor scaled. Local shaping applies only to
+learner actions; board progress is separately scaled, **not clipped**, at the
+learner turn boundary after every opponent has played.
 
 ---
 

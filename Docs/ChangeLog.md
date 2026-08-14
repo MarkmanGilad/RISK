@@ -16,6 +16,31 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-14
 
+- **Produced a readability-focused poster revision without changing the unfinished results band.**
+  `Docs/Risk_poster_readability_update.pptx` shortens the central claim,
+  makes the encoder flow explicit, replaces the unreadable attention-matrix
+  illustration with a large Q/K/V sparse-attention flow, and increases the
+  historical DQN_103 reward table to 22 px body text while retaining its key
+  reward signals. `Docs/Poster.md` now mirrors the revised claim, numbered
+  attention explanation, and poster-summary reward table. The source
+  `Docs/Risk.pptx` remains untouched. Files: Docs/Risk_poster_readability_update.pptx,
+  Docs/Poster.md, Docs/ChangeLog.md.
+
+- **Expanded the poster's DQN_103 reward table into a readable phase summary.**
+  The reward panel now uses the full available space for the historical reward
+  equation and phase/trigger rows with key calculations and plain-language
+  intent. It replaces unexplained labels such as “frontier + readiness” with
+  concrete language about enemy borders and army strength versus the weakest
+  adjacent enemy. Files: Docs/Risk.pptx, Docs/Poster.md, Docs/ChangeLog.md.
+
+- **Added a phase-grouped reward-calculation reference.** The end of
+  `Docs/Reward.md` now gives each phase's trigger, raw equations, and final
+  scaling path for terminal, trade, reinforcement, attack, occupy, fortify,
+  and board-progress rewards. It also makes explicit that action shaping is
+  jointly clipped before scale `0.3`, while end-of-turn shaping is scaled but
+  not clipped, and corrects the board comparison's timing. Files:
+  Docs/Reward.md, Docs/ChangeLog.md.
+
 - **Restored Reward.md's per-phase reward table, deleted in `529fb4c`.**
   That commit trimmed Reward.md from 526 to 28 lines and dropped the
   "Current constants" and per-action reward tables along with a large amount

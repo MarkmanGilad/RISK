@@ -12,8 +12,9 @@ and multiplied by `REWARD_SHAPING_SCALE`; terminal win/loss rewards are added
 separately. Phase shaping applies only to learner actions.
 
 At the end of a learner turn, `Trainer` calls `end_of_turn(...)`. This compares
-the learner's pre-turn board with the board after opponents have acted and
-adds territory, army, and continent changes to the transition reward.
+the board immediately before the learner's turn-ending action with the board
+after opponents have acted and adds territory, army, and continent changes to
+the transition reward. This end-of-turn sum is scaled, but is not clipped.
 
 ## Current constants
 
@@ -23,7 +24,7 @@ All values are `risk/learning/train_constants.py`'s live `REWARD_*` constants.
 |---|---|---|
 | Terminal | win / loss | `+300`, `-300` |
 | Dense shaping | scale (terminal excluded) | `0.3` |
-| Step safety | shaping cap | `±10` |
+| Step safety | shaping cap | `+/-10` |
 | Trade-in | early / territory match | `0.30`, `0.60` |
 | Reinforce | ready scale / ready ratio / ready cap | `0.50`, `1.50`, `7.00` |
 | Reinforce | total scale / total ratio / continent / interior / split | `0.50`, `2.00`, `5.00`, `-0.80`, `0.20` |
@@ -49,7 +50,7 @@ All applicable terms in an action row are added, then the total **step
 shaping** is clipped to `[-10, +10]` and multiplied by
 `REWARD_SHAPING_SCALE = 0.3`. Terminal reward is not scaled. End-of-turn
 shaping is calculated separately, at the learner's turn boundary, and
-multiplied by the same scale.
+multiplied by the same scale without clipping.
 
 | Action | Rewarded behavior / formula | Main scale |
 |---|---|---:|
@@ -89,3 +90,54 @@ metrics and also logs reinforcement-action counts and per-action values.
 `Temp/tests/test_reward.py` covers terminal, phase, and end-of-turn behavior.
 `Temp/tests/test_environment.py` covers the environment paths that produce the
 reward inputs.
+
+---
+
+## Summary table: reward calculation by phase
+
+For a learner action, the reward calculation is:
+
+```text
+step_reward = terminal + S(trade + reinforce + attack + occupy + fortify)
+S(x) = 0.3 * clip(x, -10, +10)
+```
+
+At the learner's turn boundary, the trainer adds a separate board term:
+
+```text
+turn_boundary_reward = B(territory + army + continent terms)
+B(x) = 0.3 * x
+```
+
+Terminal reward is neither clipped nor scaled. Every action-phase row marked
+`S` is first summed with the other applicable action-phase rows, then the
+whole sum is clipped once. Every board row marked `B` is summed separately,
+scaled by `0.3`, and **not clipped**. Phase shaping applies only to learner
+actions.
+
+| Phase | Trigger | Raw terms before final scaling | Applied as |
+|---|---|---|---|
+| Terminal | Game ends | Learner wins: `+300`.<br>Learner does not win: `-300`. | Directly added |
+| Trade-in | `SkipTradeAction` or `TradeInAction`; early-trade term only applies with 3 or 4 cards | Skip optional trade: `+0.30 * f(hand) / V`.<br>Make optional trade: `-0.30 * f(hand) / V`.<br>Set includes an owned-territory card: `+0.60`. | `S` |
+| Reinforce | `ReinforcementAction` | Interior placement: `-0.80` per placed-on territory.<br>Readiness: `0.50 * [g_1.5(A_after / E_min) - g_1.5(A_before / E_min)]`.<br>Total coverage: `0.50 * [g_2.0(A_after / E_all) - g_2.0(A_before / E_all)]`.<br>Ready, partly owned continent: `5.0 * placed / (continent_armies + placed) * (territory_share + army_share) / continent_size`.<br>Partial budget: `-0.20` once. | `S` |
+| Attack | `AttackAction` or `StopAttackAction` | **Attack:** fewer than max dice: `-1.25`; force ratio: `2.0 * (min(attacker_armies / defender_armies, 3.0) - 1.5)`; continent domination: `0.80 / (territories_not_owned + 1)`; continent advantage: `1.20 * continent_advantage / (territories_not_owned + 1)`; army trade: `0.60 * (defender_losses - attacker_losses)`; eliminate: `4.0 + 1.5 * cards_taken`; conquer: `+1.20`; complete continent: `+4.00`; first turn card: `+1.00`; useful drawn card: `+0.60`.<br><br>**Stop:** no conquest this turn while a real or unfinished attack remains: `-2.00`; after a conquest, unfinished targets remain: `-0.50 * unfinished_target_count`. | `S` |
+| Occupy | `OccupyAction` after a conquest | `1.0 * moved / (source_armies_before - 1)`. | `S` |
+| Fortify | Non-skip `FortifyAction` | Between two frontiers: `-2.0 * abs(destination_after - threat_target) / (source_after + destination_after)`.<br>Interior to frontier: `+1.0 * moved / (source_armies_before - 1)`.<br>Frontier to interior: `-1.0 * moved / (source_armies_before - 1)`.<br>Destination-continent push: `0.80 * (owned_in_destination_continent / continent_size) / continent_size`.<br>Skip fortify: `0`. | `S` |
+| End-of-turn board | Learner transition closes; after opponents act if the game continues | Territory: `20.0 * (territory_share_after - territory_share_before)`.<br>Army share: `0.10 * (learner_army_share_after - learner_army_share_before)`.<br>Continent bonus: `2.50 * (bonus_share_after - bonus_share_before)`.<br>Continent lost: `5.0 * (bonus_after - bonus_before) / total_continent_bonus` (negative).<br>Territory hold: `0.0 * territory_share_after = 0`. | `B`; hold currently has no effect |
+
+Definitions used in the table:
+
+- `f(3) = 1`, `f(4) = 0.5`, otherwise `f = 0`; `V` is
+  `card_set_value(cards_traded_in_count)`.
+- `g_t(x) = max(0, min(x, 7) - t)`. `E_min` is the weakest adjacent
+  enemy army count; `E_all` is the sum of adjacent enemy armies; `A_before`
+  and `A_after` are the reinforced territory's army counts before and after
+  placement.
+- The reinforcement continent term applies only when the post-placement
+  weakest-enemy ratio is at least `1.5` and the learner owns some, but not
+  all, territories in the continent. Its shares are measured before placement.
+- `continent_advantage` is the product of: positive territory share above
+  `1 / alive_players`, positive troop share above `0.5`, and normalized
+  continent value. This is the exact `_continent_advantage(...)` helper.
+- `threat_target` assigns the combined post-fortify armies between two
+  frontiers in proportion to their adjacent enemy-army threat.
