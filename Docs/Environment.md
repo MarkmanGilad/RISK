@@ -7,8 +7,11 @@ completion.
 
 ## Card-trade flow
 
-Every turn begins in `TRADE_IN`. A player with five or more cards must trade
-before reinforcement; otherwise a skip action advances to reinforcement.
+At turn setup, `_begin_turn_for(...)` first checks for a valid card set. If
+none exists, it automatically sets the phase to `REINFORCE_PLACE`; no
+trade-in-related action, including `SkipTradeAction`, is exposed. When valid
+sets exist, a player below the card limit may trade or skip; a player at or
+above the limit is offered only trade-in actions.
 
 An ordinary first-conquest card that changes a hand from four to five does not
 interrupt the current attack turn. The player completes occupy/fortify and

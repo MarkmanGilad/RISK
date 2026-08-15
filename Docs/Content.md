@@ -23,6 +23,7 @@ current codebase, not the retired experiments stored under `Temp/`.
 | Document | What it covers |
 |---|---|
 | [HeuristicAgents.md](HeuristicAgents.md) | Random and heuristic opponents used for play and RL training. |
+| [LearnedAgentPlay.md](LearnedAgentPlay.md) | Interactive learned-seat selection, validation, and deterministic saved-policy loading. |
 
 ## Graph representation and GATN
 

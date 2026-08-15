@@ -165,4 +165,4 @@ Exercised against real `Environment` rollouts (`SelfPlay`-style loop,
   above.
 - A full `ATTACK`-phase legal-action set (68 actions) built and
   `Batch.from_data_list`-ed together without shape errors:
-  `DataBatch(x=[2856, 13], edge_index=[2, 11288], edge_attr=[11288, 2], u=[68, 34], ...)`.
+  `DataBatch(x=[2856, 15], edge_index=[2, 11288], edge_attr=[11288, 2], u=[68, 35], ...)`.

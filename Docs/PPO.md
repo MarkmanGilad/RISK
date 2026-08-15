@@ -30,9 +30,11 @@ acts and ends when the learner is next due to act, after opponents have played.
 Its reward already aggregates that interval. The rollout contains 1,024 learner
 transitions.
 
-True game termination has `done=True`. A maximum-step cutoff remains
-non-terminal and is marked `gae_boundary=True`, preventing a target from
-including rewards after the next reset game.
+`done=True` when the game ends or the learner is eliminated. Reaching the
+maximum-step limit alone leaves `done=False`; `Trainer` passes
+`reached_max_steps=True`, which marks the last rollout transition as a
+non-terminal `gae_boundary` and prevents a target from including rewards
+after the next reset game.
 
 ## 16-step bootstrapped targets
 
@@ -104,7 +106,7 @@ completed epoch is retained and PPO does not begin another epoch.
 
 ### Global post-epoch KL stopping (`PPO_312`)
 
-**Status: implemented for fresh PPO_312; PPO_311 is unchanged.** PPO_311 shows that the 16-step
+**Status: implemented in PPO_312; PPO_311 is unchanged.** PPO_311 shows that the 16-step
 targets learn, but its current minibatch-level KL check stops every late update
 after only a few of the 16 minibatches in one epoch. A single 64-transition
 minibatch is a noisy KL estimate because legal-action counts and advantages
@@ -150,9 +152,10 @@ consistent diagnostic. `ppo_post_epoch_kl` is the final completed epoch's KL,
 `ppo_kl_stop_epoch` is the one-based epoch after which a high KL blocked a
 further epoch; it is `PPO_EPOCHS` when all epochs run.
 
-The implementation is limited to `ppo_agent.py` and its focused PPO tests;
-the launcher selects fresh PPO_312. The environment, DQN, Dueling DQN, and
-other learners remain unchanged.
+The implementation is limited to `ppo_agent.py` and its focused PPO tests.
+The learner selected by `trainer.main()` is run configuration; read
+`trainer.py` rather than treating this document as the launcher record. The
+environment, DQN, Dueling DQN, and other learners remain unchanged.
 
 Focused tests must prove that a minibatch above `PPO_TARGET_KL` does not stop a
 first epoch, the global sample-weighted KL is computed across all cached

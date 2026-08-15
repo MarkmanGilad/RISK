@@ -15,13 +15,15 @@ Run training with:
 python -m risk.learning.trainer
 ```
 
-`main()` is intentionally the place where the learner is selected. It creates
-the agent against a temporary sizing environment, then passes it into
+`main()` is intentionally the place where the learner label and run id are
+selected. Those are run configuration, not stable properties of `Trainer`;
+read `trainer.py` before launching or identifying the active run. It creates
+the selected agent against a temporary sizing environment, then passes it into
 `Trainer`:
 
 ```python
 ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
-agent = build_learner_agent("Dueling_DQN", ctx)
+agent = build_learner_agent("<learner-label>", ctx)
 
 trainer = Trainer(RUN_ID, agent=agent, resume=False)
 trainer.train(n_episodes=TRAIN_EPISODES)
@@ -30,10 +32,6 @@ trainer.logger.finish()
 
 `build_learner_agent` accepts only `"DQN"`, `"Dueling_DQN"`, and `"PPO"`.
 An unknown label raises `ValueError` immediately.
-
-The current `main()` launcher is configured for a fresh `Dueling_DQN_304` run.
-It builds `Dueling_DQN_Agent`, starts without restoring a checkpoint, and creates
-a new W&B history and checkpoint directory under `Checkpoints/Dueling_DQN_304`.
 
 There is no hidden default agent inside `Trainer.__init__`. This keeps the
 trainer reusable for `GNN_DQN_Agent`, `Dueling_DQN_Agent`, and `PPO_Agent`
@@ -114,8 +112,11 @@ episode it:
 7. Stores exactly one transition for the learner turn with
    `agent.remember(state, action, reward_total, next_state, done)`.
 8. Calls `agent.learn(reached_max_steps=...)`, where the flag reports whether
-   this learner transition reached `MAX_STEPS_PER_EPISODE`; `done` continues to
-   represent only a real terminal state.
+   this learner transition reached `MAX_STEPS_PER_EPISODE`. `done=True` means
+   the game ended or the learner was eliminated; a maximum-step cutoff alone
+   leaves `done=False` and is reported separately through `reached_max_steps`.
+   PPO uses that non-terminal boundary to stop GAE crossing into the next
+   reset game while retaining its bootstrap.
 
 The trainer does not inspect replay-buffer internals or optimizer internals.
 Those are agent-owned responsibilities.
@@ -216,16 +217,14 @@ early training state.
 ## Resuming an interrupted run
 
 To continue both local training and its existing W&B history, keep the same
-numeric run id and give `Trainer` the saved W&B run id. The launcher for
-`Dueling_DQN_101` can use its last full local checkpoint and cloud run
-`rc1itpev`:
+numeric run id and give `Trainer` the saved W&B run id:
 
 ```python
 trainer = Trainer(
-    101,
+    RUN_ID,
     agent=agent,
     resume=True,
-    wandb_run_id="rc1itpev",
+    wandb_run_id="<wandb-run-id>",
 )
 ```
 
@@ -239,7 +238,7 @@ checkpoint's episode:
 
 ```python
 trainer = Trainer(
-    101,
+    RUN_ID,
     agent=agent,
     resume=True,
     wandb_step_from_episode=True,
@@ -247,8 +246,8 @@ trainer = Trainer(
 ```
 
 No `wandb_run_id` is supplied in this form, so W&B creates a distinct cloud
-run. The first post-checkpoint episode is logged at step 601 after restoring
-`ep000600`.
+run. The first post-checkpoint episode is logged at the restored episode
+number when `wandb_step_from_episode=True`.
 
 ## How to change agent
 

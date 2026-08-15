@@ -44,7 +44,7 @@ used by:
 
 - `State`'s per-territory arrays (ownership, army counts) — Phase 3.
 - The `(src, dst)` parallel index tuples returned by `edge_index()` —
-  ready for a future GNN `edge_index` tensor.
+  used directly by the live graph adapter as `Data.edge_index`.
 
 ## Public API
 

@@ -14,6 +14,76 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-15
+
+- **Added the "Grill Me" initial-plan-alignment technique to CLAUDE.md and
+  AGENTS.md, then trimmed it to match the file's terse style.** Before
+  generating a brand-new plan (not when correcting or continuing an existing
+  one, and not when fixing code against an already-agreed plan), interview
+  the user relentlessly, branch by branch, to real alignment before producing
+  the plan itself — no fixed question count, the design's own depth decides
+  how far the interview goes. The initial version's "communication is the
+  biggest bottleneck" rationale and "act as an adversary" framing were cut as
+  narrative padding that didn't change the actual instruction, to match every
+  other rule in this file being a bare imperative with no rationale attached.
+  This project keeps `AGENTS.md` and `CLAUDE.md` byte-identical; an earlier
+  pass in this same session mistakenly created a new `Agent.md` instead of
+  updating the real `AGENTS.md` — that stray file was removed. Files:
+  CLAUDE.md, AGENTS.md, Docs/ChangeLog.md.
+
+- **Implemented the approved documentation-review plan; no Python behavior was
+  changed.** Corrected live graph shapes/features, Dueling DQN update and
+  checkpoint details, evaluator metric/boundary behavior, terminal and
+  cutoff semantics, card-trade flow, learner-launcher wording, test mapping,
+  and checkpoint-loader facts. Added the factual interactive learned-policy
+  reference, removed the obsolete contradictory Killbot build plan, and
+  indexed the new page. Files: Docs/GraphAdapter.md,
+  Docs/ActionGraphBuilder.md, Docs/DuelingDQN.md, Docs/Eval.md,
+  Docs/LearnedAgentPlay.md, Docs/Reward.md, Docs/Trainer.md, Docs/PPO.md,
+  Docs/Environment.md, Docs/BoardTopology.md, Docs/HeuristicAgents.md,
+  Docs/Testing.md, Docs/ChooseAgent.md, Docs/Content.md, Docs/ChangeLog.md.
+
+- **Verified and corrected `docs_review_plan.md` against current code and
+  docs.** Cross-checked every claim in the plan with three parallel research
+  passes (graph feature contract + DuelingDQN, Eval/Reward semantics,
+  Priority-2 drift + the proposed learned-agent-play doc). Findings: every
+  line count in the original table was already stale; several Priority-1
+  items were already half-fixed (GraphAdapter.md's summary prose vs. its
+  still-stale detail tables; DuelingDQN.md already has Double-DQN/Smooth-L1;
+  Eval.md already has most of what was listed as missing); one Priority-2
+  item was factually backwards (HeuristicAgents.md's Killbot claim is already
+  fixed, but a leftover build-plan section now contradicts it); and one real
+  code-behavior gap was confirmed, not just a doc gap — `Evaluator` only adds
+  end-of-turn reward on a literal `FortifyAction`, while `Trainer` and
+  `CheckpointEvaluator` also add it on `done`, so eval can silently skip that
+  reward on a winning non-fortify action. Rewrote the plan with corrected,
+  narrower scopes per item and replaced specific current run-number/count
+  references with descriptions of the mechanism, since those go stale within
+  the same day (the plan's own `Dueling_DQN_313` example was already wrong by
+  verification time). Files: Docs/docs_review_plan.md, Docs/ChangeLog.md.
+
+- **Deduplicated Reward.md's two overlapping per-phase reward tables.** The
+  file had accumulated both a narrative "Reward by phase" table and a more
+  precise, formula-exact "Summary table: reward calculation by phase" section
+  covering the same ground. Kept the more precise table (it already has exact
+  per-term formulas, including the `continent_advantage` expansion), dropped
+  the narrative duplicate and its "Attack-specific bonuses" sub-table (fully
+  covered by the kept table's Attack row), and folded the `attack` W&B
+  component's eliminate/unfinished-attack exclusion note into Observability.
+  No factual content was lost. Files: Docs/Reward.md, Docs/ChangeLog.md.
+
+- **Recorded the documentation restoration audit without changing current
+  reference documents.** `Docs/docs_review_plan.md` compares every active
+  Markdown document with the pre-cleanup snapshot, distinguishes live
+  reference gaps from retired plans, and specifies the verified recovery work
+  for future explicit approval. Files: Docs/docs_review_plan.md,
+  Docs/ChangeLog.md.
+
+- **Made plan reviews explicitly read-only.** `AGENTS.md` and `CLAUDE.md`
+  now require a specific implementation instruction before any code or file
+  changes; review and discussion requests authorize analysis only. Files:
+  AGENTS.md, CLAUDE.md, Docs/ChangeLog.md.
+
 ## 2026-08-14
 
 - **Produced a readability-focused poster revision without changing the unfinished results band.**

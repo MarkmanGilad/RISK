@@ -16,6 +16,11 @@ the board immediately before the learner's turn-ending action with the board
 after opponents have acted and adds territory, army, and continent changes to
 the transition reward. This end-of-turn sum is scaled, but is not clipped.
 
+A stored learner transition begins before one learner action and ends when
+control returns to that learner, or at termination. It can therefore include
+intervening opponent actions and their reward effects; an action that does not
+end the learner's turn produces a transition ending immediately after it.
+
 ## Current constants
 
 All values are `risk/learning/train_constants.py`'s live `REWARD_*` constants.
@@ -46,55 +51,6 @@ across the opponent round (`territory_delta`) or losing continent bonus
 
 ## Reward by phase
 
-All applicable terms in an action row are added, then the total **step
-shaping** is clipped to `[-10, +10]` and multiplied by
-`REWARD_SHAPING_SCALE = 0.3`. Terminal reward is not scaled. End-of-turn
-shaping is calculated separately, at the learner's turn boundary, and
-multiplied by the same scale without clipping.
-
-| Action | Rewarded behavior / formula | Main scale |
-|---|---|---:|
-| `SkipTradeAction` | Optional three/four-card trade: `+0.30 x hand_factor / card_set_value` | small positive |
-| `TradeInAction` | Optional trade: negative of the skip term; `+0.60` if the set matches an owned territory card | small |
-| `ReinforcementAction` | Readiness against the weakest adjacent enemy and the total adjacent enemy force; gated contested-continent priority; interior and partial-action penalties | mixed |
-| `AttackAction` | Ratio: `+2.0 x (min(attacker / defender, 3.0) - 1.5)`; army trade: `+0.60 x (defender losses - attacker losses)`; plus applicable continent, conquest, card, and elimination bonuses | largest / frequent |
-| `StopAttackAction` | `-2.0` if a real attack remains and no territory was conquered this turn; if unfinished attack targets exist *after* a conquest, `-0.5` per unfinished target instead — the two penalties never stack | negative |
-| `OccupyAction` | `+1.0 x moved / (source armies - 1)` | `0` to `+1` |
-| `FortifyAction` | Toward frontier: positive moved fraction; away from frontier: negative fraction; two frontiers: negative threat-balance error; plus continent push | mixed |
-| Skip fortify | No fortify shaping | `0` |
-
-Attack-specific bonuses, when their conditions occur, are:
-
-| Event during `AttackAction` | Extra reward |
-|---|---:|
-| Used fewer than maximum legal dice | `-1.25` |
-| Continent domination / continent advantage | up to their formula-dependent values (`0.80`, `1.20` scales) |
-| Eliminated a player | `4.0 + 1.5 x cards taken` |
-| Conquered a territory | `+1.20` |
-| First conquest/card of the turn | `+1.00` |
-| Drawn card matches an owned territory | `+0.60` |
-| Completed a continent | `+4.00` |
-
-The `attack` W&B component excludes both the elimination and
-unfinished-attack-target portions; they are logged separately as
-`reward_component_eliminate` and `reward_component_unfinished_attack`.
-
-## Observability
-
-`RewardCalculator.last_components` and `last_end_of_turn_components` expose
-the individual terms. `Trainer` aggregates them into `reward_component_*`
-metrics and also logs reinforcement-action counts and per-action values.
-
-## Verification
-
-`Temp/tests/test_reward.py` covers terminal, phase, and end-of-turn behavior.
-`Temp/tests/test_environment.py` covers the environment paths that produce the
-reward inputs.
-
----
-
-## Summary table: reward calculation by phase
-
 For a learner action, the reward calculation is:
 
 ```text
@@ -102,7 +58,7 @@ step_reward = terminal + S(trade + reinforce + attack + occupy + fortify)
 S(x) = 0.3 * clip(x, -10, +10)
 ```
 
-At the learner's turn boundary, the trainer adds a separate board term:
+At the learner's turn boundary, `Trainer` adds a separate board term:
 
 ```text
 turn_boundary_reward = B(territory + army + continent terms)
@@ -117,10 +73,10 @@ actions.
 
 | Phase | Trigger | Raw terms before final scaling | Applied as |
 |---|---|---|---|
-| Terminal | Game ends | Learner wins: `+300`.<br>Learner does not win: `-300`. | Directly added |
+| Terminal | Learner is eliminated or the game reaches `GAME_OVER` | Learner wins: `+300`.<br>Learner elimination or another player's win: `-300`. | Directly added |
 | Trade-in | `SkipTradeAction` or `TradeInAction`; early-trade term only applies with 3 or 4 cards | Skip optional trade: `+0.30 * f(hand) / V`.<br>Make optional trade: `-0.30 * f(hand) / V`.<br>Set includes an owned-territory card: `+0.60`. | `S` |
 | Reinforce | `ReinforcementAction` | Interior placement: `-0.80` per placed-on territory.<br>Readiness: `0.50 * [g_1.5(A_after / E_min) - g_1.5(A_before / E_min)]`.<br>Total coverage: `0.50 * [g_2.0(A_after / E_all) - g_2.0(A_before / E_all)]`.<br>Ready, partly owned continent: `5.0 * placed / (continent_armies + placed) * (territory_share + army_share) / continent_size`.<br>Partial budget: `-0.20` once. | `S` |
-| Attack | `AttackAction` or `StopAttackAction` | **Attack:** fewer than max dice: `-1.25`; force ratio: `2.0 * (min(attacker_armies / defender_armies, 3.0) - 1.5)`; continent domination: `0.80 / (territories_not_owned + 1)`; continent advantage: `1.20 * continent_advantage / (territories_not_owned + 1)`; army trade: `0.60 * (defender_losses - attacker_losses)`; eliminate: `4.0 + 1.5 * cards_taken`; conquer: `+1.20`; complete continent: `+4.00`; first turn card: `+1.00`; useful drawn card: `+0.60`.<br><br>**Stop:** no conquest this turn while a real or unfinished attack remains: `-2.00`; after a conquest, unfinished targets remain: `-0.50 * unfinished_target_count`. | `S` |
+| Attack | `AttackAction` or `StopAttackAction` | **Attack:** fewer than max dice: `-1.25`; force ratio: `2.0 * (min(attacker_armies / defender_armies, 3.0) - 1.5)`; continent domination: only when pre-attack `owned / total >= 1 / alive_players + 0.10`, then `0.80 / (territories_not_owned + 1)`; continent advantage: `1.20 * continent_advantage / (territories_not_owned + 1)`; army trade: `0.60 * (defender_losses - attacker_losses)`; eliminate: `4.0 + 1.5 * cards_taken`; conquer: `+1.20`; complete continent: `+4.00`; first turn card: `+1.00`; useful drawn card: `+0.60`.<br><br>**Stop:** no conquest this turn while a real or unfinished attack remains: `-2.00`; after a conquest, unfinished targets remain: `-0.50 * unfinished_target_count`. | `S` |
 | Occupy | `OccupyAction` after a conquest | `1.0 * moved / (source_armies_before - 1)`. | `S` |
 | Fortify | Non-skip `FortifyAction` | Between two frontiers: `-2.0 * abs(destination_after - threat_target) / (source_after + destination_after)`.<br>Interior to frontier: `+1.0 * moved / (source_armies_before - 1)`.<br>Frontier to interior: `-1.0 * moved / (source_armies_before - 1)`.<br>Destination-continent push: `0.80 * (owned_in_destination_continent / continent_size) / continent_size`.<br>Skip fortify: `0`. | `S` |
 | End-of-turn board | Learner transition closes; after opponents act if the game continues | Territory: `20.0 * (territory_share_after - territory_share_before)`.<br>Army share: `0.10 * (learner_army_share_after - learner_army_share_before)`.<br>Continent bonus: `2.50 * (bonus_share_after - bonus_share_before)`.<br>Continent lost: `5.0 * (bonus_after - bonus_before) / total_continent_bonus` (negative).<br>Territory hold: `0.0 * territory_share_after = 0`. | `B`; hold currently has no effect |
@@ -136,8 +92,30 @@ Definitions used in the table:
 - The reinforcement continent term applies only when the post-placement
   weakest-enemy ratio is at least `1.5` and the learner owns some, but not
   all, territories in the continent. Its shares are measured before placement.
-- `continent_advantage` is the product of: positive territory share above
-  `1 / alive_players`, positive troop share above `0.5`, and normalized
-  continent value. This is the exact `_continent_advantage(...)` helper.
+- `continent_advantage` is
+  `max(0, territory_share - 1 / alive_players) / max(1 - 1 / alive_players, eps)`
+  multiplied by `max(0, troop_share - 0.5) / 0.5`, then by
+  `continent_bonus / maximum_continent_bonus`. This is the exact
+  `_continent_advantage(...)` helper; `eps` is its small denominator guard.
 - `threat_target` assigns the combined post-fortify armies between two
   frontiers in proportion to their adjacent enemy-army threat.
+
+`MAX_STEPS_PER_EPISODE` is a training-loop cutoff, not an environment terminal
+state. It leaves `done=False`, so a stored DQN transition remains
+bootstrapable; only learner elimination or `GAME_OVER` makes it terminal. See
+[Trainer.md](Trainer.md).
+
+## Observability
+
+`RewardCalculator.last_components` and `last_end_of_turn_components` expose
+the individual terms. `Trainer` aggregates them into `reward_component_*`
+metrics and also logs reinforcement-action counts and per-action values. The
+logged `attack` component excludes both the elimination and
+unfinished-attack-target portions; they are logged separately as
+`reward_component_eliminate` and `reward_component_unfinished_attack`.
+
+## Verification
+
+`Temp/tests/test_reward.py` covers terminal, phase, and end-of-turn behavior.
+`Temp/tests/test_environment.py` covers the environment paths that produce the
+reward inputs.

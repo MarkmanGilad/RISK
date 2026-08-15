@@ -23,5 +23,12 @@ network selects the next action and the target network evaluates it. Full
 checkpoints store the online/target models, optimizer, replay state, epsilon,
 and counters; policy-only files store the online model.
 
+Replay training uses `BATCH_SIZE = 64` and `TRAIN_STEPS_PER_CALL = 1`: once
+replay contains 64 transitions, every ready learner transition makes one
+optimizer update. Adam uses learning rate `1e-4`; gradients are clipped to
+norm `10`; the target network is hard-synchronized every 1,000 optimizer
+updates. A full checkpoint directory contains `model.pt` (online/target
+weights, optimizer, epsilon, and training counter) and `replay.pt`.
+
 The supported factory label is `"Dueling_DQN"`. See [Trainer.md](Trainer.md)
 for training orchestration and [Testing.md](Testing.md) for coverage.

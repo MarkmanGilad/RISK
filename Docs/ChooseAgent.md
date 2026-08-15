@@ -15,10 +15,11 @@ The new module owns two private helpers shared by its new classes.
 - A pure game rollout builds a fresh game, attaches every agent to its actual
   seat, sets learned policies to epsilon=0.0 and train_mode=False, plays until
   terminal/elimination/max_steps, and never calls remember or learn.
-- A net-only checkpoint loader uses the existing load_params for a policy-only
-  .pt file. For an epNNNNNN directory it reads trusted local model.pt and
-  loads only its net payload into agent.net. It never loads replay, optimizer
-  state, target net, epsilon, or train steps.
+- A net-only checkpoint loader reads a raw policy `.pt` as an online state
+  dictionary. For an `epNNNNNN` directory it reads trusted local `model.pt`
+  and takes only its `net` payload. It applies the result directly with
+  `agent.net.load_state_dict(...)`; it never loads replay, optimizer state,
+  target net, epsilon, or train steps.
 
 These are plain module-level functions, not a shared base class: neither new
 class specializes the other, so there is no real is-a relationship to model,
@@ -105,7 +106,7 @@ The dictionary has this shape:
       "agent_kind": "DQN",
       "run_id": 103,
       "seeds": [0, 1, 2],
-      "max_steps": 1000,
+      "max_steps": 2000,
       "suites": {"3": ["raider", "killbot"], "...": ["..."]},
       "checkpoints": {
         "ep002450": {
@@ -199,13 +200,11 @@ training-run directory. The returned dictionary and that JSON file are the
 authoritative results; the W&B run is a convenient visual view of the same
 games and totals.
 
-## Tests and documentation
+## Verification
 
-Add Temp/tests/test_choose_agent.py and update Docs/Testing.md.
-
-- Verify `Evaluator`'s own tests are untouched by this addition; the new
+- `Evaluator`'s own tests remain untouched by this addition; the new
   module imports nothing private from it.
-- Discover all epNNNNNN checkpoints; verify the private loader changes only
+- Discover all epNNNNNN checkpoints; the private loader changes only
   the online network and never loads replay, optimizer, target, or epsilon.
 - Verify inclusive min_episode/max_episode filtering, omitted-bound behavior,
   invalid-range rejection, numeric checkpoint ordering, and widening a range
@@ -219,9 +218,6 @@ Add Temp/tests/test_choose_agent.py and update Docs/Testing.md.
   heuristic/checkpoint rosters, fresh instances, per-game persistence,
   objective participant metrics, and participant totals.
 - Verify W&B-disabled evaluation still writes and returns identical results.
-
-After implementation, update Docs/ChangeLog.md and run the focused tests plus
-existing evaluator/checkpoint tests using C:\venvs\ai-rl.
 
 ## Current Python interface
 

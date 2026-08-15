@@ -1,5 +1,15 @@
 # Code style
 
+## Plan reviews
+
+- Treat requests to review, discuss, critique, or assess a plan as strictly read-only: do not change files or write code.
+- Implement only after the user gives a specific, explicit instruction to make the requested change; a review request is never implementation authorization.
+
+## Grill Me: initial plan alignment
+
+- **The "Grill Me" technique.** When the user asks to start a brand-new plan — a fresh, not-yet-designed piece of work — interview them relentlessly before producing it (and before entering plan mode): walk each branch of the design tree and resolve dependencies one by one until reaching real alignment, rather than a shallow round of questions once. Let the design's depth decide how many questions that takes.
+- **When it does not apply:** correcting, adjusting, or continuing an existing plan; or fixing code against a plan already agreed on. In those cases, proceed normally without running the interview.
+
 ## Tests
 
 - Use the project test environment at `C:\\venvs\\ai-rl`. Do not use

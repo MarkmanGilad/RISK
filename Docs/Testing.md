@@ -14,8 +14,9 @@ that require pygame use `SDL_VIDEODRIVER=dummy`.
 | File | Coverage |
 |---|---|
 | `test_board_topology.py`, `test_state.py`, `test_constants_and_phase.py` | board, state serialization, and shared constants |
+| `test_player_card_settings.py` | `Player`, `Card`, valid card-set, and `GameSettings` validation |
 | `test_actions.py`, `test_environment.py`, `test_reward.py` | game rules, legal actions, and reward accounting |
-| `test_agents.py`, `test_human_input.py`, `test_game_loop.py`, `test_ui.py` | agents, interactive controls, application loop, and rendering |
+| `test_agents.py`, `test_human_input.py`, `test_game_loop.py`, `test_ui.py` | base agents and `GNN_DQN_Agent` / DQN behavior, interactive controls, application loop, and rendering |
 | `test_graph_representation.py` | graph adaptation and action injection |
 | `test_dueling_dqn.py`, `test_ppo.py` | the supported Dueling DQN and PPO learners, including PPO's post-epoch KL gate |
 | `test_trainer.py`, `test_training_logger.py`, `test_evaluator.py` | learner factory, self-play orchestration, logging, checkpoints, and evaluation |

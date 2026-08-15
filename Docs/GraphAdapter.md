@@ -21,7 +21,7 @@ from risk.learning.graph_adapter import GraphAdapter
 
 adapter = GraphAdapter(env.topology, ctx.settings)
 data = adapter(env.current_state())
-# Data(x=[42, 13], edge_index=[2, 166], edge_attr=[166, 2], u=[1, 34])
+# Data(x=[42, 15], edge_index=[2, 166], edge_attr=[166, 2], u=[1, 35])
 ```
 
 It lives in `risk/learning/`, not `risk/game/`, so the core rules engine
@@ -48,7 +48,7 @@ at load time.
 
 ---
 
-## `x` — node features, shape `[42, 13]`
+## `x` — node features, shape `[42, 15]`
 
 One row per territory:
 
@@ -57,6 +57,8 @@ One row per territory:
 | `x[:, 0:6]` | 6 | Continent one-hot (`topology.continents`, sorted: Africa, Asia, Australia, Europe, NorthAmerica, SouthAmerica) |
 | `x[:, 6:12]` | 6 | Owner one-hot, **padded to `MAX_PLAYERS` (6)** regardless of how many players are actually in the game |
 | `x[:, 12]` | 1 | Army count on that territory, raw integer (no normalization) |
+| `x[:, 13]` | 1 | `unfinished_attack_target`: `1` when the territory is in `state.unfinished_attack_targets_this_turn` |
+| `x[:, 14]` | 1 | `proposed_army_delta`: zero in the base graph; candidate-action injection changes it without overwriting the real army count |
 
 **Why pad the owner one-hot to 6 instead of `n_players`?** So the same GNN
 architecture works unmodified for a 3-player game and a 6-player game — the
@@ -112,7 +114,7 @@ Width (`EDGE_ATTR_DIM`, currently `2`: `[selected_attack, dice_count]`) is
 defined here and imported by `ActionGraphBuilder` rather than duplicated,
 since it's a property of the graph's shape, not the injection logic.
 
-## `u` — global attributes, shape `[1, 34]`
+## `u` — global attributes, shape `[1, 35]`
 
 Not a built-in PyG concept — just a plain tensor attribute, named `u` after
 the usual graph-network convention (Battaglia et al.). Shaping it `[1, F]`
@@ -121,7 +123,7 @@ into `[batch_size, F]` for free (verified — see below).
 
 | Slice | Width | Meaning | Source |
 |---|---|---|---|
-| `u[0]` | 1 | Number of players in this game | `settings.player_count` |
+| `u[0]` | 1 | Number of players in this game | `len(state.hands)` |
 | `u[1]` | 1 | Value of the **next** card trade-in (not the last one cashed), capped by `CARD_SET_MAX_VALUE` | `card_set_value(state.cards_traded_in_count)` |
 | `u[2:8]` | 6 | Cards currently in each player's hand, padded | `len(state.hands[p])` |
 | `u[8:15]` | 7 | Current phase, one-hot | `state.phase` against `Phase` (`TRADE_IN, REINFORCE_PLACE, ATTACK, OCCUPY, FORTIFY, GAME_OVER, SETUP`) |
@@ -129,13 +131,15 @@ into `[batch_size, F]` for free (verified — see below).
 | `u[21:27]` | 6 | Reinforcement bonus for each continent | `topology.continent_bonus(c)`, same order as the node continent one-hot |
 | `u[27]` | 1 | Current player's reinforcement budget | `state.reinforcement_budget` (already `0` outside `TRADE_IN`/`REINFORCE_PLACE` — it's being built up by trades during `TRADE_IN` and spent during `REINFORCE_PLACE`) |
 | `u[28:34]` | 6 | Which players are eliminated, padded | `p in state.eliminated` |
+| `u[34]` | 1 | Whether the current player has conquered a territory this turn | `state.conquered_this_turn` |
 
-The last two (`reinforcement_budget`, `eliminated`) weren't in the original
+The last three (`reinforcement_budget`, `eliminated`, `conquered_this_turn`) weren't in the original
 ask but were added deliberately: budget directly bounds the legal action
 space during `TRADE_IN`/`REINFORCE_PLACE`, and an explicit elimination flag
 lets the model recognize "this player is permanently out" instead of
 inferring it from zero territories (which looks identical to "just got
-wiped out this turn").
+wiped out this turn"). `conquered_this_turn` makes the card-earning and
+unfinished-attack context observable to the model.
 
 ---
 
@@ -175,11 +179,11 @@ data = adapter(ctx.env.current_state())
 data.validate(raise_on_error=True)   # passes: well-formed Data object
 ```
 
-- `Data(x=[42, 13], edge_index=[2, 166], edge_attr=[166, 2], u=[1, 34])` —
+- `Data(x=[42, 15], edge_index=[2, 166], edge_attr=[166, 2], u=[1, 35])` —
   shapes match spec; `edge_attr` confirmed all-zero.
 - `Data.validate()` passes (edge indices in range, tensor shapes consistent).
 - `torch_geometric.data.Batch.from_data_list([...])` on 3 separate game
-  snapshots produced `x: [126, 13]`, `edge_attr: [498, 2]`, `u: [3, 34]`,
+  snapshots produced `x: [126, 15]`, `edge_attr: [498, 2]`, `u: [3, 35]`,
   `edge_index: [2, 498]` — confirms `u`'s `[1, F]` shape batches the way a
   `DataLoader` will use it.
 - Full test suite (`Temp/tests`): 225 passed, 1 skipped.
@@ -187,7 +191,7 @@ data.validate(raise_on_error=True)   # passes: well-formed Data object
 ## Open extension points
 
 - Per-territory **"is this a contested border"** flag (enemy-adjacent) —
-  cheap to add as a 14th node feature if the model needs it explicitly
+  cheap to add as a 16th node feature if the model needs it explicitly
   rather than deriving it from neighbor owner one-hots itself.
 - **Edge types** (sea vs. land routes) via `edge_attr`, if the model should
   treat them differently.
