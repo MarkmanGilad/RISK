@@ -51,6 +51,12 @@ Presets are read from `Params/play_agents.json`. The registry must have
 repository root. Interactive labels use the selected label, falling back to
 the learner kind.
 
+The current preset list contains the top three fully evaluated compatible
+DQN_303 checkpoints from the 4200-5500 selection window: ep004500, ep005000,
+and ep004300. Older DQN_103 presets are intentionally not listed because they
+pre-date the current `TradeInHead` input shape and fail learned-agent
+validation.
+
 ## Coverage
 
 `Temp/tests/test_learned_agent_play.py` covers UI cycling, preset validation,

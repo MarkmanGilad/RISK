@@ -96,8 +96,8 @@ per-game rows and completed-checkpoint total-win summaries.
 
 On Windows, a sync client, antivirus scanner, editor, or other process may
 briefly lock the existing JSON just as it is being replaced. The atomic replace
-is retried up to 10 times with a 0.25-second pause; a lock that outlasts that
-short window is still raised so the result is never silently lost.
+is retried up to 120 times with a 1-second pause; a lock that outlasts that
+window is still raised so the result is never silently lost.
 
 The dictionary has this shape:
 
@@ -255,6 +255,13 @@ at the top of `main()`. The default block runs checkpoint evaluation. The
 commented block immediately below it is the custom `AgentMatchEvaluator`
 example; comment out the default call, uncomment that block, and edit its
 participants/checkpoint paths to run a chosen match.
+
+The direct-run constants are currently set for the poster model-selection
+window: Dueling DQN run 313, episodes 4000 through the newest available
+checkpoint, with W&B logging enabled and the normal range-derived results
+file:
+
+    Checkpoints/Dueling_DQN_313/evaluations/checkpoint_eval_ep004000_to_<last>.json
 
 `PROGRESS_EVERY_STEPS` controls live console output. The value in `main()`
 prints the checkpoint/game when it starts and finishes, then a step count at

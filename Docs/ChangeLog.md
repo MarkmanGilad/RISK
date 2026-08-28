@@ -14,7 +14,55 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ---
 
+## 2026-08-28
+
+- **Pointed the saved-checkpoint evaluator launcher at the Dueling_DQN_313
+  continuation window.** `risk/learning/choose_agent.py` now defaults direct
+  execution to Dueling DQN run 313 from episode 4000 through the newest
+  available checkpoint. `Docs/ChooseAgent.md` records the current direct-run
+  target. Files: `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Replaced old learned-play presets with compatible DQN_303 agents.**
+  `Params/play_agents.json` now offers the top three fully evaluated DQN_303
+  checkpoints from the 4200-5500 window (`ep004500`, `ep005000`, `ep004300`)
+  instead of the incompatible DQN_103 presets. `Docs/LearnedAgentPlay.md`
+  records the current preset set and why the old checkpoints were removed.
+  Files: `Params/play_agents.json`, `Docs/LearnedAgentPlay.md`,
+  `Docs/ChangeLog.md`.
+
+- **Made checkpoint-evaluation JSON writes more patient under Windows file
+  locks.** `risk/learning/choose_agent.py` now retries atomic result-file
+  replacement for up to 120 seconds instead of 2.5 seconds, reducing crashes
+  when Dropbox, W&B, antivirus, or an editor briefly holds the evaluation JSON.
+  `Docs/ChooseAgent.md` documents the longer retry window. Files:
+  `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+- **Pointed the saved-checkpoint evaluator launcher at the DQN_303 poster
+  selection window.** `risk/learning/choose_agent.py` now defaults direct
+  execution to DQN run 303, episodes 4200 through 5500, with the old DQN_103
+  shared-results override cleared so the normal range-specific JSON is used.
+  `Docs/ChooseAgent.md` records the current direct-run target and output path.
+  Files: `risk/learning/choose_agent.py`, `Docs/ChooseAgent.md`,
+  `Docs/ChangeLog.md`.
+
+## 2026-08-19
+
+- **Configured desktop continuation for `Dueling_DQN_313`.** The trainer
+  launcher now keeps run 313 on `Dueling_DQN_Agent`, restores the newest local
+  checkpoint with `resume=True`, and resumes the same W&B cloud run via
+  `wandb_run_id="ph8ihqze"` found in the Dropbox-synced local W&B run folder;
+  with the current checkpoint folder this resumes from `ep000900`. Files:
+  `risk/learning/trainer.py`,
+  `Docs/Trainer.md`, `Docs/ChangeLog.md`.
+
 ## 2026-08-15
+
+- **Moved the unimplemented DPQN proposal out of the active documentation
+  index.** `DPQN.md` remains available as a deferred design record under
+  Content's outside-active-documents section; no learner or code changed.
+  Files: Docs/Content.md, Docs/ChangeLog.md.
 
 - **Added the "Grill Me" initial-plan-alignment technique to CLAUDE.md and
   AGENTS.md, then trimmed it to match the file's terse style.** Before

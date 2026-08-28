@@ -418,7 +418,8 @@ def main() -> None:
         RUN_ID,
         agent=agent,
         use_wandb=True,
-        resume=False,
+        resume=True,
+        wandb_run_id="ph8ihqze",
     )
     trainer.train(n_episodes=TRAIN_EPISODES)
     trainer.logger.finish()

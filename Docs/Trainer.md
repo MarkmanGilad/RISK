@@ -25,7 +25,12 @@ the selected agent against a temporary sizing environment, then passes it into
 ctx = GameFactory.build(SetupStage.default_settings(n=MIN_PLAYERS))
 agent = build_learner_agent("<learner-label>", ctx)
 
-trainer = Trainer(RUN_ID, agent=agent, resume=False)
+trainer = Trainer(
+    RUN_ID,
+    agent=agent,
+    resume=True,
+    wandb_run_id="<wandb-run-id>",
+)
 trainer.train(n_episodes=TRAIN_EPISODES)
 trainer.logger.finish()
 ```
@@ -248,6 +253,13 @@ trainer = Trainer(
 No `wandb_run_id` is supplied in this form, so W&B creates a distinct cloud
 run. The first post-checkpoint episode is logged at the restored episode
 number when `wandb_step_from_episode=True`.
+
+The current `main()` is configured for desktop continuation of
+`Dueling_DQN_313`: it builds `Dueling_DQN_Agent`, keeps `RUN_ID = 313`, sets
+`resume=True`, and uses W&B run id `ph8ihqze`. With the transferred
+`Checkpoints/Dueling_DQN_313/ep000900` folder present, the logger restores that
+checkpoint and the next training episode is 901 while appending to the same
+W&B run history.
 
 ## How to change agent
 

@@ -40,7 +40,6 @@ current codebase, not the retired experiments stored under `Temp/`.
 | [NetworkArchitectures.md](NetworkArchitectures.md) | Shared injected-graph representation and the active DQN, Dueling DQN, and PPO learners. |
 | [DuelingDQN.md](DuelingDQN.md) | Dueling DQN architecture, value/advantage calculation, replay learning, and checkpoints. |
 | [PPO.md](PPO.md) | PPO rollout collection, 16-step targets, clipped optimization, metrics, and checkpoints. |
-| [DPQN.md](DPQN.md) | Proposed Deep Policy Q-learning hybrid: shared DQN/policy encoder, replay TD learning, and a recent on-policy policy loss. |
 | [Trainer.md](Trainer.md) | Self-play orchestration, learner factory, training loop, metrics, checkpoints, and W&B logging. |
 | [Eval.md](Eval.md) | Deterministic in-training evaluation, metrics, scoring, and best-policy retention. |
 | [ChooseAgent.md](ChooseAgent.md) | Evaluating saved checkpoints and running policy-versus-policy matches. |
@@ -59,3 +58,5 @@ current codebase, not the retired experiments stored under `Temp/`.
   experiment records.
 - `Temp/retired_documents/` preserves retired plans and conflicting document
   copies.
+- [DPQN.md](DPQN.md) preserves a deferred Deep Policy Q-learning proposal; it
+  is not an implemented learner.

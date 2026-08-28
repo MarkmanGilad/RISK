@@ -2,34 +2,22 @@
   "version": 1,
   "models": [
     {
-      "id": "dqn_103_eval_1_ep6700",
-      "label": "DQN 103 eval #1 (ep 6700, 85.2%)",
+      "id": "dqn_303_eval_1_ep4500",
+      "label": "DQN 303 #1 (ep 4500, 70.4%)",
       "agent_kind": "DQN",
-      "checkpoint": "Checkpoints/DQN_103/ep006700"
+      "checkpoint": "Checkpoints/DQN_303/ep004500"
     },
     {
-      "id": "dqn_103_eval_2_ep6000",
-      "label": "DQN 103 eval #2 (ep 6000, 79.6%)",
+      "id": "dqn_303_eval_2_ep5000",
+      "label": "DQN 303 #2 (ep 5000, 66.7%)",
       "agent_kind": "DQN",
-      "checkpoint": "Checkpoints/DQN_103/ep006000"
+      "checkpoint": "Checkpoints/DQN_303/ep005000"
     },
     {
-      "id": "dqn_103_eval_3_ep5400",
-      "label": "DQN 103 eval #3 (ep 5400, 79.6%)",
+      "id": "dqn_303_eval_3_ep4300",
+      "label": "DQN 303 #3 (ep 4300, 64.8%)",
       "agent_kind": "DQN",
-      "checkpoint": "Checkpoints/DQN_103/ep005400"
-    },
-    {
-      "id": "dqn_103_eval_4_ep5650",
-      "label": "DQN 103 eval #4 (ep 5650, 77.8%)",
-      "agent_kind": "DQN",
-      "checkpoint": "Checkpoints/DQN_103/ep005650"
-    },
-    {
-      "id": "dqn_103_eval_5_ep5600",
-      "label": "DQN 103 eval #5 (ep 5600, 75.9%)",
-      "agent_kind": "DQN",
-      "checkpoint": "Checkpoints/DQN_103/ep005600"
+      "checkpoint": "Checkpoints/DQN_303/ep004300"
     }
   ]
 }

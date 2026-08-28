@@ -44,8 +44,8 @@ _CHECKPOINT_SUITES = {
 _HEURISTIC_KINDS = frozenset({"random", "raider", "sentinel", "empire", "killbot"})
 _CHECKPOINT_NAME = re.compile(r"^ep(\d+)$")
 _WANDB_EVALUATION_PROJECT = "Risk-Model-Evaluation"
-_JSON_REPLACE_ATTEMPTS = 10
-_JSON_REPLACE_RETRY_SECONDS = 0.25
+_JSON_REPLACE_ATTEMPTS = 120
+_JSON_REPLACE_RETRY_SECONDS = 1.0
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
@@ -672,21 +672,18 @@ class AgentMatchEvaluator:
 
 def main() -> None:
     """Run one saved-policy evaluation; edit the constants below in the code."""
-    AGENT_KIND = "DQN"
-    RUN_ID = 103
+    AGENT_KIND = "Dueling_DQN"
+    RUN_ID = 313
     MIN_EPISODE = 4_000  # Set to None to include every earlier checkpoint.
-    MAX_EPISODE = 4_950  # Set to None to include every later checkpoint.
+    MAX_EPISODE = None  # Set to None to include every later checkpoint.
     USE_WANDB = True
     PROGRESS_EVERY_STEPS = 2000  # Print a live update every this many actions.
     # None resumes the default result file. Set a new label to start a separate
     # evaluation, for example: "reward_0_1_v2".
     EVALUATION_NAME = None
-    # Use this existing JSON to add the 5000--6150 results to the completed
-    # 6200--6700 results. Set back to None to use the normal output naming.
-    RESULTS_PATH = (
-        "Checkpoints/DQN_103/evaluations/"
-        "checkpoint_eval_ep006200_to_006700.json"
-    )
+    # Set this to a JSON path only when intentionally extending a shared
+    # compatible result file across several episode windows.
+    RESULTS_PATH = None
     # Set this to an existing evaluation JSON to show its local bar chart and
     # exit without running W&B or any games.
     PLOT_RESULTS_PATH = None
