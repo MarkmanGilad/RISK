@@ -18,6 +18,24 @@
       "label": "DQN 303 #3 (ep 4300, 64.8%)",
       "agent_kind": "DQN",
       "checkpoint": "Checkpoints/DQN_303/ep004300"
+    },
+    {
+      "id": "dueling_dqn_313_eval_1_ep4750",
+      "label": "Dueling 313 #1 (ep 4750, 63.0%)",
+      "agent_kind": "Dueling_DQN",
+      "checkpoint": "Checkpoints/Dueling_DQN_313/ep004750"
+    },
+    {
+      "id": "dueling_dqn_313_eval_2_ep4400",
+      "label": "Dueling 313 #2 (ep 4400, 63.0%)",
+      "agent_kind": "Dueling_DQN",
+      "checkpoint": "Checkpoints/Dueling_DQN_313/ep004400"
+    },
+    {
+      "id": "dueling_dqn_313_eval_3_ep5050",
+      "label": "Dueling 313 #3 (ep 5050, 59.3%)",
+      "agent_kind": "Dueling_DQN",
+      "checkpoint": "Checkpoints/Dueling_DQN_313/ep005050"
     }
   ]
 }

@@ -220,7 +220,7 @@ def run_init_screen(screen: pygame.Surface) -> Optional[object]:
                 preset_rect = pygame.Rect(dir_rect.right + 6, y + 12, 90, ROW_H - 24)
                 algo_rect = pygame.Rect(preset_rect.right + 6, y + 12, 110, ROW_H - 24)
                 selection = state.learned_selections[i]
-                for rect, label in ((file_rect, "File..."), (dir_rect, "Folder..."), (preset_rect, "Best DQN"),
+                for rect, label in ((file_rect, "File..."), (dir_rect, "Folder..."), (preset_rect, "Best AI"),
                                     (algo_rect, selection["agent_kind"].replace("_", " "))):
                     pygame.draw.rect(screen, PANEL_HI, rect, border_radius=4)
                     pygame.draw.rect(screen, MUTED, rect, 1, border_radius=4)

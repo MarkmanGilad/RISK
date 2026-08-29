@@ -52,10 +52,13 @@ repository root. Interactive labels use the selected label, falling back to
 the learner kind.
 
 The current preset list contains the top three fully evaluated compatible
-DQN_303 checkpoints from the 4200-5500 selection window: ep004500, ep005000,
-and ep004300. Older DQN_103 presets are intentionally not listed because they
+DQN_303 checkpoints from the 4200-5500 selection window (ep004500, ep005000,
+and ep004300) and the top three fully evaluated compatible Dueling_DQN_313
+checkpoints from the 4000-6700 evaluation file (ep004750, ep004400, and
+ep005050). Older DQN_103 presets are intentionally not listed because they
 pre-date the current `TradeInHead` input shape and fail learned-agent
-validation.
+validation. The setup-screen preset button is labeled **Best AI** because the
+registry now includes more than one learner architecture.
 
 ## Coverage
 

@@ -16,6 +16,15 @@ a design doc — the *why* behind a decision belongs in the relevant
 
 ## 2026-08-28
 
+- **Added the best evaluated Dueling_DQN_313 agents to interactive play.**
+  `Params/play_agents.json` now includes Dueling_DQN_313 presets for
+  `ep004750`, `ep004400`, and `ep005050`, selected from completed 54-game
+  checkpoint evaluations. The setup preset button now says **Best AI** because
+  presets include both DQN and Dueling DQN models. `Docs/LearnedAgentPlay.md`
+  records the expanded preset set. Files: `Params/play_agents.json`,
+  `risk/ui/render/init_screen_view.py`, `Docs/LearnedAgentPlay.md`,
+  `Docs/ChangeLog.md`.
+
 - **Pointed the saved-checkpoint evaluator launcher at the Dueling_DQN_313
   continuation window.** `risk/learning/choose_agent.py` now defaults direct
   execution to Dueling DQN run 313 from episode 4000 through the newest
